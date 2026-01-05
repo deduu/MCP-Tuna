@@ -1,0 +1,18 @@
+# ============================================================================
+# FILE: scripts/config.yaml
+# ============================================================================
+
+# Model configuration
+model: "gpt-4o"
+
+# Output directory
+output_dir: "./data"
+
+# Generator-specific kwargs
+generator_kwargs:
+  # For GRPO
+  num_responses: 4
+
+# Processing options
+batch_size: 10
+max_retries: 3
