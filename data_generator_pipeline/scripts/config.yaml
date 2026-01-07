@@ -6,7 +6,7 @@
 model: "gpt-4o"
 
 # Output directory
-output_dir: "./data"
+output_dir: "./data_sft"
 
 # Generator-specific kwargs
 generator_kwargs:

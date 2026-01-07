@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, List, Optional
 from typing import AsyncGenerator
-from agent_framework.core.models import LLMResponse, StreamChunk
+from src.agent_framework.core.models import LLMResponse, StreamChunk
 
 
 class BaseGenerator(ABC):
