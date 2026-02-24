@@ -15,6 +15,7 @@ def load_jsonl(path: str):
                     instruction=data.get("instruction", ""),
                     input=data.get("input", ""),
                     output=data.get("output", ""),
+                    metadata=data.get("metadata"),
                 )
             )
     return dataset

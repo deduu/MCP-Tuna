@@ -1,15 +1,6 @@
-# core/data.py
-from dataclasses import dataclass
-from typing import Dict, Optional
+# core/data.py — now backed by the shared BaseDataPoint
+from AgentY.shared.models import BaseDataPoint
 
-
-@dataclass(frozen=True)
-class DataPoint:
-    instruction: str
-    input: str
-    output: str
-    metadata: Optional[Dict] = None
-
-    @property
-    def full_instruction(self) -> str:
-        return f"{self.instruction} {self.input}".strip()
+# Alias so all existing evaluator code keeps working unchanged.
+# BaseDataPoint already has: instruction, input, output, metadata, full_instruction
+DataPoint = BaseDataPoint

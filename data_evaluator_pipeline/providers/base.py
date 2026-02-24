@@ -1,7 +1,9 @@
-# providers/base.py
+# providers/base.py — unified provider interfaces
 from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
+
+from AgentY.shared.providers import SyncLLMAdapter  # noqa: F401
 
 
 class EmbeddingProvider(ABC):
@@ -10,7 +12,6 @@ class EmbeddingProvider(ABC):
         pass
 
 
-class LLMProvider(ABC):
-    @abstractmethod
-    def generate(self, prompt: str) -> str:
-        pass
+# Backwards-compatible alias so existing `from ..providers.base import LLMProvider` still works.
+# SyncLLMAdapter exposes the same .generate(prompt) -> str interface.
+LLMProvider = SyncLLMAdapter

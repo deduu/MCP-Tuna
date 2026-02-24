@@ -1,5 +1,8 @@
-from .providers.embeddings.openai import OpenAIEmbeddingProvider
-from .providers.llm.openai import OpenAILLMProvider
+"""Example usage of the evaluator pipeline with shared config."""
+
+from AgentY.shared.config import EvaluatorConfig
+from AgentY.shared.providers import SyncLLMAdapter
+from AgentY.shared.provider_factory import create_llm
 
 from .core.metrics.complexity import ComplexityMetric
 from .core.metrics.ifd import InstructionFollowingDifficultyMetric
@@ -11,31 +14,34 @@ from .io.loaders import load_jsonl
 from .analysis.dataset_analyzer import DatasetAnalyzer
 from .pipeline import InstructionTuningPipeline
 
-# Providers
-llm = OpenAILLMProvider()
-embedder = OpenAIEmbeddingProvider()  # future semantic metrics
 
-# Metrics
-metrics = [
-    ComplexityMetric(),
-    InstructionFollowingDifficultyMetric(),
-    LLMQualityMetric(llm),
-    # Add more metrics here
-]
+def run(data_path: str = "data/sft/data_sft.jsonl", config: EvaluatorConfig = None):
+    """Run the evaluator pipeline with the given config."""
+    if config is None:
+        config = EvaluatorConfig()
 
-weights = {
-    "complexity": 0.3,
-    "ifd": -0.2,        # inverted difficulty
-    "quality": 0.9,
-}
+    # Create LLM via shared factory → wrap for sync usage
+    llm = SyncLLMAdapter(create_llm(config))
 
-evaluator = MetricEvaluator(metrics, weights)
-selector = QualityThresholdSelector(evaluator, threshold=0.6)
-analyzer = DatasetAnalyzer(evaluator)
+    # Metrics
+    metrics = [
+        ComplexityMetric(language_code=config.language),
+        InstructionFollowingDifficultyMetric(),
+        LLMQualityMetric(llm),
+    ]
 
-pipeline = InstructionTuningPipeline(evaluator, selector, analyzer)
+    evaluator = MetricEvaluator(metrics, config.weights)
+    selector = QualityThresholdSelector(evaluator, threshold=config.threshold)
+    analyzer = DatasetAnalyzer(evaluator)
 
-dataset = load_jsonl("data/sft/data_sft.jsonl")
-result = pipeline.run(dataset)
+    pipeline = InstructionTuningPipeline(evaluator, selector, analyzer)
 
-print(result["original"], "→", result["selected"])
+    dataset = load_jsonl(data_path)
+    result = pipeline.run(dataset)
+
+    print(result["original"], "→", result["selected"])
+    return result
+
+
+if __name__ == "__main__":
+    run()
