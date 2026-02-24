@@ -9,6 +9,11 @@ from ..core.base import BaseGenerator
 class SFTGenerator(BaseGenerator):
     """Generates supervised fine-tuning pairs."""
 
+    @classmethod
+    def filter_kwargs(cls, kwargs: dict) -> dict:
+        """SFT accepts no extra kwargs."""
+        return {}
+
     async def generate_from_page(
         self,
         text: str,

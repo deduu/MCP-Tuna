@@ -9,6 +9,11 @@ from ..core.base import BaseGenerator
 class GRPOGenerator(BaseGenerator):
     """Generates multiple responses with rewards for GRPO."""
 
+    @classmethod
+    def filter_kwargs(cls, kwargs: dict) -> dict:
+        """GRPO accepts 'num_responses'."""
+        return {k: v for k, v in kwargs.items() if k == "num_responses"}
+
     def __init__(self, *args, num_responses: int = 4, **kwargs):
         super().__init__(*args, **kwargs)
         self.num_responses = num_responses

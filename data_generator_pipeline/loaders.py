@@ -9,37 +9,36 @@ class PageLoader:
 
 
 class MarkdownPageLoader(PageLoader):
-    def load(self, file_path: str):
-        file_name = os.path.basename(file_path).rsplit(".", 1)[0]
+    def load(self, file_path: str) -> tuple[str, List[Dict]]:
+        file_name = os.path.basename(file_path).rsplit('.', 1)[0]
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
         pages = []
-        for i, page in enumerate(text.split("\n\n---\n\n")):
+        for i, page in enumerate(text.split('\n\n---\n\n')):
             if page.strip():
                 pages.append({
-                    "index": i,
-                    "markdown": page.strip()
+                    'index': i,
+                    'markdown': page.strip(),
                 })
 
         return file_name, pages
 
 
 class JsonPageLoader(PageLoader):
-    def load(self, file_path: str):
-        file_name = os.path.basename(file_path).rsplit(".", 1)[0]
+    def load(self, file_path: str) -> tuple[str, List[Dict]]:
+        file_name = os.path.basename(file_path).rsplit('.', 1)[0]
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        return file_name, data["pages"]
+        return file_name, data['pages']
 
 
 def get_loader(file_path: str) -> PageLoader:
-    if file_path.endswith((".md", ".txt")):
+    if file_path.endswith(('.md', '.txt')):
         return MarkdownPageLoader()
-    elif file_path.endswith((".json", ".jsonl")):
+    if file_path.endswith(('.json', '.jsonl')):
         return JsonPageLoader()
-    else:
-        raise ValueError(f"Unsupported file type: {file_path}")
+    raise ValueError(f'Unsupported file type: {file_path}')

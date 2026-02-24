@@ -1,222 +1,103 @@
-# ============================================================================
-# FILE: src/finetuning/mcp/server.py
-# ============================================================================
+"""MCP Server for the Data Generator Pipeline.
 
-"""
-MCP Server for Fine-tuning Pipeline.
-
-This exposes all pipeline operations as MCP tools that AI agents can call.
+Uses the project's MCPServer framework (server/mcp_server.py) with auto-schema
+so tools are derived from type hints — no manual inputSchema dicts.
 """
 
-from typing import Any, Dict
-import asyncio
-import sys
-from mcp.server import Server
-from mcp.types import Tool, TextContent
+from typing import Any, Dict, List, Optional, Union
+import json
 
+from server.mcp_server import MCPServer
+from AgentY.shared.config import GeneratorConfig
 from ..services.pipeline_service import PipelineService
 
 
-class FineTuningMCPServer:
-    """MCP Server for fine-tuning pipeline."""
+class GeneratorMCPServer:
+    """Exposes all generator pipeline operations as MCP tools."""
 
-    def __init__(self, llm_provider, config: Dict[str, Any]):
+    def __init__(self, llm_provider, config: Union[GeneratorConfig, Dict[str, Any]]):
         self.service = PipelineService(llm_provider, config)
-        self.server = Server("finetuning-pipeline")
+        self.mcp = MCPServer("generator-pipeline", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):
-        """Register all tools with the MCP server."""
+        svc = self.service
 
-        # Tool 1: Load Document
-        @self.server.list_tools()
-        async def list_tools() -> list[Tool]:
-            return [
-                Tool(
-                    name="load_document",
-                    description="Load and parse a document file (PDF, Markdown, etc.)",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the document file"
-                            }
-                        },
-                        "required": ["file_path"]
-                    }
-                ),
-                Tool(
-                    name="generate_from_page",
-                    description="Generate fine-tuning data from a single page",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "technique": {
-                                "type": "string",
-                                "enum": ["sft", "dpo", "grpo"],
-                                "description": "Fine-tuning technique"
-                            },
-                            "page_text": {
-                                "type": "string",
-                                "description": "Text content of the page"
-                            },
-                            "page_index": {
-                                "type": "integer",
-                                "description": "Index of the page"
-                            },
-                            "file_name": {
-                                "type": "string",
-                                "description": "Name of the source file"
-                            },
-                            "custom_template": {
-                                "type": "string",
-                                "description": "Optional custom prompt template"
-                            }
-                        },
-                        "required": ["technique", "page_text", "page_index", "file_name"]
-                    }
-                ),
-                Tool(
-                    name="generate_from_document",
-                    description="Generate fine-tuning data from an entire document",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "technique": {
-                                "type": "string",
-                                "enum": ["sft", "dpo", "grpo"],
-                                "description": "Fine-tuning technique"
-                            },
-                            "file_path": {
-                                "type": "string",
-                                "description": "Path to the document file"
-                            },
-                            "custom_template": {
-                                "type": "string",
-                                "description": "Optional custom prompt template"
-                            },
-                            "start_page": {
-                                "type": "integer",
-                                "description": "Start page (optional)"
-                            },
-                            "end_page": {
-                                "type": "integer",
-                                "description": "End page (optional)"
-                            }
-                        },
-                        "required": ["technique", "file_path"]
-                    }
-                ),
-                Tool(
-                    name="generate_batch",
-                    description="Generate fine-tuning data from multiple documents",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "technique": {
-                                "type": "string",
-                                "enum": ["sft", "dpo", "grpo"],
-                                "description": "Fine-tuning technique"
-                            },
-                            "file_paths": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of document file paths"
-                            },
-                            "custom_template": {
-                                "type": "string",
-                                "description": "Optional custom prompt template"
-                            }
-                        },
-                        "required": ["technique", "file_paths"]
-                    }
-                ),
-                Tool(
-                    name="export_dataset",
-                    description="Export generated dataset to file",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "data_points": {
-                                "type": "array",
-                                "items": {"type": "object"},
-                                "description": "Array of data points to export"
-                            },
-                            "output_path": {
-                                "type": "string",
-                                "description": "Path for output file"
-                            },
-                            "format": {
-                                "type": "string",
-                                "enum": ["json", "jsonl", "excel", "csv", "huggingface"],
-                                "description": "Output format"
-                            }
-                        },
-                        "required": ["data_points", "output_path", "format"]
-                    }
-                ),
-                Tool(
-                    name="list_techniques",
-                    description="List all available fine-tuning techniques",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {}
-                    }
-                ),
-                Tool(
-                    name="get_technique_schema",
-                    description="Get the data schema for a specific technique",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "technique": {
-                                "type": "string",
-                                "description": "Technique name"
-                            }
-                        },
-                        "required": ["technique"]
-                    }
-                ),
-            ]
+        @self.mcp.tool(name="generate.load_document",
+                       description="Load and parse a document file (PDF, Markdown, etc.)")
+        async def load_document(file_path: str) -> str:
+            result = await svc.load_document(file_path)
+            return json.dumps(result, indent=2)
 
-        # Tool handlers
-        @self.server.call_tool()
-        async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-            """Handle tool calls."""
-            print(
-                f"Tool called: {name} with args: {arguments}", file=sys.stderr)
-
-            if name == "load_document":
-                result = await self.service.load_document(**arguments)
-            elif name == "generate_from_page":
-                result = await self.service.generate_from_page(**arguments)
-            elif name == "generate_from_document":
-                result = await self.service.generate_from_document(**arguments)
-            elif name == "generate_batch":
-                result = await self.service.generate_batch(**arguments)
-            elif name == "export_dataset":
-                result = await self.service.export_dataset(**arguments)
-            elif name == "list_techniques":
-                result = self.service.list_techniques()
-            elif name == "get_technique_schema":
-                result = self.service.get_technique_schema(**arguments)
-            else:
-                result = {"error": f"Unknown tool: {name}"}
-
-            import json
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2)
-            )]
-
-    async def run(self):
-        """Run the MCP server."""
-        from mcp.server.stdio import stdio_server
-
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options()
+        @self.mcp.tool(name="generate.from_page",
+                       description="Generate fine-tuning data from a single page")
+        async def generate_from_page(
+            technique: str,
+            page_text: str,
+            page_index: int,
+            file_name: str,
+            custom_template: Optional[str] = None,
+        ) -> str:
+            result = await svc.generate_from_page(
+                technique=technique,
+                page_text=page_text,
+                page_index=page_index,
+                file_name=file_name,
+                custom_template=custom_template,
             )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="generate.from_document",
+                       description="Generate fine-tuning data from an entire document")
+        async def generate_from_document(
+            technique: str,
+            file_path: str,
+            custom_template: Optional[str] = None,
+            start_page: Optional[int] = None,
+            end_page: Optional[int] = None,
+        ) -> str:
+            result = await svc.generate_from_document(
+                technique=technique,
+                file_path=file_path,
+                custom_template=custom_template,
+                start_page=start_page,
+                end_page=end_page,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="generate.batch",
+                       description="Generate fine-tuning data from multiple documents")
+        async def generate_batch(
+            technique: str,
+            file_paths: List[str],
+            custom_template: Optional[str] = None,
+        ) -> str:
+            result = await svc.generate_batch(
+                technique=technique,
+                file_paths=file_paths,
+                custom_template=custom_template,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="generate.export_dataset",
+                       description="Export generated dataset to file")
+        async def export_dataset(
+            data_points: List[Dict],
+            output_path: str,
+            format: str = "jsonl",
+        ) -> str:
+            result = await svc.export_dataset(data_points, output_path, format)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="generate.list_techniques",
+                       description="List all available fine-tuning techniques")
+        async def list_techniques() -> str:
+            return json.dumps(svc.list_techniques(), indent=2)
+
+        @self.mcp.tool(name="generate.get_schema",
+                       description="Get the data schema for a specific technique")
+        async def get_technique_schema(technique: str) -> str:
+            return json.dumps(svc.get_technique_schema(technique), indent=2)
+
+    def run(self, transport=None):
+        self.mcp.run(transport)

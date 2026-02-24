@@ -9,6 +9,11 @@ from ..core.base import BaseGenerator
 class DPOGenerator(BaseGenerator):
     """Generates preference pairs for DPO."""
 
+    @classmethod
+    def filter_kwargs(cls, kwargs: dict) -> dict:
+        """DPO accepts no extra kwargs."""
+        return {}
+
     async def generate_from_page(
         self,
         text: str,

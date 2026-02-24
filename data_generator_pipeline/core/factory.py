@@ -2,11 +2,9 @@
 # FILE: src/finetuning/core/factory.py
 # ============================================================================
 
-from typing import Dict, Type, Tuple
-from .base import BaseGenerator, BaseParser, BaseLLM
+from .base import BaseParser, BaseLLM
 from .pipeline import FineTuningPipeline
-from ..models.datapoints import BaseDataPoint
-from ..generators.registry import GENERATOR_REGISTRY, register_generator
+from ..generators.registry import GENERATOR_REGISTRY
 
 
 class PipelineFactory:
@@ -32,11 +30,8 @@ class PipelineFactory:
 
         generator_class, data_point_class = GENERATOR_REGISTRY[technique]
 
-        # Filter generator_kwargs based on technique
-        filtered_kwargs = {}
-        if technique == "grpo":
-            filtered_kwargs = {
-                k: v for k, v in generator_kwargs.items() if k == 'num_responses'}
+        # Let each generator class decide which kwargs it accepts
+        filtered_kwargs = generator_class.filter_kwargs(generator_kwargs)
 
         generator = generator_class(
             llm=llm,

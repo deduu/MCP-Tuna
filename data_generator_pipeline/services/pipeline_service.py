@@ -16,7 +16,7 @@ Key changes:
 # FILE: src/finetuning/services/pipeline_service.py
 # ============================================================================
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import json
 from dataclasses import asdict
@@ -26,6 +26,7 @@ from ..parsers.json_extractor import JsonExtractor
 from ..prompts.templates import PromptTemplateManager
 from ..exporters.dataset import DatasetExporter
 from ..loaders import get_loader
+from AgentY.shared.config import GeneratorConfig
 
 
 class PipelineService:
@@ -35,10 +36,18 @@ class PipelineService:
     Perfect for MCP tool exposure.
     """
 
-    def __init__(self, llm_provider, config: Dict[str, Any]):
+    def __init__(self, llm_provider, config: Union[GeneratorConfig, Dict[str, Any]]):
         """Initialize service with LLM provider and config."""
         self.llm_provider = llm_provider
-        self.config = config
+        if isinstance(config, GeneratorConfig):
+            self.config = config.model_dump()
+            self.generator_config = config
+        else:
+            self.config = config
+            self.generator_config = GeneratorConfig(**{
+                k: v for k, v in config.items()
+                if k in GeneratorConfig.model_fields
+            })
         self.template_manager = PromptTemplateManager()
         self.parser = JsonExtractor()
 

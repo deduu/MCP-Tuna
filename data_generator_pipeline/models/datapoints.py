@@ -1,47 +1,35 @@
-# ============================================================================
-# FILE: src/finetuning/models/datapoints.py
-# ============================================================================
+# Re-export unified models from shared layer + generator-specific extensions
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
-from dataclasses import dataclass
-from typing import List
+from AgentY.shared.models import (
+    BaseDataPoint as _SharedBase,
+    DPODataPoint,
+    GRPODataPoint,
+    KTODataPoint,
+)
 
 
 @dataclass
-class BaseDataPoint:
-    """Base class for all fine-tuning data points."""
-    id: int
-    file_name: str
-    page: int
-    text: str
+class BaseDataPoint(_SharedBase):
+    """Generator-specific base that adds source tracking fields."""
+    id: int = 0
+    file_name: str = ""
+    page: int = 0
+    text: str = ""
 
 
 @dataclass
 class SFTDataPoint(BaseDataPoint):
-    """Supervised Fine-Tuning format."""
-    instruction: str
-    input: str
-    output: str
+    """Supervised Fine-Tuning format (instruction/input/output inherited from shared BaseDataPoint)."""
+    pass
 
 
-@dataclass
-class DPODataPoint(BaseDataPoint):
-    """Direct Preference Optimization format."""
-    prompt: str
-    chosen: str
-    rejected: str
-
-
-@dataclass
-class GRPODataPoint(BaseDataPoint):
-    """Group Relative Policy Optimization format."""
-    prompt: str
-    responses: List[str]
-    rewards: List[float]
-
-
-@dataclass
-class KTODataPoint(BaseDataPoint):
-    """Kahneman-Tversky Optimization format."""
-    prompt: str
-    completion: str
-    label: bool  # True for desirable, False for undesirable
+# Re-export so existing imports keep working
+__all__ = [
+    "BaseDataPoint",
+    "SFTDataPoint",
+    "DPODataPoint",
+    "GRPODataPoint",
+    "KTODataPoint",
+]
