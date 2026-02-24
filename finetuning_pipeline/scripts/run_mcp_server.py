@@ -328,12 +328,12 @@ class FineTuningMCP:
             return json.dumps(result, indent=2)
         
         @self.mcp.tool(
-            name="list_models",
-            description="List all available models in a directory"
+            name="search_local_models",
+            description="Search locally cached HuggingFace models with file details"
         )
-        def list_models(directory: str = "./") -> str:
-            """List models."""
-            result = self.service.list_available_models(directory)
+        async def search_local_models(query: str = "") -> str:
+            """Search local model cache."""
+            result = await self.service.search_local_models(query=query)
             return json.dumps(result, indent=2)
         
         @self.mcp.tool(
