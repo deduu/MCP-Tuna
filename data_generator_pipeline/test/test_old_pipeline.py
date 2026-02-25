@@ -7,20 +7,21 @@ from ..prompt_template_registry import PromptTemplateRegistry
 from ..parsers_extractor import JsonExtractor
 from ..data_exporter import DatasetExporter
 from ..pipeline import SFTPipeline
-from src.agent_framework.config import settings
-from src.agent_framework.providers.openai import OpenAIProvider
+from agentsoul.providers.openai import OpenAIProvider
+from dotenv import load_dotenv
+load_dotenv()
 from ..PROMPT_SAMPLE import prompt_template
 
-file_path = settings.MD_DATA_PATH
+file_path = os.getenv("MD_DATA_PATH", "").split(",")
 
 
 async def main():
-    file_path = settings.MD_DATA_PATH
+    file_path = os.getenv("MD_DATA_PATH", "").split(",")
 
     # Setup pipeline
     prompt_registry = PromptTemplateRegistry(prompt_template)
     llm = OpenAIProvider(           # ⚠️ must be BaseLLM, not OpenAIClient
-        model="gpt-4o",
+        model_id="gpt-4o",
         api_key=os.getenv("OPENAI_API_KEY"),
     )
     parser = JsonExtractor()

@@ -3,7 +3,7 @@
 import asyncio
 from typing import List, Dict, Any
 
-from src.agent_framework.providers.base import BaseLLM as AgentBaseLLM
+from agentsoul.providers.base import BaseLLM as AgentBaseLLM
 
 # Re-export so all AgentY code imports BaseLLM from one place
 BaseLLM = AgentBaseLLM

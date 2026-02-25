@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from AgentY.shared.models import (
+from shared.models import (
     BaseDataPoint as _SharedBase,
     DPODataPoint,
     GRPODataPoint,

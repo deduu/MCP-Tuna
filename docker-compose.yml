@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: insights_pg
+    environment:
+      POSTGRES_USER: insights
+      POSTGRES_PASSWORD: insights
+      POSTGRES_DB: insights_db
+    ports:
+      - "55432:5432" # ⬅️ change here
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

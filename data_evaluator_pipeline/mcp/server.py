@@ -3,9 +3,9 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from server.mcp_server import MCPServer
+from agentsoul.server import MCPServer
 from ..services.pipeline_service import EvaluatorService
-from AgentY.shared.config import EvaluatorConfig
+from shared.config import EvaluatorConfig
 
 
 class EvaluatorMCPServer:

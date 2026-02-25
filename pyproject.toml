@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agenty"
+version = "0.1.0"
+description = "End-to-end LLM fine-tuning platform with MCP tool support"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+keywords = ["llm", "fine-tuning", "mcp", "sft", "dpo", "grpo", "agent"]
+
+dependencies = [
+    # agentsoul core (bundled in src/agentsoul/)
+    "openai>=1.0",
+    "httpx>=0.25",
+    "mcp>=1.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    # agentsoul server
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "sse-starlette>=1.0",
+]
+
+[project.optional-dependencies]
+backend = [
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+]
+training = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "peft>=0.13",
+    "trl>=0.12",
+    "datasets>=3.0",
+    "accelerate>=0.27",
+]
+local = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "accelerate>=0.27",
+    "bitsandbytes>=0.43",
+]
+eval = [
+    "cohere>=5.0",
+    "openpyxl>=3.1",
+    "pandas>=2.0",
+]
+memory = [
+    "chromadb>=0.4",
+]
+retrieval = [
+    "faiss-cpu>=1.7",
+    "rank-bm25>=0.2",
+]
+tracing = [
+    "auditi",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+all = ["agenty[backend,training,local,eval,memory,retrieval,tracing,dev]"]
+
+[project.urls]
+Repository = "https://github.com/deduu/AgentY"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentsoul"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

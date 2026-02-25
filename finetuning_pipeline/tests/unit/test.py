@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from AgentY.finetuning_pipeline.services.pipeline_service import FineTuningService
+from finetuning_pipeline.services.pipeline_service import FineTuningService
 
 # @pytest.mark.asyncio
 # async def test_load_dataset_from_file_jsonl():

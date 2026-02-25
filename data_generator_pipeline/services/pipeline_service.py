@@ -26,7 +26,7 @@ from ..parsers.json_extractor import JsonExtractor
 from ..prompts.templates import PromptTemplateManager
 from ..exporters.dataset import DatasetExporter
 from ..loaders import get_loader
-from AgentY.shared.config import GeneratorConfig
+from shared.config import GeneratorConfig
 
 
 class PipelineService:

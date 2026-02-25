@@ -8,7 +8,7 @@ with configurable weights.
 import json
 from typing import Any, Dict, Optional
 
-from AgentY.orchestration.trajectory import Trajectory
+from orchestration.trajectory import Trajectory
 
 
 DEFAULT_WEIGHTS = {"accuracy": 0.5, "cost": 0.25, "latency": 0.25}

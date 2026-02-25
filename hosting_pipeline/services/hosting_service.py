@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from typing import Any, Dict, Optional
 
-from AgentY.shared.config import HostingConfig
+from shared.config import HostingConfig
 
 
 class HostingService:
@@ -16,8 +16,8 @@ class HostingService:
     async def deploy_as_mcp(self, config: HostingConfig) -> Dict[str, Any]:
         """Deploy a fine-tuned model as an MCP tool server."""
         try:
-            from server.mcp_server import MCPServer, HTTPTransport, StdioTransport
-            from src.agent_framework.providers.hf import HuggingFaceProvider
+            from agentsoul.server import MCPServer, HTTPTransport, StdioTransport
+            from agentsoul.providers.hf import HuggingFaceProvider
 
             provider = HuggingFaceProvider(model_path=config.model_path)
             if config.adapter_path:
@@ -70,7 +70,7 @@ class HostingService:
         try:
             from fastapi import FastAPI
             import uvicorn
-            from src.agent_framework.providers.hf import HuggingFaceProvider
+            from agentsoul.providers.hf import HuggingFaceProvider
 
             provider = HuggingFaceProvider(model_path=config.model_path)
             if config.adapter_path:

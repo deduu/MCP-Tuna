@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
 
-from AgentY.shared.providers import SyncLLMAdapter  # noqa: F401
+from shared.providers import SyncLLMAdapter  # noqa: F401
 
 
 class EmbeddingProvider(ABC):

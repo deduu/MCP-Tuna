@@ -10,11 +10,18 @@ def create_llm(config: PipelineConfig) -> BaseLLM:
     model = config.model
 
     if model.startswith("gpt") or model.startswith("o"):
-        from agent_framework.providers.openai import OpenAIProvider
+        from agentsoul.providers.openai import OpenAIProvider
+        base_url = (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or os.getenv("OPENAI_API_BASE_URL")
+            or None
+        )
         return OpenAIProvider(
             model_id=model,
+            base_url=base_url,
             api_key=os.getenv("OPENAI_API_KEY", ""),
         )
     else:
-        from agent_framework.providers.hf import HuggingFaceProvider
+        from agentsoul.providers.hf import HuggingFaceProvider
         return HuggingFaceProvider(model_path=model)

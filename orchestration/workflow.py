@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from AgentY.shared.config import (
+from shared.config import (
     CleaningConfig,
     NormalizationConfig,
     EvaluatorConfig,

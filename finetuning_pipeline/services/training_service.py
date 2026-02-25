@@ -1,22 +1,23 @@
-"""Training operations: dataset preparation and model training."""
+"""Training operations: dataset preparation and SFT/LoRA fine-tuning.
+
+Heavy ML dependencies are imported inside methods so non-training commands can
+run without torch/transformers installed.
+"""
 
 import json
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from datasets import Dataset
-from transfer import Trainer, SFTConfig
 
-from .gpu_service import GPUService
-from AgentY.shared.config import FinetuningConfig
+from shared.config import FinetuningConfig
 
 
 class TrainingService:
     """Handles dataset preparation and LoRA/SFT training."""
 
-    def __init__(self, config: FinetuningConfig = None, gpu: GPUService = None):
+    def __init__(self, config: FinetuningConfig = None, gpu: Any = None):
         self.config = config or FinetuningConfig()
-        self.gpu = gpu or GPUService()
+        self.gpu = gpu
 
     async def prepare_dataset(
         self,
@@ -27,6 +28,7 @@ class TrainingService:
     ) -> Dict[str, Any]:
         """Prepare a HF Dataset from raw dicts."""
         try:
+            from datasets import Dataset
             dataset = Dataset.from_list(data)
             if prompt_column != rename_prompt_to and prompt_column in dataset.column_names:
                 dataset = dataset.rename_column(prompt_column, rename_prompt_to)
@@ -37,6 +39,10 @@ class TrainingService:
                 "sample": dataset[0] if len(dataset) > 0 else None,
                 "dataset_object": dataset,
             }
+        except ModuleNotFoundError as e:
+            if getattr(e, "name", "") == "datasets":
+                return {"success": False, "error": "datasets not installed. Install: pip install datasets"}
+            return {"success": False, "error": str(e)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -47,16 +53,17 @@ class TrainingService:
     ) -> Dict[str, Any]:
         """Load dataset from file, merge instruction+input → prompt."""
         try:
+            from datasets import Dataset
             path = Path(file_path)
             if not path.exists():
                 return {"success": False, "error": f"File not found: {file_path}"}
 
             if format == "json":
-                with open(path, "r") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
             elif format == "jsonl":
                 data = []
-                with open(path, "r") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             data.append(json.loads(line))
@@ -88,6 +95,10 @@ class TrainingService:
                 "sample": dataset[0] if len(dataset) > 0 else None,
                 "dataset_object": dataset,
             }
+        except ModuleNotFoundError as e:
+            if getattr(e, "name", "") == "datasets":
+                return {"success": False, "error": "datasets not installed. Install: pip install datasets"}
+            return {"success": False, "error": str(e), "file_path": file_path}
         except Exception as e:
             return {"success": False, "error": str(e), "file_path": file_path}
 
@@ -109,56 +120,143 @@ class TrainingService:
         save_evaluation_results: bool = True,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Train a model with LoRA fine-tuning."""
-        try:
-            start_time = time.time()
-            model_name = base_model or self.config.base_model
+        """Train a model with (Q)LoRA SFT using TRL's SFTTrainer."""
+        start_time = time.time()
+        model_name = base_model or self.config.base_model
 
+        try:
+            import torch
+            from datasets import Dataset
+            from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+            from peft import LoraConfig
+            from trl import SFTTrainer
+        except ModuleNotFoundError as e:
+            missing = getattr(e, "name", None) or "a required dependency"
+            return {
+                "success": False,
+                "error": f"Missing dependency: {missing}. Install training deps (torch, transformers, peft, trl, datasets).",
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+
+        try:
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
 
-            if evaluation_metrics is None:
-                evaluation_metrics = ["perplexity", "semantic_entropy", "token_entropy"]
+            if prompt_column not in dataset.column_names or response_column not in dataset.column_names:
+                return {
+                    "success": False,
+                    "error": f"Dataset must contain '{prompt_column}' and '{response_column}' columns",
+                    "columns": list(getattr(dataset, "column_names", [])),
+                }
 
-            config = SFTConfig(
-                model_name=model_name,
-                num_epochs=num_epochs,
-                use_lora=use_lora,
-                lora_r=lora_r,
-                lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,
-                prompt_column=prompt_column,
-                response_column=response_column,
+            local_files_only = bool(kwargs.pop("local_files_only", False))
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name, use_fast=True, local_files_only=local_files_only
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            def to_text(example: Dict[str, Any]) -> Dict[str, str]:
+                prompt = (example.get(prompt_column) or "").strip()
+                response = (example.get(response_column) or "").strip()
+                messages = [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response},
+                ]
+                if hasattr(tokenizer, "apply_chat_template"):
+                    text = tokenizer.apply_chat_template(messages, tokenize=False)
+                else:
+                    text = f"User: {prompt}\nAssistant: {response}"
+                return {"text": text}
+
+            dataset = dataset.map(to_text)
+
+            quantization_config = None
+            try:
+                from transformers import BitsAndBytesConfig
+
+                if bool(kwargs.pop("load_in_4bit", True)):
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=torch.bfloat16,
+                        bnb_4bit_use_double_quant=True,
+                    )
+            except Exception:
+                quantization_config = None
+
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                quantization_config=quantization_config,
+                local_files_only=local_files_only,
+            )
+
+            peft_config = None
+            if use_lora:
+                target_modules = kwargs.pop(
+                    "lora_target_modules",
+                    ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                )
+                peft_config = LoraConfig(
+                    r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    bias="none",
+                    task_type="CAUSAL_LM",
+                    target_modules=target_modules,
+                )
+
+            out_path = Path(output_dir)
+            out_path.mkdir(parents=True, exist_ok=True)
+
+            training_args = TrainingArguments(
                 output_dir=output_dir,
-                enable_evaluation=enable_evaluation,
-                evaluation_dataset=evaluation_dataset,
-                evaluation_metrics=evaluation_metrics,
-                save_evaluation_results=save_evaluation_results,
-                evaluation_results_path=f"{output_dir}/evaluation_results.json",
-                **kwargs,
+                num_train_epochs=num_epochs,
+                per_device_train_batch_size=int(kwargs.pop("per_device_train_batch_size", 1)),
+                gradient_accumulation_steps=int(kwargs.pop("gradient_accumulation_steps", 4)),
+                learning_rate=float(kwargs.pop("learning_rate", 2e-4)),
+                logging_steps=int(kwargs.pop("logging_steps", 10)),
+                save_steps=int(kwargs.pop("save_steps", 200)),
+                save_total_limit=int(kwargs.pop("save_total_limit", 2)),
+                bf16=bool(kwargs.pop("bf16", True)),
+                fp16=bool(kwargs.pop("fp16", False)),
+                report_to=[],
             )
 
-            trainer = Trainer(
-                task="sft",
-                config=config,
+            trainer = SFTTrainer(
+                model=model,
+                args=training_args,
                 train_dataset=dataset,
-                eval_dataset=evaluation_dataset,
-                evaluate_during_training=False,
+                eval_dataset=evaluation_dataset if (enable_evaluation and evaluation_dataset is not None) else None,
+                tokenizer=tokenizer,
+                dataset_text_field="text",
+                peft_config=peft_config,
+                max_seq_length=int(kwargs.pop("max_seq_length", 2048)),
+                packing=bool(kwargs.pop("packing", False)),
             )
+
             trainer.train()
-            trainer.save_model()
+            trainer.save_model(output_dir)
+            tokenizer.save_pretrained(output_dir)
 
             eval_results = None
-            eval_path = Path(config.evaluation_results_path)
-            if eval_path.exists():
-                with open(eval_path, "r") as f:
-                    eval_results = json.load(f)
+            if save_evaluation_results:
+                eval_path = Path(output_dir) / "evaluation_results.json"
+                if eval_path.exists():
+                    with open(eval_path, "r", encoding="utf-8") as f:
+                        eval_results = json.load(f)
 
-            del trainer
-            self.gpu.clear_gpu_memory()
+            del trainer, model
+            if self.gpu and hasattr(self.gpu, "clear_gpu_memory"):
+                self.gpu.clear_gpu_memory()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             training_time = time.time() - start_time
-
             return {
                 "success": True,
                 "model_path": output_dir,
@@ -175,5 +273,15 @@ class TrainingService:
                 "num_training_examples": len(dataset),
             }
         except Exception as e:
-            self.gpu.clear_gpu_memory()
-            return {"success": False, "error": str(e), "output_dir": output_dir}
+            try:
+                if self.gpu and hasattr(self.gpu, "clear_gpu_memory"):
+                    self.gpu.clear_gpu_memory()
+            except Exception:
+                pass
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            return {"success": False, "error": str(e), "output_dir": output_dir, "base_model": model_name}

@@ -1,14 +1,14 @@
 """MCP Server for the Data Generator Pipeline.
 
-Uses the project's MCPServer framework (server/mcp_server.py) with auto-schema
+Uses agentsoul's MCPServer framework with auto-schema
 so tools are derived from type hints — no manual inputSchema dicts.
 """
 
 from typing import Any, Dict, List, Optional, Union
 import json
 
-from server.mcp_server import MCPServer
-from AgentY.shared.config import GeneratorConfig
+from agentsoul.server import MCPServer
+from shared.config import GeneratorConfig
 from ..services.pipeline_service import PipelineService
 
 

@@ -3,10 +3,10 @@
 import statistics
 from typing import Any, Dict, List, Optional
 
-from AgentY.shared.config import EvaluatorConfig
-from AgentY.shared.providers import SyncLLMAdapter
-from AgentY.shared.provider_factory import create_llm
-from AgentY.shared.registry import metric_registry
+from shared.config import EvaluatorConfig
+from shared.providers import SyncLLMAdapter
+from shared.provider_factory import create_llm
+from shared.registry import metric_registry
 
 from ..core.data import DataPoint
 from ..core.evaluator import MetricEvaluator

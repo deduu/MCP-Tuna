@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from AgentY.shared.providers import BaseLLM  # noqa: F401 — re-exported for backwards compat
+from shared.providers import BaseLLM  # noqa: F401 — re-exported for backwards compat
 
 
 class BaseGenerator(ABC):

@@ -2,7 +2,7 @@
 
 import unicodedata
 from typing import Any, Dict, List, Optional
-from AgentY.shared.config import NormalizationConfig
+from shared.config import NormalizationConfig
 
 
 class DataNormalizationService:

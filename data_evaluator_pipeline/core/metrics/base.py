@@ -1,7 +1,7 @@
 # core/metrics/base.py
 from abc import ABC, abstractmethod
 from ..data import DataPoint
-from AgentY.shared.registry import metric_registry
+from shared.registry import metric_registry
 
 
 class BaseMetric(ABC):

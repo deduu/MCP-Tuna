@@ -11,7 +11,7 @@ from typing import Optional
 from pathlib import Path
 
 # Import MCP server framework
-from server.mcp_server import MCPServer, StdioTransport, HTTPTransport
+from agentsoul.server import MCPServer, StdioTransport, HTTPTransport
 
 # Import fine-tuning service
 from ..services.pipeline_service import FineTuningService

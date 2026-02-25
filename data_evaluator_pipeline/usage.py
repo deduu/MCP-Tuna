@@ -1,8 +1,8 @@
 """Example usage of the evaluator pipeline with shared config."""
 
-from AgentY.shared.config import EvaluatorConfig
-from AgentY.shared.providers import SyncLLMAdapter
-from AgentY.shared.provider_factory import create_llm
+from shared.config import EvaluatorConfig
+from shared.providers import SyncLLMAdapter
+from shared.provider_factory import create_llm
 
 from .core.metrics.complexity import ComplexityMetric
 from .core.metrics.ifd import InstructionFollowingDifficultyMetric

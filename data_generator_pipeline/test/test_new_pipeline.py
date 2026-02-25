@@ -8,14 +8,14 @@ import argparse
 from pathlib import Path
 import yaml
 from dotenv import load_dotenv
+load_dotenv()
 
 from ..core.factory import PipelineFactory
 from ..parsers.json_extractor import JsonExtractor
 from ..prompts.templates import PromptTemplateManager
 from ..exporters.dataset import DatasetExporter
 from ..loaders import get_loader
-from src.agent_framework.providers.openai import OpenAIProvider
-from src.agent_framework.config import settings
+from agentsoul.providers.openai import OpenAIProvider
 
 
 async def main():
@@ -73,7 +73,7 @@ async def main():
     #     model=config["model"],
     #     api_key=os.getenv("OPENAI_API_KEY"),
     # )
-    llm = OpenAIProvider(model=model, api_key=api_key, base_url=base_url)
+    llm = OpenAIProvider(model_id=model, api_key=api_key, base_url=base_url)
 
     parser_obj = JsonExtractor()
     template_manager = PromptTemplateManager()

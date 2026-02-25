@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from AgentY.data_evaluator_pipeline.core.metrics.complexity import ComplexityMetric
+from data_evaluator_pipeline.core.metrics.complexity import ComplexityMetric
 
 
 # ------------------------

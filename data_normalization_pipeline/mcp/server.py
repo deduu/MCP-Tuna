@@ -3,9 +3,9 @@
 import json
 from typing import Any, Dict, List
 
-from server.mcp_server import MCPServer
+from agentsoul.server import MCPServer
 from ..services.normalization_service import DataNormalizationService
-from AgentY.shared.config import NormalizationConfig
+from shared.config import NormalizationConfig
 
 
 class NormalizationMCPServer:

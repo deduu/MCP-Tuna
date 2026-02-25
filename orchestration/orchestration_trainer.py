@@ -13,10 +13,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from AgentY.data_generator_pipeline.parsers.json_extractor import JsonExtractor
-from AgentY.data_generator_pipeline.exporters.dataset import DatasetExporter
-from AgentY.orchestration.trajectory import Trajectory, TrajectoryRecorder
-from AgentY.orchestration.rewards import OrchestrationRewardFunction
+from data_generator_pipeline.parsers.json_extractor import JsonExtractor
+from data_generator_pipeline.exporters.dataset import DatasetExporter
+from orchestration.trajectory import Trajectory, TrajectoryRecorder
+from orchestration.rewards import OrchestrationRewardFunction
 
 
 PROBLEM_GEN_PROMPT = """You are a task designer for AI agent evaluation.

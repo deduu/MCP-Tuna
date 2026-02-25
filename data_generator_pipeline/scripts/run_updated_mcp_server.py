@@ -6,7 +6,7 @@ Exposes the fine-tuning pipeline as MCP tools for AI agents.
 """
 
 from ..services.pipeline_service import PipelineService
-from server.mcp_server import MCPServer, StdioTransport, HTTPTransport
+from agentsoul.server import MCPServer, StdioTransport, HTTPTransport
 import asyncio
 from pathlib import Path
 from typing import Optional, List
@@ -14,7 +14,7 @@ import json
 import sys
 import os
 from dotenv import load_dotenv
-from src.agent_framework.providers.openai import OpenAIProvider
+from agentsoul.providers.openai import OpenAIProvider
 
 load_dotenv(override=True)  # override system env if needed
 model = os.getenv("OPENAI_MODEL", "gpt-4o")
@@ -173,7 +173,7 @@ if __name__ == "__main__":
     """
 
     llm_provider = OpenAIProvider(
-        model=model, api_key=api_key, base_url=base_url)
+        model_id=model, api_key=api_key, base_url=base_url)
 
     # Pipeline configuration
     config = {

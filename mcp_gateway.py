@@ -3,7 +3,7 @@ AgentY Unified MCP Gateway
 ============================
 
 Single entry point exposing all pipeline operations as MCP tools.
-Uses server/mcp_server.py's MCPServer (production-grade HTTP+stdio transport).
+Uses agentsoul's MCPServer (production-grade HTTP+stdio transport).
 
 28 tools across 10 namespaces:
   extract, generate, clean, normalize, evaluate,
@@ -13,8 +13,9 @@ Uses server/mcp_server.py's MCPServer (production-grade HTTP+stdio transport).
 import json
 from typing import Any, Dict, List, Optional, Union
 
-from server.mcp_server import MCPServer
-from AgentY.shared.config import (
+from agentsoul.server import MCPServer
+from dotenv import load_dotenv
+from shared.config import (
     GeneratorConfig,
     CleaningConfig,
     NormalizationConfig,
@@ -29,6 +30,7 @@ class AgentYGateway:
     """Unified MCP gateway that composes all AgentY pipeline services."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        load_dotenv(override=False)
         config = config or {}
         self.mcp = MCPServer("agenty-gateway", "1.0.0")
 
@@ -51,8 +53,8 @@ class AgentYGateway:
     @property
     def generator(self):
         if self._generator_svc is None:
-            from AgentY.data_generator_pipeline.services.pipeline_service import PipelineService
-            from AgentY.shared.provider_factory import create_llm
+            from data_generator_pipeline.services.pipeline_service import PipelineService
+            from shared.provider_factory import create_llm
             gen_config = GeneratorConfig(**{
                 k: v for k, v in self._config.get("generator", {}).items()
                 if k in GeneratorConfig.model_fields
@@ -64,21 +66,21 @@ class AgentYGateway:
     @property
     def cleaner(self):
         if self._cleaning_svc is None:
-            from AgentY.data_cleaning_pipeline.services.cleaning_service import DataCleaningService
+            from data_cleaning_pipeline.services.cleaning_service import DataCleaningService
             self._cleaning_svc = DataCleaningService()
         return self._cleaning_svc
 
     @property
     def normalizer(self):
         if self._normalization_svc is None:
-            from AgentY.data_normalization_pipeline.services.normalization_service import DataNormalizationService
+            from data_normalization_pipeline.services.normalization_service import DataNormalizationService
             self._normalization_svc = DataNormalizationService()
         return self._normalization_svc
 
     @property
     def evaluator(self):
         if self._evaluator_svc is None:
-            from AgentY.data_evaluator_pipeline.services.pipeline_service import EvaluatorService
+            from data_evaluator_pipeline.services.pipeline_service import EvaluatorService
             eval_config = EvaluatorConfig(**self._config.get("evaluator", {}))
             self._evaluator_svc = EvaluatorService(eval_config)
         return self._evaluator_svc
@@ -86,7 +88,7 @@ class AgentYGateway:
     @property
     def finetuner(self):
         if self._finetuning_svc is None:
-            from AgentY.finetuning_pipeline.services.pipeline_service import FineTuningService
+            from finetuning_pipeline.services.pipeline_service import FineTuningService
             self._finetuning_svc = FineTuningService(
                 default_base_model=self._config.get("finetuning", {}).get(
                     "base_model", "meta-llama/Llama-3.2-3B-Instruct"
@@ -97,16 +99,16 @@ class AgentYGateway:
     @property
     def hoster(self):
         if self._hosting_svc is None:
-            from AgentY.hosting_pipeline.services.hosting_service import HostingService
+            from hosting_pipeline.services.hosting_service import HostingService
             self._hosting_svc = HostingService()
         return self._hosting_svc
 
     @property
     def orchestration_data_service(self):
         if self._orchestration_data_svc is None:
-            from AgentY.orchestration.orchestration_trainer import OrchestrationDataService
-            from AgentY.orchestration.rewards import OrchestrationRewardFunction
-            from AgentY.shared.provider_factory import create_llm
+            from orchestration.orchestration_trainer import OrchestrationDataService
+            from orchestration.rewards import OrchestrationRewardFunction
+            from shared.provider_factory import create_llm
             orch_config = OrchestrationConfig(**{
                 k: v for k, v in self._config.get("orchestration", {}).items()
                 if k in OrchestrationConfig.model_fields
@@ -121,7 +123,7 @@ class AgentYGateway:
     @property
     def orchestrator(self):
         if self._orchestrator is None:
-            from AgentY.orchestration.workflow import PipelineOrchestrator
+            from orchestration.workflow import PipelineOrchestrator
             self._orchestrator = PipelineOrchestrator(
                 generator=self.generator,
                 cleaner=self.cleaner,
@@ -154,7 +156,23 @@ class AgentYGateway:
         @self.mcp.tool(name="extract.load_document",
                        description="Load and parse a document file (PDF, Markdown, etc.)")
         async def load_document(file_path: str) -> str:
-            return json.dumps(await self.generator.load_document(file_path), indent=2)
+            # Avoid initializing the generator LLM provider for pure document loading.
+            from data_generator_pipeline.loaders import get_loader
+
+            try:
+                loader = get_loader(file_path)
+                file_name, pages = loader.load(file_path)
+                result = {
+                    "success": True,
+                    "file_name": file_name,
+                    "file_path": file_path,
+                    "pages": pages,
+                    "total_pages": len(pages),
+                }
+            except Exception as e:
+                result = {"success": False, "error": str(e), "file_path": file_path}
+
+            return json.dumps(result, indent=2)
 
     # -- Generate --
     def _register_generate_tools(self):
@@ -197,7 +215,7 @@ class AgentYGateway:
         @self.mcp.tool(name="generate.list_techniques",
                        description="List available fine-tuning techniques")
         async def list_techniques() -> str:
-            from AgentY.data_generator_pipeline.generators.registry import GENERATOR_REGISTRY
+            from data_generator_pipeline.generators.registry import GENERATOR_REGISTRY
             return json.dumps({
                 "success": True,
                 "techniques": list(GENERATOR_REGISTRY.keys()),
@@ -206,7 +224,7 @@ class AgentYGateway:
         @self.mcp.tool(name="generate.get_schema",
                        description="Get the data schema for a fine-tuning technique")
         async def get_schema(technique: str) -> str:
-            from AgentY.data_generator_pipeline.generators.registry import GENERATOR_REGISTRY
+            from data_generator_pipeline.generators.registry import GENERATOR_REGISTRY
             import dataclasses
             if technique not in GENERATOR_REGISTRY:
                 return json.dumps({"success": False, "error": f"Unknown technique: {technique}"}, indent=2)
@@ -489,11 +507,11 @@ class AgentYGateway:
             n_per_problem: int = 4,
         ) -> str:
             # Uses the orchestrator's agent (the gateway itself uses an internal agent)
-            from src.agent_framework.core.agent import GenericAgent
-            from AgentY.shared.provider_factory import create_llm
-            from AgentY.shared.config import PipelineConfig
+            from agentsoul.core.agent import AgentSoul
+            from shared.provider_factory import create_llm
+            from shared.config import PipelineConfig
             llm = create_llm(PipelineConfig())
-            agent = await GenericAgent.create(llm)
+            agent = AgentSoul(llm_provider=llm)
             result = await self.orchestration_data_service.collect_trajectories(
                 problems=problems, agent=agent, n_per_problem=n_per_problem,
             )
@@ -534,11 +552,11 @@ class AgentYGateway:
             deploy: bool = False,
             deploy_port: int = 8002,
         ) -> str:
-            from src.agent_framework.core.agent import GenericAgent
-            from AgentY.shared.provider_factory import create_llm
-            from AgentY.shared.config import PipelineConfig
+            from agentsoul.core.agent import AgentSoul
+            from shared.provider_factory import create_llm
+            from shared.config import PipelineConfig
             llm = create_llm(PipelineConfig())
-            agent = await GenericAgent.create(llm)
+            agent = AgentSoul(llm_provider=llm)
             result = await self.orchestrator.train_orchestrator(
                 domain_description=domain_description,
                 agent=agent,

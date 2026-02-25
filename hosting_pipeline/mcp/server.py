@@ -3,9 +3,9 @@
 import json
 from typing import Any, Dict, Optional
 
-from server.mcp_server import MCPServer
+from agentsoul.server import MCPServer
 from ..services.hosting_service import HostingService
-from AgentY.shared.config import HostingConfig
+from shared.config import HostingConfig
 
 
 class HostingMCPServer:

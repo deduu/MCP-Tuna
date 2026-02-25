@@ -1,7 +1,7 @@
 """Data cleaning service — deduplication, schema validation, short-entry filtering."""
 
 from typing import Any, Dict, List, Optional
-from AgentY.shared.config import CleaningConfig
+from shared.config import CleaningConfig
 
 
 class DataCleaningService:

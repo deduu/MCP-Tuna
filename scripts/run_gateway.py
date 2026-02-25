@@ -10,15 +10,9 @@ Usage:
 """
 
 import sys
-import os
 
-# Ensure src/ is importable so agent_framework resolves correctly
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if os.path.join(_project_root, "src") not in sys.path:
-    sys.path.insert(0, os.path.join(_project_root, "src"))
-
-from server.mcp_server import StdioTransport, HTTPTransport
-from AgentY.mcp_gateway import AgentYGateway
+from agentsoul.server import StdioTransport, HTTPTransport
+from mcp_gateway import AgentYGateway
 
 
 def main():

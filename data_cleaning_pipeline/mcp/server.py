@@ -3,9 +3,9 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from server.mcp_server import MCPServer
+from agentsoul.server import MCPServer
 from ..services.cleaning_service import DataCleaningService
-from AgentY.shared.config import CleaningConfig
+from shared.config import CleaningConfig
 
 
 class CleaningMCPServer:

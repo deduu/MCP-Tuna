@@ -1,5 +1,5 @@
 """
-Trajectory recorder for GenericAgent runs.
+Trajectory recorder for AgentSoul runs.
 
 Wraps agent.run() and captures structured trajectories with
 cost/latency metadata — zero changes to agent.py.
@@ -44,7 +44,7 @@ class Trajectory:
 
 
 class TrajectoryRecorder:
-    """Record structured trajectories from GenericAgent runs."""
+    """Record structured trajectories from AgentSoul runs."""
 
     COST_TABLE: Dict[str, Dict[str, float]] = {
         "gpt-4o": {"input": 2.50 / 1e6, "output": 10.0 / 1e6},

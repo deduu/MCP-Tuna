@@ -11,7 +11,7 @@ from .sft import SFTGenerator
 from .dpo import DPOGenerator
 from .grpo import GRPOGenerator
 
-from AgentY.shared.registry import generator_registry
+from shared.registry import generator_registry
 
 # ---- Register generators in the shared registry ----
 generator_registry.add("sft", SFTGenerator, datapoint=SFTDataPoint)
