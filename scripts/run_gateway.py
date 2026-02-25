@@ -10,12 +10,19 @@ Usage:
 """
 
 import sys
+import logging
+
+# Ensure stderr uses UTF-8 on Windows to prevent UnicodeEncodeError in log handlers
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from agentsoul.server import StdioTransport, HTTPTransport
+from agentsoul.utils.logger import configure_logging
 from mcp_gateway import AgentYGateway
 
 
 def main():
+    configure_logging(level=logging.DEBUG)
     gateway = AgentYGateway()
 
     if len(sys.argv) > 1 and sys.argv[1] == "http":

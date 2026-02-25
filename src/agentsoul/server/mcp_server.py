@@ -564,7 +564,8 @@ class HTTPTransport(Transport):
             app,
             host=self.host,
             port=self.port,
-            log_level="info"
+            log_level="info",
+            log_config=None,
         )
         server_instance = uvicorn.Server(config)
         await server_instance.serve()
