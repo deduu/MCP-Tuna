@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 # Python
 __pycache__/
 *.py[cod]
@@ -6,17 +5,11 @@ __pycache__/
 *.pyo
 *.so
 *.egg
-=======
-__pycache__/
-*.pyc
-*.pyo
->>>>>>> Stashed changes
 *.egg-info/
 dist/
 build/
 .eggs/
 
-<<<<<<< Updated upstream
 # Virtual environments (uv)
 .venv/
 venv/
@@ -27,15 +20,6 @@ env/
 .env
 .env.local
 .env.*.local
-=======
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Environment files
-.env
->>>>>>> Stashed changes
 
 # IDE
 .vscode/
@@ -43,7 +27,6 @@ env/
 *.swp
 *.swo
 
-<<<<<<< Updated upstream
 # OS
 .DS_Store
 Thumbs.db
@@ -59,9 +42,12 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# Logs
+# Logs — per-session JSONL and AI diagnostic data are gitignored;
+# logs/CLAUDE.md is tracked so Claude knows how to use the system.
 *.log
-logs/
+logs/sessions/
+logs/ai_diagnostics/*.jsonl
+!logs/CLAUDE.md
 
 # ML / training artifacts
 outputs/
@@ -85,20 +71,3 @@ data/processed/
 .claude/
 
 data/
-=======
-# Test artifacts
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Data and model outputs
-data/
-data/output/
-output/
-logs/
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
->>>>>>> Stashed changes
