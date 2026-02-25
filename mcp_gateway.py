@@ -333,13 +333,24 @@ class AgentYGateway:
     # -- Finetune --
     def _register_finetune_tools(self):
         @self.mcp.tool(name="finetune.train",
-                       description="Fine-tune a model using a dataset file")
+                       description="Fine-tune a model using a dataset file (SFT with QLoRA)")
         async def train(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
             lora_r: int = 8,
+            lora_alpha: int = 16,
+            completion_only_loss: bool = True,
+            early_stopping_patience: Optional[int] = None,
+            eval_file_path: Optional[str] = None,
+            push_to_hub: Optional[str] = None,
+            lr_scheduler_type: str = "linear",
+            warmup_ratio: float = 0.0,
+            weight_decay: float = 0.0,
+            max_grad_norm: float = 1.0,
+            learning_rate: float = 2e-4,
+            report_to: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -351,6 +362,17 @@ class AgentYGateway:
                 num_epochs=num_epochs,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                completion_only_loss=completion_only_loss,
+                early_stopping_patience=early_stopping_patience,
+                eval_file_path=eval_file_path,
+                push_to_hub=push_to_hub,
+                lr_scheduler_type=lr_scheduler_type,
+                warmup_ratio=warmup_ratio,
+                weight_decay=weight_decay,
+                max_grad_norm=max_grad_norm,
+                learning_rate=learning_rate,
+                report_to=report_to or [],
             )
             return json.dumps(result, indent=2)
 

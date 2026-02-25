@@ -57,20 +57,31 @@ class TrainingService:
         self, kwargs: dict, cuda_available: bool, bf16_supported: bool
     ) -> dict:
         """Extract standard TrainingArguments kwargs from **kwargs."""
+        report_to = kwargs.pop("report_to", [])
+        if isinstance(report_to, str):
+            report_to = [report_to] if report_to else []
         return {
             "per_device_train_batch_size": int(
                 kwargs.pop("per_device_train_batch_size", 1)
+            ),
+            "per_device_eval_batch_size": int(
+                kwargs.pop("per_device_eval_batch_size", 1)
             ),
             "gradient_accumulation_steps": int(
                 kwargs.pop("gradient_accumulation_steps", 4)
             ),
             "learning_rate": float(kwargs.pop("learning_rate", 2e-4)),
+            "weight_decay": float(kwargs.pop("weight_decay", 0.0)),
+            "max_grad_norm": float(kwargs.pop("max_grad_norm", 1.0)),
+            "lr_scheduler_type": str(kwargs.pop("lr_scheduler_type", "linear")),
+            "warmup_ratio": float(kwargs.pop("warmup_ratio", 0.0)),
             "logging_steps": int(kwargs.pop("logging_steps", 10)),
             "save_steps": int(kwargs.pop("save_steps", 200)),
             "save_total_limit": int(kwargs.pop("save_total_limit", 2)),
             "bf16": bool(kwargs.pop("bf16", bf16_supported)),
             "fp16": bool(kwargs.pop("fp16", cuda_available and not bf16_supported)),
-            "report_to": [],
+            "report_to": report_to,
+            "seed": int(kwargs.pop("seed", 42)),
         }
 
     def _build_config(
@@ -170,6 +181,16 @@ class TrainingService:
             quantization_config=quantization_config,
             local_files_only=local_files_only,
         )
+
+        # Prepare quantized model for stable gradient computation
+        if quantization_config is not None:
+            try:
+                from peft import prepare_model_for_kbit_training
+
+                model = prepare_model_for_kbit_training(model)
+            except ImportError:
+                pass
+
         return model, tokenizer
 
     def _cleanup(self, trainer: Any, model: Any) -> None:
@@ -314,24 +335,33 @@ class TrainingService:
         response_column: str = "response",
         enable_evaluation: bool = True,
         evaluation_dataset: Optional[Any] = None,
+        eval_file_path: Optional[str] = None,
         evaluation_metrics: Optional[List[str]] = None,
         save_evaluation_results: bool = True,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         save_best_model: bool = True,
+        completion_only_loss: bool = True,
+        early_stopping_patience: Optional[int] = None,
+        push_to_hub: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train a model with (Q)LoRA SFT using TRL's SFTTrainer.
 
         Pass resume_from_checkpoint='latest' to auto-resume from the most recent
         checkpoint in output_dir, or provide an explicit path.
+
+        Args:
+            completion_only_loss: Train only on assistant tokens (default True).
+            early_stopping_patience: Stop after N eval steps without improvement.
+            eval_file_path: Path to a JSONL/JSON eval dataset file.
+            push_to_hub: HuggingFace repo ID to push the trained model to.
         """
         start_time = time.time()
         model_name = base_model or self.config.base_model
 
         try:
             from datasets import Dataset
-            from transformers import TrainingArguments
-            from trl import SFTTrainer
+            from trl import SFTConfig, SFTTrainer
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
             return {
@@ -361,6 +391,15 @@ class TrainingService:
                     "columns": list(getattr(dataset, "column_names", [])),
                 }
 
+            # Load eval dataset from file if provided (and no in-memory eval dataset)
+            if evaluation_dataset is None and eval_file_path:
+                eval_result = await self.load_dataset_from_file(
+                    eval_file_path,
+                    format="jsonl" if eval_file_path.endswith(".jsonl") else "json",
+                )
+                if eval_result.get("success"):
+                    evaluation_dataset = eval_result["dataset_object"]
+
             model, tokenizer = self._load_model_and_tokenizer(model_name, kwargs)
             cuda_available, bf16_supported = self._detect_precision()
 
@@ -382,19 +421,37 @@ class TrainingService:
             if cols_to_remove:
                 dataset = dataset.remove_columns(cols_to_remove)
 
+            # Format eval dataset the same way
+            if evaluation_dataset is not None:
+                if isinstance(evaluation_dataset, list):
+                    evaluation_dataset = Dataset.from_list(evaluation_dataset)
+                if "text" not in evaluation_dataset.column_names:
+                    evaluation_dataset = evaluation_dataset.map(to_text)
+                    eval_cols = [c for c in evaluation_dataset.column_names if c != "text"]
+                    if eval_cols:
+                        evaluation_dataset = evaluation_dataset.remove_columns(eval_cols)
+
             peft_config = None
             if use_lora:
                 peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
 
             has_eval = enable_evaluation and evaluation_dataset is not None
             training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
+
+            # Build SFTConfig-specific extra kwargs
+            sft_extra: dict = {}
+            sft_config_sig = inspect.signature(SFTConfig.__init__).parameters
+            if "completion_only_loss" in sft_config_sig:
+                sft_extra["completion_only_loss"] = completion_only_loss
+
             training_args = self._build_config(
-                TrainingArguments,
+                SFTConfig,
                 output_dir=output_dir,
                 num_epochs=num_epochs,
                 has_eval=has_eval,
                 save_best_model=save_best_model,
                 training_kwargs=training_kwargs,
+                extra_kwargs=sft_extra if sft_extra else None,
             )
 
             checkpoint = self._resolve_checkpoint(output_dir, resume_from_checkpoint)
@@ -424,6 +481,17 @@ class TrainingService:
             elif "processing_class" in trainer_sig:
                 trainer_kwargs["processing_class"] = tokenizer
 
+            # Build callbacks
+            callbacks = []
+            if early_stopping_patience is not None and has_eval:
+                from transformers import EarlyStoppingCallback
+
+                callbacks.append(
+                    EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
+                )
+            if callbacks and "callbacks" in trainer_sig:
+                trainer_kwargs["callbacks"] = callbacks
+
             trainer = SFTTrainer(**trainer_kwargs)
 
             interrupted = False
@@ -437,6 +505,16 @@ class TrainingService:
                 trainer.save_model(output_dir)
                 tokenizer.save_pretrained(output_dir)
 
+            # Push to HuggingFace Hub if requested
+            hub_url = None
+            if push_to_hub and not interrupted:
+                try:
+                    model.push_to_hub(push_to_hub)
+                    tokenizer.push_to_hub(push_to_hub)
+                    hub_url = f"https://huggingface.co/{push_to_hub}"
+                except Exception:
+                    hub_url = None
+
             eval_results = None
             if save_evaluation_results:
                 eval_path = Path(output_dir) / "evaluation_results.json"
@@ -446,7 +524,7 @@ class TrainingService:
 
             self._cleanup(trainer, model)
 
-            return {
+            result: Dict[str, Any] = {
                 "success": True,
                 "interrupted": interrupted,
                 "model_path": output_dir,
@@ -459,11 +537,15 @@ class TrainingService:
                     "lora_r": lora_r,
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
+                    "completion_only_loss": completion_only_loss,
                     "resumed_from": checkpoint,
                 },
                 "evaluation_results": eval_results,
                 "num_training_examples": len(dataset),
             }
+            if hub_url:
+                result["hub_url"] = hub_url
+            return result
         except Exception as e:
             try:
                 import torch
