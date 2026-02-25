@@ -24,7 +24,6 @@ from shared.config import (
     CleaningConfig,
     NormalizationConfig,
     EvaluatorConfig,
-    FinetuningConfig,
     HostingConfig,
     OrchestrationConfig,
 )
@@ -355,6 +354,109 @@ class AgentYGateway:
             )
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(name="finetune.train_dpo",
+                       description="Fine-tune a model with DPO — dataset needs prompt/chosen/rejected columns")
+        async def train_dpo(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            beta: float = 0.1,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_dpo_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                beta=beta,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="finetune.train_grpo",
+                       description="Fine-tune a model with GRPO — dataset needs prompt/responses/rewards columns")
+        async def train_grpo(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            num_generations: int = 4,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_grpo_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                num_generations=num_generations,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="finetune.train_kto",
+                       description="Fine-tune a model with KTO — dataset needs prompt/completion/label columns")
+        async def train_kto(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            beta: float = 0.1,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_kto_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                beta=beta,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_curriculum",
+            description="Curriculum fine-tune: auto-scores dataset, trains easy→hard in stages",
+        )
+        async def train_curriculum(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            difficulty_order: str = "easy_first",
+            use_lora: bool = True,
+            lora_r: int = 8,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_curriculum_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                use_lora=use_lora,
+                lora_r=lora_r,
+            )
+            return json.dumps(result, indent=2)
+
         @self.mcp.tool(name="finetune.load_dataset",
                        description="Load a dataset from file for fine-tuning")
         async def load_dataset(file_path: str, format: str = "jsonl") -> str:
@@ -482,6 +584,54 @@ class AgentYGateway:
                 file_path=file_path,
                 technique=technique,
                 quality_threshold=quality_threshold,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.curriculum_pipeline",
+            description=(
+                "Full curriculum learning pipeline from raw documents to a compared model. "
+                "Runs: Extract → Generate → Clean → Normalize → Evaluate → Filter → "
+                "Curriculum Train (staged easy→hard) → Compare vs base model → (optional) Deploy. "
+                "Accepts one or more Markdown/PDF/text files. "
+                "The evaluate step scores every row with weighted_score so curriculum "
+                "training always receives a pre-scored dataset — no double work."
+            ),
+        )
+        async def curriculum_pipeline(
+            file_paths: Union[str, List[str]],
+            output_dir: str,
+            technique: str = "sft",
+            quality_threshold: float = 0.6,
+            base_model: Optional[str] = None,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            difficulty_order: str = "easy_first",
+            use_lora: bool = True,
+            lora_r: int = 8,
+            deploy: bool = False,
+            deploy_port: int = 8001,
+        ) -> str:
+            # Accept a JSON-encoded list or a bare string (single file)
+            if isinstance(file_paths, str):
+                try:
+                    parsed = json.loads(file_paths)
+                    file_paths = parsed if isinstance(parsed, list) else [parsed]
+                except (json.JSONDecodeError, ValueError):
+                    file_paths = [file_paths]
+            result = await self.orchestrator.curriculum_pipeline(
+                file_paths=file_paths,
+                output_dir=output_dir,
+                technique=technique,
+                quality_threshold=quality_threshold,
+                base_model=base_model,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                deploy=deploy,
+                deploy_port=deploy_port,
             )
             return json.dumps(result, indent=2)
 

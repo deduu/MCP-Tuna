@@ -4,17 +4,13 @@ End-to-end pipeline orchestrator.
 Composes: Extract → Generate → Clean → Normalize → Evaluate → Filter → Train → Test → Host
 """
 
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from shared.config import (
     CleaningConfig,
     NormalizationConfig,
-    EvaluatorConfig,
-    FinetuningConfig,
     HostingConfig,
-    OrchestrationConfig,
 )
 
 
@@ -168,6 +164,171 @@ class PipelineOrchestrator:
             "dataset_path": dataset_path,
             "training": train_result,
             "testing": test_result,
+            "deployment": deploy_result,
+        }
+
+    async def curriculum_pipeline(
+        self,
+        file_paths: List[str],
+        output_dir: str = "./output",
+        technique: str = "sft",
+        quality_threshold: float = 0.6,
+        base_model: Optional[str] = None,
+        num_stages: int = 3,
+        num_epochs_per_stage: int = 1,
+        difficulty_order: str = "easy_first",
+        use_lora: bool = True,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        custom_template: Optional[str] = None,
+        deploy: bool = False,
+        deploy_port: int = 8001,
+    ) -> Dict[str, Any]:
+        """Extract → Generate → Clean → Normalize → Evaluate → Filter → Curriculum Train → Compare → Host
+
+        Accepts one or more document files. The evaluate step writes weighted_score
+        into every row, so curriculum training always receives a pre-scored dataset
+        and skips inline re-scoring.
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # ── 1-2. Extract + Generate from every file ───────────────────────
+        all_data_points: List[Dict[str, Any]] = []
+        per_file_counts: Dict[str, int] = {}
+
+        for fp in file_paths:
+            gen_result = await self.generator.generate_from_document(
+                technique=technique,
+                file_path=fp,
+                custom_template=custom_template,
+            )
+            if not gen_result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Generation failed for {fp}: {gen_result.get('error')}",
+                    "file_path": fp,
+                }
+            pts = gen_result.get("data_points", [])
+            all_data_points.extend(pts)
+            per_file_counts[fp] = len(pts)
+
+        total_generated = len(all_data_points)
+        if not all_data_points:
+            return {"success": False, "error": "No data points generated from provided files."}
+
+        # ── 3. Clean ──────────────────────────────────────────────────────
+        clean_result = await self.cleaner.clean_dataset(all_data_points, CleaningConfig())
+        all_data_points = clean_result["data_points"]
+
+        # ── 4. Normalize ──────────────────────────────────────────────────
+        norm_result = await self.normalizer.normalize_dataset(
+            all_data_points, NormalizationConfig(target_format=technique),
+        )
+        all_data_points = norm_result["data_points"]
+
+        # ── 5. Evaluate (adds weighted_score to every row) ────────────────
+        eval_result = await self.evaluator.evaluate_dataset(all_data_points)
+        all_data_points = eval_result["data_points"]
+
+        # ── 6. Filter by quality ──────────────────────────────────────────
+        filter_result = await self.evaluator.filter_by_quality(all_data_points, quality_threshold)
+        all_data_points = filter_result["data_points"]
+
+        if not all_data_points:
+            return {
+                "success": False,
+                "error": (
+                    f"No data points passed the quality threshold ({quality_threshold}). "
+                    "Lower the threshold or improve your source documents."
+                ),
+                "pipeline_stages": {
+                    "generated": total_generated,
+                    "after_cleaning": clean_result["cleaned_count"],
+                    "after_normalization": norm_result["count"],
+                    "after_evaluation": eval_result["count"],
+                    "after_filtering": 0,
+                },
+            }
+
+        # ── 7. Export scored dataset to JSONL ─────────────────────────────
+        dataset_path = str(output_path / "curriculum_dataset.jsonl")
+        await self.generator.export_dataset(
+            data_points=all_data_points,
+            output_path=dataset_path,
+            format="jsonl",
+        )
+
+        # ── 8. Curriculum training (dataset already has weighted_score) ───
+        load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+        if not load_result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to load exported dataset: {load_result.get('error')}",
+            }
+
+        train_result = await self.finetuner.train_curriculum_model(
+            dataset=load_result["dataset_object"],
+            output_dir=str(output_path / "model"),
+            base_model=base_model,
+            num_stages=num_stages,
+            num_epochs_per_stage=num_epochs_per_stage,
+            difficulty_order=difficulty_order,
+            use_lora=use_lora,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+        )
+
+        # ── 9. Compare: base model vs curriculum-trained model ────────────
+        compare_result = None
+        if train_result.get("success"):
+            resolved_base = base_model or "meta-llama/Llama-3.2-3B-Instruct"
+            final_model   = train_result["final_model_path"]
+
+            # Use the first 3 data points as comparison prompts
+            test_prompts = []
+            for dp in all_data_points[:3]:
+                prompt = dp.get("instruction", "")
+                inp    = dp.get("input", "")
+                if inp:
+                    prompt = f"{prompt} {inp}".strip()
+                test_prompts.append(prompt or dp.get("prompt", ""))
+            test_prompts = [p for p in test_prompts if p]
+
+            if test_prompts:
+                compare_result = await self.finetuner.compare_models(
+                    prompts=test_prompts,
+                    base_model_path=resolved_base,
+                    finetuned_adapter_path=final_model,
+                )
+
+        # ── 10. Deploy (optional) ─────────────────────────────────────────
+        deploy_result = None
+        if deploy and train_result.get("success"):
+            resolved_base = base_model or "meta-llama/Llama-3.2-3B-Instruct"
+            config = HostingConfig(
+                model_path=resolved_base,
+                adapter_path=train_result["final_model_path"],
+                port=deploy_port,
+            )
+            deploy_result = await self.hoster.deploy_as_mcp(config)
+
+        return {
+            "success": True,
+            "file_paths": file_paths,
+            "per_file_generated": per_file_counts,
+            "technique": technique,
+            "pipeline_stages": {
+                "generated": total_generated,
+                "after_cleaning": clean_result["cleaned_count"],
+                "after_normalization": norm_result["count"],
+                "after_evaluation": eval_result["count"],
+                "after_filtering": filter_result["filtered_count"],
+            },
+            "quality_threshold": quality_threshold,
+            "dataset_path": dataset_path,
+            "curriculum_training": train_result,
+            "comparison": compare_result,
             "deployment": deploy_result,
         }
 
