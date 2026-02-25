@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+import uuid
+import traceback
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from typing import Any, Optional
-import traceback
+
 from .handlers.request_parser import RequestParser
 from .handlers.model_router import ModelRouteDecider, ModelRoutingError, ModelSelector
 from .handlers.tool_selector import ToolSelector
@@ -11,6 +15,12 @@ from .models.request import ChatRequest, AgentContext
 from .responses.builder import ResponseBuilder
 from .utils.timing import TimingContext
 from .utils.exception import AgentExecutionError
+from shared.diagnostics import (
+    trace_id_var,
+    emit_request_start,
+    emit_request_end,
+    emit_error,
+)
 import logging
 
 logger = logging.getLogger("chat.api")
@@ -69,11 +79,20 @@ class ChatAPIOrchestrator:
     async def handle_request(self, request: Request):
         """Handle the complete chat completion request."""
         timing = TimingContext()
+        trace_id_var.set(str(uuid.uuid4()))
 
         try:
             # Prepare context
             context = await self.prepare_context(request)
             chat_req = context.chat_request
+
+            await emit_request_start(
+                user_prompt_preview=chat_req.user_prompt[:200],
+                model_name=chat_req.model_name,
+                route=context.route,
+                stream=chat_req.stream,
+                selected_tools=context.selected_tools or [],
+            )
 
             # Create agent (wired to MCP servers when available)
             agent = await self.agent_executor.create_agent(
@@ -98,6 +117,14 @@ class ChatAPIOrchestrator:
                     content.get("usage", {})
                 )
 
+                await emit_request_end(
+                    status="ok",
+                    total_time_s=timing.total_time,
+                    inference_time_s=timing.inference_time,
+                    first_token_latency_s=timing.first_token_latency,
+                    token_usage=content.get("usage", {}),
+                )
+
                 return JSONResponse(content=response)
 
             # Handle streaming
@@ -113,10 +140,52 @@ class ChatAPIOrchestrator:
             )
 
         except ModelRoutingError as e:
+            await emit_error(
+                error_type=type(e).__name__,
+                message=str(e),
+                component="chat_api",
+                traceback_snippet=traceback.format_exc().splitlines()[-3:],
+            )
+            await emit_request_end(
+                status="error",
+                total_time_s=timing.total_time,
+                inference_time_s=timing.inference_time,
+                first_token_latency_s=timing.first_token_latency,
+                token_usage={},
+                error=str(e),
+            )
             return self.response_builder.build_openai_error_response(e, 500)
         except AgentExecutionError as e:
+            await emit_error(
+                error_type=type(e).__name__,
+                message=str(e),
+                component="chat_api",
+                traceback_snippet=traceback.format_exc().splitlines()[-3:],
+            )
+            await emit_request_end(
+                status="error",
+                total_time_s=timing.total_time,
+                inference_time_s=timing.inference_time,
+                first_token_latency_s=timing.first_token_latency,
+                token_usage={},
+                error=str(e),
+            )
             return self.response_builder.build_openai_error_response(e, 500)
         except Exception as e:
             logger.error(f"🚨 Fatal error in /v1/chat/completions: {e}")
             traceback.print_exc()
+            await emit_error(
+                error_type=type(e).__name__,
+                message=str(e),
+                component="chat_api",
+                traceback_snippet=traceback.format_exc().splitlines()[-3:],
+            )
+            await emit_request_end(
+                status="error",
+                total_time_s=timing.total_time,
+                inference_time_s=timing.inference_time,
+                first_token_latency_s=timing.first_token_latency,
+                token_usage={},
+                error=str(e),
+            )
             return self.response_builder.build_openai_error_response(e, 500)

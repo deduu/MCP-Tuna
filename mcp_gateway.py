@@ -9,8 +9,12 @@ Uses agentsoul's MCPServer (production-grade HTTP+stdio transport).
   extract, generate, clean, normalize, evaluate,
   finetune, test, validate, host, workflow
 """
+from __future__ import annotations
 
+import inspect
 import json
+import time
+import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from agentsoul.server import MCPServer
@@ -46,6 +50,7 @@ class AgentYGateway:
 
         self._config = config
         self._register_all_tools()
+        self._wrap_tools_with_diagnostics()
 
     # ------------------------------------------------------------------ #
     # Lazy service accessors
@@ -443,7 +448,7 @@ class AgentYGateway:
     # -- Workflow --
     def _register_workflow_tools(self):
         @self.mcp.tool(name="workflow.full_pipeline",
-                       description="End-to-end: Extract → Generate → Clean → Normalize → Evaluate → Filter → Train → Test → Host")
+                       description="End-to-end: Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter -> Train -> Test -> Host")
         async def full_pipeline(
             file_path: str,
             technique: str = "sft",
@@ -467,7 +472,7 @@ class AgentYGateway:
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="workflow.generate_and_evaluate",
-                       description="Extract → Generate → Clean → Normalize → Evaluate → Filter")
+                       description="Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter")
         async def generate_and_evaluate(
             file_path: str,
             technique: str = "sft",
@@ -572,7 +577,63 @@ class AgentYGateway:
             return json.dumps(result, indent=2)
 
     # ------------------------------------------------------------------ #
+    # Diagnostics
+    # ------------------------------------------------------------------ #
+    def _wrap_tools_with_diagnostics(self) -> None:
+        """Wrap all registered async tool functions with timing + emit_tool_call.
+
+        Patches self.mcp._tools in-place after registration so no individual
+        handler needs to be modified. No-op if DiagnosticWriter is not initialized.
+        """
+        from shared.diagnostics import emit_tool_call, sanitize
+
+        def _make_wrapper(name: str, fn):
+            async def _wrapper(**kwargs):
+                # Generate a per-call trace_id (gateway is a separate process)
+                from shared.diagnostics import trace_id_var
+                trace_id_var.set(str(uuid.uuid4()))
+
+                t0 = time.perf_counter()
+                try:
+                    result = await fn(**kwargs)
+                    latency = round(time.perf_counter() - t0, 4)
+                    preview = str(result)[:500] if result else ""
+                    await emit_tool_call(
+                        tool_name=name,
+                        arguments=sanitize(kwargs),
+                        result_preview=preview,
+                        latency_s=latency,
+                        success=True,
+                    )
+                    return result
+                except Exception as exc:
+                    latency = round(time.perf_counter() - t0, 4)
+                    await emit_tool_call(
+                        tool_name=name,
+                        arguments=sanitize(kwargs),
+                        result_preview="",
+                        latency_s=latency,
+                        success=False,
+                        error=str(exc),
+                    )
+                    raise
+
+            return _wrapper
+
+        for tool_name in list(self.mcp._tools.keys()):
+            tool_info = self.mcp._tools[tool_name]
+            original_func = tool_info["func"]
+            if inspect.iscoroutinefunction(original_func):
+                tool_info["func"] = _make_wrapper(tool_name, original_func)
+
+    # ------------------------------------------------------------------ #
     # Run
     # ------------------------------------------------------------------ #
     def run(self, transport=None):
+        # Set a gateway-scoped session_id before the event loop starts so
+        # it propagates (via context copy) to all asyncio tasks.
+        from shared.diagnostics import init_diagnostics, session_id_var
+        gw_session = f"gw-{str(uuid.uuid4())[:8]}"
+        session_id_var.set(gw_session)
+        init_diagnostics(log_root="logs")
         self.mcp.run(transport)

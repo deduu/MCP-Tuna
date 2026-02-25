@@ -1,8 +1,16 @@
+from __future__ import annotations
+
+import traceback
 from typing import List, Dict, Any, Optional, AsyncGenerator
 import json
 from ..responses.builder import ResponseBuilder
 from ..utils.exception import AgentExecutionError
 from ..utils.timing import TimingContext
+from shared.diagnostics import (
+    emit_agent_event,
+    emit_request_end,
+    emit_error,
+)
 
 from app.core.agent_factory import create_agent
 import logging
@@ -115,13 +123,48 @@ class StreamHandler:
                         content, model_name)
                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                # Handle tool execution (logged but not streamed)
+                # Handle tool execution events
                 elif event_type in ("tool_exec_start", "tool_exec_end"):
                     logger.debug(f"tool_call: {content}")
+                    await emit_agent_event(
+                        event_type,
+                        payload={"tool": event.get("name")},
+                    )
+
+                # Handle pipeline phase events
+                elif event_type in ("phase_start", "phase_end"):
+                    await emit_agent_event(
+                        event_type,
+                        payload={"phase": event.get("phase")},
+                    )
+
+                # Handle reflection result events
+                elif event_type == "reflection_result":
+                    await emit_agent_event(
+                        event_type,
+                        payload={
+                            "is_ready": event.get("is_ready"),
+                            "explanation": event.get("explanation"),
+                        },
+                    )
 
                 # Handle completion
                 elif event_type == "complete":
                     timing.end_inference()
+                    await emit_agent_event(
+                        "complete",
+                        payload={
+                            "turn_count": len(event.get("history", [])),
+                            "total_usage": event.get("usage", {}),
+                        },
+                    )
+                    await emit_request_end(
+                        status="ok",
+                        total_time_s=timing.total_time,
+                        inference_time_s=timing.inference_time,
+                        first_token_latency_s=timing.first_token_latency,
+                        token_usage=event.get("usage", {}),
+                    )
                     logger.info(
                         f"✅ Completed streaming chat | "
                         f"Δtotal={timing.inference_time:.2f}s | "
@@ -138,6 +181,12 @@ class StreamHandler:
 
         except Exception as e:
             logger.exception(f"Stream error: {e}")
+            await emit_error(
+                error_type=type(e).__name__,
+                message=str(e),
+                component="agent",
+                traceback_snippet=traceback.format_exc().splitlines()[-3:],
+            )
             error_chunk = self.response_builder.build_openai_chat_chunk(
                 f"[ERROR] {str(e)}",
                 model_name,

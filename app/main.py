@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -8,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.api_deck import router as deck_router
 
 from agentsoul.utils.logger import configure_logging
+from shared.diagnostics import init_diagnostics, session_id_var
 
 from app.core.config import settings
 import os
@@ -70,8 +72,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception(f"❌ Failed to preload models: {e}")
 
+    _session_id = str(uuid.uuid4())
+    session_id_var.set(_session_id)
+    _diag_writer = init_diagnostics(log_root="logs")
+    logger.info(f"Diagnostic session: {_session_id}")
+
     yield
 
+    await _diag_writer.close()
     logger.info("🧹 Shutting down Asistent backend... releasing resources.")
 
 
