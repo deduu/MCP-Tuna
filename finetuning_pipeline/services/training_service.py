@@ -6,6 +6,7 @@ run without torch/transformers installed.
 
 import json
 import time
+import inspect
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -172,25 +173,41 @@ class TrainingService:
                 return {"text": text}
 
             dataset = dataset.map(to_text)
+            # Keep only the "text" column to avoid TRL auto-detect conflicts
+            # (TRL 0.28+ looks for prompt+completion if both exist alongside text)
+            cols_to_remove = [c for c in dataset.column_names if c != "text"]
+            if cols_to_remove:
+                dataset = dataset.remove_columns(cols_to_remove)
+
+            cuda_available = torch.cuda.is_available()
+            bf16_supported = bool(
+                cuda_available and getattr(torch.cuda, "is_bf16_supported", lambda: False)()
+            )
+            model_dtype = torch.bfloat16 if bf16_supported else (
+                torch.float16 if cuda_available else torch.float32
+            )
 
             quantization_config = None
-            try:
-                from transformers import BitsAndBytesConfig
+            load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
+            if load_in_4bit:
+                try:
+                    # Ensure bitsandbytes runtime is actually importable.
+                    import bitsandbytes  # noqa: F401
+                    from transformers import BitsAndBytesConfig
 
-                if bool(kwargs.pop("load_in_4bit", True)):
                     quantization_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
                         bnb_4bit_compute_dtype=torch.bfloat16,
                         bnb_4bit_use_double_quant=True,
                     )
-            except Exception:
-                quantization_config = None
+                except Exception:
+                    quantization_config = None
 
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 device_map="auto",
-                torch_dtype=torch.bfloat16,
+                torch_dtype=model_dtype,
                 quantization_config=quantization_config,
                 local_files_only=local_files_only,
             )
@@ -222,22 +239,38 @@ class TrainingService:
                 logging_steps=int(kwargs.pop("logging_steps", 10)),
                 save_steps=int(kwargs.pop("save_steps", 200)),
                 save_total_limit=int(kwargs.pop("save_total_limit", 2)),
-                bf16=bool(kwargs.pop("bf16", True)),
-                fp16=bool(kwargs.pop("fp16", False)),
+                bf16=bool(kwargs.pop("bf16", bf16_supported)),
+                fp16=bool(kwargs.pop("fp16", cuda_available and not bf16_supported)),
                 report_to=[],
             )
 
-            trainer = SFTTrainer(
-                model=model,
-                args=training_args,
-                train_dataset=dataset,
-                eval_dataset=evaluation_dataset if (enable_evaluation and evaluation_dataset is not None) else None,
-                tokenizer=tokenizer,
-                dataset_text_field="text",
-                peft_config=peft_config,
-                max_seq_length=int(kwargs.pop("max_seq_length", 2048)),
-                packing=bool(kwargs.pop("packing", False)),
-            )
+            # Keep compatibility across TRL versions by only passing supported kwargs.
+            trainer_sig = inspect.signature(SFTTrainer.__init__).parameters
+            trainer_kwargs = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": dataset,
+            }
+
+            if enable_evaluation and evaluation_dataset is not None and "eval_dataset" in trainer_sig:
+                trainer_kwargs["eval_dataset"] = evaluation_dataset
+            if "peft_config" in trainer_sig and peft_config is not None:
+                trainer_kwargs["peft_config"] = peft_config
+            if "dataset_text_field" in trainer_sig:
+                trainer_kwargs["dataset_text_field"] = "text"
+            elif "formatting_func" in trainer_sig:
+                # TRL 0.28+: dataset_text_field removed, use formatting_func instead
+                trainer_kwargs["formatting_func"] = lambda examples: examples["text"]
+            if "max_seq_length" in trainer_sig:
+                trainer_kwargs["max_seq_length"] = int(kwargs.pop("max_seq_length", 2048))
+            if "packing" in trainer_sig:
+                trainer_kwargs["packing"] = bool(kwargs.pop("packing", False))
+            if "tokenizer" in trainer_sig:
+                trainer_kwargs["tokenizer"] = tokenizer
+            elif "processing_class" in trainer_sig:
+                trainer_kwargs["processing_class"] = tokenizer
+
+            trainer = SFTTrainer(**trainer_kwargs)
 
             trainer.train()
             trainer.save_model(output_dir)
