@@ -24,8 +24,12 @@ env/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+
+# MCP client configs (contain local paths)
+.mcp.json
 
 # OS
 .DS_Store
