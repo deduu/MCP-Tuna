@@ -6,7 +6,7 @@ Delegates to focused sub-services while preserving the original API
 so existing callers (MCP server, scripts) keep working.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from shared.config import FinetuningConfig
 from .model_discovery_service import ModelDiscoveryService
@@ -20,6 +20,7 @@ class FineTuningService:
         self._gpu = None
         self._training = None
         self._inference = None
+        self._curriculum = None
         self.discovery = ModelDiscoveryService()
 
     def _ensure_gpu(self):
@@ -41,6 +42,12 @@ class FineTuningService:
             self._inference = InferenceService(gpu=self._ensure_gpu())
         return self._inference
 
+    def _ensure_curriculum(self):
+        if self._curriculum is None:
+            from .curriculum_service import CurriculumService
+            self._curriculum = CurriculumService(config=self.config)
+        return self._curriculum
+
     # ---- GPU ----
     def clear_gpu_memory(self) -> Dict[str, Any]:
         try:
@@ -59,6 +66,18 @@ class FineTuningService:
 
     async def train_model(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_training().train_model(*a, **kw)
+
+    async def train_dpo_model(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_training().train_dpo_model(*a, **kw)
+
+    async def train_grpo_model(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_training().train_grpo_model(*a, **kw)
+
+    async def train_kto_model(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_training().train_kto_model(*a, **kw)
+
+    async def train_curriculum_model(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_curriculum().train_curriculum_model(*a, **kw)
 
     # ---- Inference ----
     async def run_inference(self, *a, **kw) -> Dict[str, Any]:

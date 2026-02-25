@@ -8,8 +8,6 @@ Exposes fine-tuning pipeline as MCP tools for AI agents.
 import sys
 import json
 from typing import Optional
-from pathlib import Path
-
 # Import MCP server framework
 from agentsoul.server import MCPServer, StdioTransport, HTTPTransport
 
@@ -126,6 +124,153 @@ class FineTuningMCP:
             
             return json.dumps(result, indent=2)
         
+        @self.mcp.tool(
+            name="train_dpo",
+            description=(
+                "Fine-tune a model using Direct Preference Optimization (DPO). "
+                "Dataset must contain 'prompt', 'chosen', and 'rejected' columns. "
+                "Use when you have preference pairs showing preferred vs rejected responses."
+            ),
+        )
+        async def train_dpo(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+            beta: float = 0.1,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            """Train a model with DPO."""
+            load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.service.train_dpo_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                beta=beta,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="train_grpo",
+            description=(
+                "Fine-tune a model using Group Relative Policy Optimization (GRPO). "
+                "Dataset must contain 'prompt', 'responses' (list), and 'rewards' (list of float) columns. "
+                "Uses pre-computed rewards as the reward signal."
+            ),
+        )
+        async def train_grpo(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            num_generations: int = 4,
+            max_prompt_length: int = 512,
+            max_completion_length: int = 256,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            """Train a model with GRPO."""
+            load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.service.train_grpo_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                num_generations=num_generations,
+                max_prompt_length=max_prompt_length,
+                max_completion_length=max_completion_length,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="train_curriculum",
+            description=(
+                "Fine-tune a model using curriculum learning. "
+                "Automatically scores the dataset, splits into difficulty stages "
+                "(easy → hard), and trains stage-by-stage. "
+                "Dataset must have instruction/input/output OR prompt/response columns."
+            ),
+        )
+        async def train_curriculum(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            difficulty_order: str = "easy_first",
+            use_lora: bool = True,
+            lora_r: int = 8,
+            resume_stage: Optional[int] = None,
+        ) -> str:
+            """Train a model with curriculum learning."""
+            load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.service.train_curriculum_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                resume_stage=resume_stage,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="train_kto",
+            description=(
+                "Fine-tune a model using Kahneman-Tversky Optimization (KTO). "
+                "Dataset must contain 'prompt', 'completion', and 'label' (bool) columns. "
+                "label=true marks desirable completions; label=false marks undesirable."
+            ),
+        )
+        async def train_kto(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+            beta: float = 0.1,
+            desirable_weight: float = 1.0,
+            undesirable_weight: float = 1.0,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            """Train a model with KTO."""
+            load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.service.train_kto_model(
+                dataset=load_result["dataset_object"],
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                beta=beta,
+                desirable_weight=desirable_weight,
+                undesirable_weight=undesirable_weight,
+                resume_from_checkpoint=resume_from_checkpoint,
+            )
+            return json.dumps(result, indent=2)
+
         @self.mcp.tool(
             name="train_from_data",
             description=(
