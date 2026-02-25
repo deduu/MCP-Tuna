@@ -1,1 +1,70 @@
+# Python
 __pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments (uv)
+.venv/
+venv/
+env/
+.uv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+
+# ML / training artifacts
+outputs/
+checkpoints/
+runs/
+wandb/
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+
+# Data files
+*.csv
+*.parquet
+*.jsonl
+*.arrow
+data/raw/
+data/processed/
+
+# Claude Code local settings
+.claude/
+
+data/
