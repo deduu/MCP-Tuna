@@ -50,6 +50,7 @@ logs/ai_diagnostics/*.jsonl
 !logs/CLAUDE.md
 
 # ML / training artifacts
+output/
 outputs/
 checkpoints/
 runs/
