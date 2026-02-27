@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
+  "name": "transcendence",
+  "display_name": "Transcendence",
+  "description": "End-to-end LLM fine-tuning platform — generate, clean, normalize, evaluate, train, and host models via MCP tools.",
+  "vendor": {
+    "name": "AgentY",
+    "url": "https://github.com/deduu/AgentY"
+  },
+  "license": "MIT",
+  "runtime": "python",
+  "config": {
+    "command": "transcendence-gateway",
+    "args": [],
+    "env": {
+      "OPENAI_API_KEY": {
+        "description": "OpenAI API key for data generation and evaluation",
+        "required": true
+      },
+      "HF_TOKEN": {
+        "description": "HuggingFace token for model downloads and uploads",
+        "required": false
+      }
+    }
+  },
+  "packages": {
+    "pypi": "transcendence[all-servers]"
+  },
+  "categories": ["machine-learning", "data-processing"],
+  "tags": ["fine-tuning", "llm", "sft", "dpo", "grpo", "lora", "training", "datasets", "evaluation"],
+  "tools": {
+    "count": 82
+  }
+}

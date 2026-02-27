@@ -5,9 +5,9 @@ AgentY Unified MCP Gateway
 Single entry point exposing all pipeline operations as MCP tools.
 Uses agentsoul's MCPServer (production-grade HTTP+stdio transport).
 
-28 tools across 10 namespaces:
+44 tools across 11 namespaces:
   extract, generate, clean, normalize, evaluate,
-  finetune, test, validate, host, workflow
+  finetune, test, validate, host, workflow, judge
 """
 from __future__ import annotations
 
@@ -20,12 +20,15 @@ from typing import Any, Dict, List, Optional, Union
 from agentsoul.server import MCPServer
 from dotenv import load_dotenv
 from shared.config import (
+    AdvancedJudgeConfig,
+    FTEvaluatorConfig,
     GeneratorConfig,
     CleaningConfig,
     NormalizationConfig,
     EvaluatorConfig,
     HostingConfig,
     OrchestrationConfig,
+    ModelEvaluationConfig,
 )
 
 
@@ -35,17 +38,22 @@ class AgentYGateway:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         load_dotenv(override=False)
         config = config or {}
-        self.mcp = MCPServer("agenty-gateway", "1.0.0")
+        self.mcp = MCPServer("transcendence-gateway", "1.0.0")
 
         # Lazily-initialized services (avoid heavy imports at gateway startup)
         self._generator_svc = None
         self._cleaning_svc = None
         self._normalization_svc = None
         self._evaluator_svc = None
+        self._model_evaluator_svc = None
         self._finetuning_svc = None
         self._hosting_svc = None
         self._orchestrator = None
         self._orchestration_data_svc = None
+        self._advanced_judge_svc = None
+        self._ft_evaluator_svc = None
+        self._job_manager_instance = None
+        self._dataset_svc = None
 
         self._config = config
         self._register_all_tools()
@@ -57,7 +65,12 @@ class AgentYGateway:
     @property
     def generator(self):
         if self._generator_svc is None:
-            from data_generator_pipeline.services.pipeline_service import PipelineService
+            try:
+                from data_generator_pipeline.services.pipeline_service import PipelineService
+            except ImportError:
+                raise ImportError(
+                    "Data generation tools require: pip install transcendence[data]"
+                ) from None
             from shared.provider_factory import create_llm
             gen_config = GeneratorConfig(**{
                 k: v for k, v in self._config.get("generator", {}).items()
@@ -84,15 +97,41 @@ class AgentYGateway:
     @property
     def evaluator(self):
         if self._evaluator_svc is None:
-            from data_evaluator_pipeline.services.pipeline_service import EvaluatorService
+            try:
+                from data_evaluator_pipeline.services.pipeline_service import EvaluatorService
+            except ImportError:
+                raise ImportError(
+                    "Evaluation tools require: pip install transcendence[eval]"
+                ) from None
             eval_config = EvaluatorConfig(**self._config.get("evaluator", {}))
             self._evaluator_svc = EvaluatorService(eval_config)
         return self._evaluator_svc
 
     @property
+    def model_evaluator(self):
+        if self._model_evaluator_svc is None:
+            try:
+                from model_evaluator_pipeline.services.evaluation_service import ModelEvaluationService
+            except ImportError:
+                raise ImportError(
+                    "Model evaluation tools require: pip install transcendence[model-eval]"
+                ) from None
+            eval_config = ModelEvaluationConfig(**{
+                k: v for k, v in self._config.get("model_evaluator", {}).items()
+                if k in ModelEvaluationConfig.model_fields
+            })
+            self._model_evaluator_svc = ModelEvaluationService(eval_config)
+        return self._model_evaluator_svc
+
+    @property
     def finetuner(self):
         if self._finetuning_svc is None:
-            from finetuning_pipeline.services.pipeline_service import FineTuningService
+            try:
+                from finetuning_pipeline.services.pipeline_service import FineTuningService
+            except ImportError:
+                raise ImportError(
+                    "Training tools require: pip install transcendence[training]"
+                ) from None
             self._finetuning_svc = FineTuningService(
                 default_base_model=self._config.get("finetuning", {}).get(
                     "base_model", "meta-llama/Llama-3.2-3B-Instruct"
@@ -103,14 +142,24 @@ class AgentYGateway:
     @property
     def hoster(self):
         if self._hosting_svc is None:
-            from hosting_pipeline.services.hosting_service import HostingService
+            try:
+                from hosting_pipeline.services.hosting_service import HostingService
+            except ImportError:
+                raise ImportError(
+                    "Hosting tools require: pip install transcendence[hosting]"
+                ) from None
             self._hosting_svc = HostingService()
         return self._hosting_svc
 
     @property
     def orchestration_data_service(self):
         if self._orchestration_data_svc is None:
-            from orchestration.orchestration_trainer import OrchestrationDataService
+            try:
+                from orchestration.orchestration_trainer import OrchestrationDataService
+            except ImportError:
+                raise ImportError(
+                    "Orchestration tools require: pip install transcendence[orchestration]"
+                ) from None
             from orchestration.rewards import OrchestrationRewardFunction
             from shared.provider_factory import create_llm
             orch_config = OrchestrationConfig(**{
@@ -139,21 +188,226 @@ class AgentYGateway:
             )
         return self._orchestrator
 
+    @property
+    def advanced_judge(self):
+        if self._advanced_judge_svc is None:
+            try:
+                from model_evaluator_pipeline.services.judge_service import AdvancedJudgeService
+            except ImportError:
+                raise ImportError(
+                    "Judge tools require: pip install transcendence[model-eval]"
+                ) from None
+            judge_config = AdvancedJudgeConfig(**{
+                k: v for k, v in self._config.get("advanced_judge", {}).items()
+                if k in AdvancedJudgeConfig.model_fields
+            })
+            self._advanced_judge_svc = AdvancedJudgeService(judge_config)
+        return self._advanced_judge_svc
+
+    @property
+    def ft_evaluator(self):
+        if self._ft_evaluator_svc is None:
+            try:
+                from model_evaluator_pipeline.services.ft_evaluator_service import FTEvaluatorService
+            except ImportError:
+                raise ImportError(
+                    "Fine-tune evaluation tools require: pip install transcendence[model-eval]"
+                ) from None
+            ft_config = FTEvaluatorConfig(**{
+                k: v for k, v in self._config.get("ft_evaluator", {}).items()
+                if k in FTEvaluatorConfig.model_fields
+            })
+            self._ft_evaluator_svc = FTEvaluatorService(ft_config)
+        return self._ft_evaluator_svc
+
+    @property
+    def job_manager(self):
+        if self._job_manager_instance is None:
+            from shared.training_jobs import TrainingJobManager
+            self._job_manager_instance = TrainingJobManager(max_concurrent=1)
+        return self._job_manager_instance
+
+    @property
+    def dataset_service(self):
+        if self._dataset_svc is None:
+            from shared.dataset_service import DatasetService
+            self._dataset_svc = DatasetService()
+        return self._dataset_svc
+
+    # ------------------------------------------------------------------ #
+    # Auto-deploy helper
+    # ------------------------------------------------------------------ #
+    async def _auto_deploy_if_requested(
+        self,
+        train_result: Dict[str, Any],
+        deploy: bool,
+        deploy_port: int,
+        base_model: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Conditionally deploy a trained model after successful training.
+
+        Returns the deployment result dict if deployed, None otherwise.
+        """
+        if not deploy or not train_result.get("success"):
+            return None
+
+        model_path = train_result.get("model_path") or train_result.get(
+            "final_model_path"
+        )
+        if not model_path:
+            return None
+
+        resolved_base = base_model or self.finetuner.config.base_model
+        config = HostingConfig(
+            model_path=resolved_base,
+            adapter_path=model_path,
+            port=deploy_port,
+        )
+        return await self.hoster.deploy_as_mcp(config)
+
     # ------------------------------------------------------------------ #
     # Tool registration
     # ------------------------------------------------------------------ #
     def _register_all_tools(self):
+        self._register_system_tools()
         self._register_extract_tools()
         self._register_generate_tools()
         self._register_clean_tools()
         self._register_normalize_tools()
         self._register_evaluate_tools()
+        self._register_model_eval_tools()
         self._register_finetune_tools()
+        self._register_training_monitor_tools()
         self._register_test_tools()
         self._register_validate_tools()
         self._register_host_tools()
         self._register_workflow_tools()
         self._register_orchestration_tools()
+        self._register_judge_tools()
+        self._register_ft_evaluator_tools()
+        self._register_dataset_tools()
+
+    # -- System (Resource Checking) --
+    def _register_system_tools(self):
+        @self.mcp.tool(
+            name="system.check_resources",
+            description=(
+                "Check GPU/RAM/disk status before training. Call this before any "
+                "finetune.train* or workflow.* tool to verify hardware is sufficient. "
+                "Returns gpu (name, vram_total_gb, vram_free_gb, compute_capability), "
+                "ram (total_gb, free_gb, percent_used), and disk (free_gb) info."
+            ),
+        )
+        async def check_resources() -> str:
+            result = self.finetuner.check_resources()
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="system.preflight_check",
+            description=(
+                "Estimate VRAM requirements for a training configuration and check if "
+                "it will fit on the available GPU. Returns can_run (bool), "
+                "estimated_vram_gb, available_vram_gb, headroom_gb, a detailed "
+                "breakdown (model_gb, lora_gb, optimizer_gb, activations_gb, "
+                "overhead_gb), recommendations for optimal settings, and warnings. "
+                "Call this before finetune.train* to avoid OOM errors."
+            ),
+        )
+        async def preflight_check(
+            model_name: str,
+            quantization: str = "4bit",
+            batch_size: int = 1,
+            max_seq_length: int = 512,
+            technique: str = "sft",
+            use_lora: bool = True,
+            lora_r: int = 8,
+            gradient_checkpointing: bool = False,
+        ) -> str:
+            result = self.finetuner.preflight_check(
+                model_name=model_name,
+                quantization=quantization,
+                batch_size=batch_size,
+                max_seq_length=max_seq_length,
+                technique=technique,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                gradient_checkpointing=gradient_checkpointing,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="system.setup_check",
+            description=(
+                "Validate all prerequisites for using AgentY: API keys, GPU, "
+                "HuggingFace token, disk space, required Python packages. "
+                "Run this first before any pipeline operation."
+            ),
+        )
+        async def setup_check() -> str:
+            import os
+            import shutil
+            checks = []
+
+            # OpenAI API key
+            has_key = bool(os.getenv("OPENAI_API_KEY"))
+            checks.append({
+                "name": "OPENAI_API_KEY", "status": "pass" if has_key else "warn",
+                "detail": "Set" if has_key else "Not set — generation/evaluation tools require this",
+            })
+
+            # HuggingFace token
+            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+            checks.append({
+                "name": "HF_TOKEN", "status": "pass" if hf_token else "warn",
+                "detail": "Set" if hf_token else "Not set — required for gated models and push_to_hub",
+            })
+
+            # GPU
+            try:
+                import torch
+                gpu_ok = torch.cuda.is_available()
+                gpu_name = torch.cuda.get_device_name(0) if gpu_ok else None
+                checks.append({
+                    "name": "GPU", "status": "pass" if gpu_ok else "warn",
+                    "detail": gpu_name or "No GPU detected — training will be slow",
+                })
+            except ImportError:
+                checks.append({"name": "GPU", "status": "fail", "detail": "torch not installed"})
+
+            # Disk space
+            disk = shutil.disk_usage(".")
+            free_gb = round(disk.free / (1024 ** 3), 1)
+            checks.append({
+                "name": "Disk Space", "status": "pass" if free_gb > 10 else "warn",
+                "detail": f"{free_gb} GB free",
+            })
+
+            # Key packages
+            for pkg in ["torch", "transformers", "peft", "trl", "datasets"]:
+                try:
+                    __import__(pkg)
+                    checks.append({"name": f"Package: {pkg}", "status": "pass", "detail": "Installed"})
+                except ImportError:
+                    checks.append({"name": f"Package: {pkg}", "status": "fail", "detail": "Not installed"})
+
+            all_passed = all(c["status"] != "fail" for c in checks)
+            return json.dumps({"success": True, "checks": checks, "all_passed": all_passed}, indent=2)
+
+        @self.mcp.tool(
+            name="system.config",
+            description="Show current gateway configuration (model defaults, output dirs, env vars).",
+        )
+        async def show_config() -> str:
+            import os
+            return json.dumps({
+                "success": True,
+                "config": self._config,
+                "env": {
+                    "OPENAI_API_KEY": "***" if os.getenv("OPENAI_API_KEY") else None,
+                    "OPENAI_API_BASE": os.getenv("OPENAI_API_BASE"),
+                    "HF_TOKEN": "***" if os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") else None,
+                },
+            }, indent=2)
 
     # -- Extract --
     def _register_extract_tools(self):
@@ -241,6 +495,74 @@ class AgentYGateway:
                 for field in dataclasses.fields(datapoint_class)
             }
             return json.dumps({"success": True, "technique": technique, "schema": schema}, indent=2)
+
+        @self.mcp.tool(
+            name="generate.from_text",
+            description=(
+                "Generate fine-tuning data from raw text (no file required). "
+                "Useful when text is already in memory or pasted by the user. "
+                "Supports all techniques: sft, dpo, grpo, kto."
+            ),
+        )
+        async def gen_from_text(
+            technique: str,
+            text: str,
+            source_name: str = "raw_text",
+            custom_template: Optional[str] = None,
+        ) -> str:
+            return json.dumps(await self.generator.generate_from_page(
+                technique=technique, page_text=text,
+                page_index=0, file_name=source_name,
+                custom_template=custom_template,
+            ), indent=2)
+
+        @self.mcp.tool(
+            name="generate.from_hf_dataset",
+            description=(
+                "Load a dataset from the HuggingFace Hub and return as AgentY "
+                "data_points. Automatically maps columns if the dataset uses "
+                "standard naming (instruction/input/output or prompt/chosen/rejected). "
+                "Use column_mapping JSON to override: e.g., "
+                '\'{"question": "instruction", "answer": "output"}\'. '
+                "Returns data_points ready for clean.dataset, evaluate.dataset, "
+                "or dataset.save."
+            ),
+        )
+        async def gen_from_hf_dataset(
+            dataset_name: str,
+            split: str = "train",
+            subset: Optional[str] = None,
+            max_rows: Optional[int] = None,
+            column_mapping: Optional[str] = None,
+        ) -> str:
+            try:
+                from datasets import load_dataset as hf_load_dataset
+                ds = hf_load_dataset(dataset_name, subset, split=split)
+                if max_rows:
+                    ds = ds.select(range(min(max_rows, len(ds))))
+
+                mapping = json.loads(column_mapping) if column_mapping else {}
+                data_points = []
+                for row in ds:
+                    dp = {}
+                    for src_col, val in row.items():
+                        target_col = mapping.get(src_col, src_col)
+                        if isinstance(val, (str, int, float, bool, list)):
+                            dp[target_col] = val
+                        else:
+                            dp[target_col] = str(val)
+                    data_points.append(dp)
+
+                return json.dumps({
+                    "success": True,
+                    "dataset_name": dataset_name,
+                    "split": split,
+                    "data_points": data_points,
+                    "count": len(data_points),
+                    "original_columns": list(ds.column_names),
+                }, indent=2)
+            except Exception as e:
+                return json.dumps({"success": False, "error": str(e)}, indent=2)
 
     # -- Clean --
     def _register_clean_tools(self):
@@ -330,10 +652,83 @@ class AgentYGateway:
         async def list_metrics() -> str:
             return json.dumps(self.evaluator.list_metrics(), indent=2)
 
+    # -- Model Evaluate --
+    def _register_model_eval_tools(self):
+        @self.mcp.tool(
+            name="evaluate_model.single",
+            description="Score a single generated output against a reference with ROUGE, BERTScore, and LLM-as-Judge",
+        )
+        async def eval_model_single(
+            question: str,
+            generated: str,
+            reference: str,
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            result = await self.model_evaluator.evaluate_single(
+                question=question,
+                generated=generated,
+                reference=reference,
+                metrics=metrics,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="evaluate_model.batch",
+            description="Run evaluation on a test set -- optionally runs inference first if model_path is provided",
+        )
+        async def eval_model_batch(
+            test_data: List[Dict],
+            metrics: Optional[List[str]] = None,
+            model_path: Optional[str] = None,
+            adapter_path: Optional[str] = None,
+            max_new_tokens: int = 1024,
+            flatten: bool = False,
+        ) -> str:
+            result = await self.model_evaluator.evaluate_batch(
+                test_data=test_data,
+                metrics=metrics,
+                model_path=model_path,
+                adapter_path=adapter_path,
+                max_new_tokens=max_new_tokens,
+                flatten=flatten,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="evaluate_model.export",
+            description="Export evaluation results as JSONL, JSON, or Excel",
+        )
+        async def eval_model_export(
+            results: List[Dict],
+            output_path: str,
+            format: str = "jsonl",
+        ) -> str:
+            result = await self.model_evaluator.export_results(
+                results=results,
+                output_path=output_path,
+                format=format,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="evaluate_model.summary",
+            description="Compute aggregate statistics (min/max/mean/stdev) for evaluation results",
+        )
+        async def eval_model_summary(results: List[Dict]) -> str:
+            summary = self.model_evaluator.compute_summary(results)
+            return json.dumps({"success": True, "summary": summary}, indent=2)
+
     # -- Finetune --
     def _register_finetune_tools(self):
-        @self.mcp.tool(name="finetune.train",
-                       description="Fine-tune a model using a dataset file (SFT with QLoRA)")
+        @self.mcp.tool(
+            name="finetune.train",
+            description=(
+                "Fine-tune a model using a dataset file (SFT with QLoRA). "
+                "Returns model_path usable as base_model in finetune.train_dpo, "
+                "finetune.train_grpo, finetune.train_kto, or finetune.train_curriculum. "
+                "Use host.deploy_mcp with the returned model_path to serve the model."
+            ),
+        )
         async def train(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
@@ -351,6 +746,13 @@ class AgentYGateway:
             max_grad_norm: float = 1.0,
             learning_rate: float = 2e-4,
             report_to: Optional[str] = None,
+            max_seq_length: int = 2048,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            gradient_checkpointing: bool = False,
+            optim: str = "adamw_torch",
+            deploy: bool = False,
+            deploy_port: int = 8001,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -373,11 +775,28 @@ class AgentYGateway:
                 max_grad_norm=max_grad_norm,
                 learning_rate=learning_rate,
                 report_to=report_to or [],
+                max_seq_length=max_seq_length,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                optim=optim,
             )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
             return json.dumps(result, indent=2)
 
-        @self.mcp.tool(name="finetune.train_dpo",
-                       description="Fine-tune a model with DPO — dataset needs prompt/chosen/rejected columns")
+        @self.mcp.tool(
+            name="finetune.train_dpo",
+            description=(
+                "Fine-tune a model with DPO (Direct Preference Optimization) -- "
+                "dataset needs prompt/chosen/rejected columns. "
+                "Accepts base_model from a previous finetune.train result (model_path). "
+                "Returns model_path for chaining with further training or host.deploy_mcp."
+            ),
+        )
         async def train_dpo(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
@@ -386,6 +805,8 @@ class AgentYGateway:
             use_lora: bool = True,
             lora_r: int = 8,
             resume_from_checkpoint: Optional[str] = None,
+            deploy: bool = False,
+            deploy_port: int = 8001,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -400,16 +821,30 @@ class AgentYGateway:
                 lora_r=lora_r,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
             return json.dumps(result, indent=2)
 
-        @self.mcp.tool(name="finetune.train_grpo",
-                       description="Fine-tune a model with GRPO — dataset needs prompt/responses/rewards columns")
+        @self.mcp.tool(
+            name="finetune.train_grpo",
+            description=(
+                "Fine-tune a model with GRPO (Group Relative Policy Optimization) -- "
+                "dataset needs prompt/responses/rewards columns. "
+                "Accepts base_model from a previous finetune.train result (model_path). "
+                "Returns model_path for chaining with further training or host.deploy_mcp."
+            ),
+        )
         async def train_grpo(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             num_generations: int = 4,
             resume_from_checkpoint: Optional[str] = None,
+            deploy: bool = False,
+            deploy_port: int = 8001,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -422,10 +857,22 @@ class AgentYGateway:
                 num_generations=num_generations,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
             return json.dumps(result, indent=2)
 
-        @self.mcp.tool(name="finetune.train_kto",
-                       description="Fine-tune a model with KTO — dataset needs prompt/completion/label columns")
+        @self.mcp.tool(
+            name="finetune.train_kto",
+            description=(
+                "Fine-tune a model with KTO (Kahneman-Tversky Optimization) -- "
+                "dataset needs prompt/completion/label columns. "
+                "Accepts base_model from a previous finetune.train result (model_path). "
+                "Returns model_path for chaining with further training or host.deploy_mcp."
+            ),
+        )
         async def train_kto(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
@@ -434,6 +881,8 @@ class AgentYGateway:
             use_lora: bool = True,
             lora_r: int = 8,
             resume_from_checkpoint: Optional[str] = None,
+            deploy: bool = False,
+            deploy_port: int = 8001,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -448,11 +897,20 @@ class AgentYGateway:
                 lora_r=lora_r,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
             name="finetune.train_curriculum",
-            description="Curriculum fine-tune: auto-scores dataset, trains easy→hard in stages",
+            description=(
+                "Curriculum fine-tune: auto-scores dataset by difficulty, trains easy-to-hard "
+                "in stages. Each stage's output model feeds into the next stage automatically. "
+                "Returns final_model_path for chaining with host.deploy_mcp or evaluate_model.batch."
+            ),
         )
         async def train_curriculum(
             dataset_path: str,
@@ -461,8 +919,19 @@ class AgentYGateway:
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
             difficulty_order: str = "easy_first",
+            score_column: str = "weighted_score",
             use_lora: bool = True,
             lora_r: int = 8,
+            max_seq_length: int = 2048,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            gradient_checkpointing: bool = False,
+            optim: str = "adamw_torch",
+            learning_rate: float = 2e-4,
+            lr_scheduler_type: str = "linear",
+            warmup_ratio: float = 0.0,
+            deploy: bool = False,
+            deploy_port: int = 8001,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -474,9 +943,55 @@ class AgentYGateway:
                 num_stages=num_stages,
                 num_epochs_per_stage=num_epochs_per_stage,
                 difficulty_order=difficulty_order,
+                score_column=score_column,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                max_seq_length=max_seq_length,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                optim=optim,
+                learning_rate=learning_rate,
+                lr_scheduler_type=lr_scheduler_type,
+                warmup_ratio=warmup_ratio,
             )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.sequential_train",
+            description=(
+                "Chain multiple training techniques sequentially (e.g., SFT -> DPO -> GRPO). "
+                "Each stage's output model_path automatically becomes the next stage's base_model. "
+                "Accepts a JSON list of stages, each with technique, dataset_path, and optional "
+                "hyperparameters. Returns per-stage results and final_model_path for deployment "
+                "via host.deploy_mcp or evaluation via evaluate_model.batch."
+            ),
+        )
+        async def sequential_train(
+            stages: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            merge_between_stages: bool = True,
+            deploy: bool = False,
+            deploy_port: int = 8001,
+        ) -> str:
+            parsed_stages = json.loads(stages) if isinstance(stages, str) else stages
+            result = await self.finetuner.train_sequential(
+                stages=parsed_stages,
+                output_dir=output_dir,
+                base_model=base_model,
+                merge_between_stages=merge_between_stages,
+            )
+            deploy_result = await self._auto_deploy_if_requested(
+                result, deploy, deploy_port, base_model
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="finetune.load_dataset",
@@ -495,6 +1010,442 @@ class AgentYGateway:
             if "dataset_object" in result:
                 del result["dataset_object"]
             return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.merge_adapter",
+            description=(
+                "Merge a LoRA adapter into the base model to produce a standalone "
+                "model directory. Optionally push the merged model to HuggingFace Hub."
+            ),
+        )
+        async def merge_adapter(
+            base_model: str,
+            adapter_path: str,
+            output_path: str,
+            push_to_hub: Optional[str] = None,
+        ) -> str:
+            return json.dumps(
+                await self.finetuner.merge_adapter(
+                    base_model=base_model, adapter_path=adapter_path,
+                    output_path=output_path, push_to_hub=push_to_hub,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="finetune.export_gguf",
+            description=(
+                "Export a model to GGUF format for use with llama.cpp or Ollama. "
+                "Requires the llama-cpp-python package (pip install transcendence[export]). "
+                "Supported quantizations: q4_0, q4_k_m, q5_k_m, q8_0, f16."
+            ),
+        )
+        async def export_gguf(
+            model_path: str,
+            output_path: str,
+            quantization: str = "q4_k_m",
+        ) -> str:
+            return json.dumps(
+                await self.finetuner.export_gguf(
+                    model_path=model_path, output_path=output_path,
+                    quantization=quantization,
+                ),
+                indent=2,
+            )
+
+    # -- Training Monitor --
+    def _register_training_monitor_tools(self):
+        @self.mcp.tool(
+            name="finetune.train_async",
+            description=(
+                "Start SFT fine-tuning in the background and return a job_id immediately. "
+                "Use finetune.job_status(job_id) to poll progress (step, loss, ETA, GPU). "
+                "Use finetune.cancel_job(job_id) to stop training early. "
+                "Same parameters as finetune.train but non-blocking."
+            ),
+        )
+        async def train_async(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+            completion_only_loss: bool = True,
+            early_stopping_patience: Optional[int] = None,
+            eval_file_path: Optional[str] = None,
+            push_to_hub: Optional[str] = None,
+            lr_scheduler_type: str = "linear",
+            warmup_ratio: float = 0.0,
+            weight_decay: float = 0.0,
+            max_grad_norm: float = 1.0,
+            learning_rate: float = 2e-4,
+            report_to: Optional[str] = None,
+            max_seq_length: int = 2048,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            gradient_checkpointing: bool = False,
+            optim: str = "adamw_torch",
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="sft",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={
+                    "num_epochs": num_epochs, "lora_r": lora_r,
+                    "batch_size": per_device_train_batch_size,
+                    "learning_rate": learning_rate,
+                },
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_model(
+                    dataset=dataset_obj,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    completion_only_loss=completion_only_loss,
+                    early_stopping_patience=early_stopping_patience,
+                    eval_file_path=eval_file_path,
+                    push_to_hub=push_to_hub,
+                    lr_scheduler_type=lr_scheduler_type,
+                    warmup_ratio=warmup_ratio,
+                    weight_decay=weight_decay,
+                    max_grad_norm=max_grad_norm,
+                    learning_rate=learning_rate,
+                    report_to=report_to or [],
+                    max_seq_length=max_seq_length,
+                    per_device_train_batch_size=per_device_train_batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
+                    gradient_checkpointing=gradient_checkpointing,
+                    optim=optim,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True,
+                "job_id": job.job_id,
+                "status": "running",
+                "message": "Training started. Use finetune.job_status to monitor progress.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_dpo_async",
+            description=(
+                "Start DPO fine-tuning in the background. Returns job_id. "
+                "Dataset needs prompt/chosen/rejected columns. "
+                "Use finetune.job_status(job_id) to monitor."
+            ),
+        )
+        async def train_dpo_async(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            beta: float = 0.1,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="dpo",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={"num_epochs": num_epochs, "beta": beta},
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_dpo_model(
+                    dataset=dataset_obj,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    beta=beta,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    resume_from_checkpoint=resume_from_checkpoint,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True, "job_id": job.job_id,
+                "status": "running",
+                "message": "DPO training started. Use finetune.job_status to monitor.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_grpo_async",
+            description=(
+                "Start GRPO fine-tuning in the background. Returns job_id. "
+                "Dataset needs prompt/responses/rewards columns. "
+                "Use finetune.job_status(job_id) to monitor."
+            ),
+        )
+        async def train_grpo_async(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            num_generations: int = 4,
+            max_prompt_length: int = 512,
+            max_completion_length: int = 256,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="grpo",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={"num_epochs": num_epochs, "num_generations": num_generations},
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_grpo_model(
+                    dataset=dataset_obj,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    num_generations=num_generations,
+                    max_prompt_length=max_prompt_length,
+                    max_completion_length=max_completion_length,
+                    resume_from_checkpoint=resume_from_checkpoint,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True, "job_id": job.job_id,
+                "status": "running",
+                "message": "GRPO training started. Use finetune.job_status to monitor.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_kto_async",
+            description=(
+                "Start KTO fine-tuning in the background. Returns job_id. "
+                "Dataset needs prompt/completion/label columns. "
+                "Use finetune.job_status(job_id) to monitor."
+            ),
+        )
+        async def train_kto_async(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            beta: float = 0.1,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            desirable_weight: float = 1.0,
+            undesirable_weight: float = 1.0,
+            resume_from_checkpoint: Optional[str] = None,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="kto",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={"num_epochs": num_epochs, "beta": beta},
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_kto_model(
+                    dataset=dataset_obj,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    beta=beta,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    desirable_weight=desirable_weight,
+                    undesirable_weight=undesirable_weight,
+                    resume_from_checkpoint=resume_from_checkpoint,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True, "job_id": job.job_id,
+                "status": "running",
+                "message": "KTO training started. Use finetune.job_status to monitor.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_curriculum_async",
+            description=(
+                "Start curriculum learning in the background. Returns job_id. "
+                "Scores dataset, buckets by difficulty, trains stage-by-stage. "
+                "Use finetune.job_status(job_id) to monitor."
+            ),
+        )
+        async def train_curriculum_async(
+            dataset_path: str, output_dir: str,
+            base_model: Optional[str] = None,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            score_column: str = "weighted_score",
+            difficulty_order: str = "easy_first",
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="curriculum",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={
+                    "num_stages": num_stages,
+                    "epochs_per_stage": num_epochs_per_stage,
+                },
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_curriculum_model(
+                    dataset=dataset_obj,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_stages=num_stages,
+                    num_epochs_per_stage=num_epochs_per_stage,
+                    score_column=score_column,
+                    difficulty_order=difficulty_order,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True, "job_id": job.job_id,
+                "status": "running",
+                "message": "Curriculum training started. Use finetune.job_status to monitor.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.sequential_train_async",
+            description=(
+                "Start sequential multi-technique training in the background. Returns job_id. "
+                "Chains SFT -> DPO -> GRPO -> KTO stages, auto-merging LoRA between them. "
+                "Use finetune.job_status(job_id) to monitor."
+            ),
+        )
+        async def sequential_train_async(
+            stages: str, output_dir: str,
+            base_model: Optional[str] = None,
+            merge_between_stages: bool = True,
+        ) -> str:
+            try:
+                stages_list = json.loads(stages)
+            except json.JSONDecodeError as e:
+                return json.dumps({"success": False, "error": f"Invalid stages JSON: {e}"}, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            techniques = [s.get("technique", "?") for s in stages_list]
+            job = self.job_manager.create_job(
+                trainer_type="sequential",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={"techniques": techniques, "num_stages": len(stages_list)},
+            )
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_sequential(
+                    stages=stages_list,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    merge_between_stages=merge_between_stages,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True, "job_id": job.job_id,
+                "status": "running",
+                "message": "Sequential training started. Use finetune.job_status to monitor.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.job_status",
+            description=(
+                "Get real-time status of a training job. Returns current step, max steps, "
+                "epoch, loss, learning rate, eval_loss, ETA, GPU memory, percent complete, "
+                "and full result when completed. Use the job_id from finetune.train_async."
+            ),
+        )
+        async def job_status(job_id: str) -> str:
+            job = self.job_manager.get_job(job_id)
+            if job is None:
+                return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
+            return json.dumps({"success": True, **job.model_dump()}, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.list_jobs",
+            description=(
+                "List all training jobs (running, completed, failed, cancelled). "
+                "Optionally filter by status. Returns summary of each job."
+            ),
+        )
+        async def list_jobs(
+            status: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            from shared.training_jobs import JobStatus as JS
+            status_enum = JS(status) if status else None
+            jobs = self.job_manager.list_jobs(status=status_enum, limit=limit)
+            return json.dumps({
+                "success": True,
+                "count": len(jobs),
+                "jobs": [j.model_dump() for j in jobs],
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.cancel_job",
+            description=(
+                "Cancel a running training job. The model checkpoint at the current step "
+                "will be saved. The job status changes to 'cancelled'."
+            ),
+        )
+        async def cancel_job(job_id: str) -> str:
+            success = self.job_manager.cancel_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or not running: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Cancellation requested. Job will stop after current step.",
+            }, indent=2)
 
     # -- Test --
     def _register_test_tools(self):
@@ -541,8 +1492,14 @@ class AgentYGateway:
 
     # -- Host --
     def _register_host_tools(self):
-        @self.mcp.tool(name="host.deploy_mcp",
-                       description="Deploy a fine-tuned model as an MCP tool server")
+        @self.mcp.tool(
+            name="host.deploy_mcp",
+            description=(
+                "Deploy a fine-tuned model as an MCP tool server. "
+                "Use model_path from finetune.train* results as adapter_path. "
+                "Returns deployment_id and endpoint URL."
+            ),
+        )
         async def deploy_mcp(
             model_path: str, adapter_path: Optional[str] = None,
             port: int = 8001,
@@ -550,8 +1507,14 @@ class AgentYGateway:
             config = HostingConfig(model_path=model_path, adapter_path=adapter_path, port=port)
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
 
-        @self.mcp.tool(name="host.deploy_api",
-                       description="Deploy a fine-tuned model as a REST API")
+        @self.mcp.tool(
+            name="host.deploy_api",
+            description=(
+                "Deploy a fine-tuned model as a REST API with /generate endpoint. "
+                "Use model_path from finetune.train* results as adapter_path. "
+                "Returns deployment_id and endpoint URL."
+            ),
+        )
         async def deploy_api(
             model_path: str, adapter_path: Optional[str] = None,
             port: int = 8001,
@@ -568,6 +1531,13 @@ class AgentYGateway:
                        description="Stop a running deployment")
         async def stop_deployment(deployment_id: str) -> str:
             return json.dumps(await self.hoster.stop_deployment(deployment_id), indent=2)
+
+        @self.mcp.tool(
+            name="host.health",
+            description="Health check on a running deployment. Returns status, uptime, endpoint.",
+        )
+        async def host_health(deployment_id: str) -> str:
+            return json.dumps(await self.hoster.health_check(deployment_id), indent=2)
 
     # -- Workflow --
     def _register_workflow_tools(self):
@@ -613,11 +1583,11 @@ class AgentYGateway:
             name="workflow.curriculum_pipeline",
             description=(
                 "Full curriculum learning pipeline from raw documents to a compared model. "
-                "Runs: Extract → Generate → Clean → Normalize → Evaluate → Filter → "
-                "Curriculum Train (staged easy→hard) → Compare vs base model → (optional) Deploy. "
+                "Runs: Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter -> "
+                "Curriculum Train (staged easy->hard) -> Compare vs base model -> (optional) Deploy. "
                 "Accepts one or more Markdown/PDF/text files. "
                 "The evaluate step scores every row with weighted_score so curriculum "
-                "training always receives a pre-scored dataset — no double work."
+                "training always receives a pre-scored dataset -- no double work."
             ),
         )
         async def curriculum_pipeline(
@@ -656,6 +1626,74 @@ class AgentYGateway:
                 deploy_port=deploy_port,
             )
             return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.compare_flat_vs_curriculum",
+            description=(
+                "Compare flat SFT vs curriculum SFT on the same dataset. "
+                "Trains both approaches and provides side-by-side comparison "
+                "using test.compare_models. Returns structured results with "
+                "training metrics and qualitative output comparisons."
+            ),
+        )
+        async def compare_flat_vs_curriculum(
+            dataset_path: str,
+            output_dir: str = "./output/comparison",
+            base_model: Optional[str] = None,
+            num_epochs_flat: int = 3,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            difficulty_order: str = "easy_first",
+            use_lora: bool = True,
+            lora_r: int = 8,
+            test_data_path: Optional[str] = None,
+            test_prompts: Optional[str] = None,
+        ) -> str:
+            parsed_prompts = None
+            if test_prompts:
+                parsed_prompts = (
+                    json.loads(test_prompts)
+                    if isinstance(test_prompts, str)
+                    else test_prompts
+                )
+            result = await self.orchestrator.compare_flat_vs_curriculum(
+                dataset_path=dataset_path,
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs_flat=num_epochs_flat,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                test_data_path=test_data_path,
+                test_prompts=parsed_prompts,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.run_pipeline",
+            description=(
+                "Execute a sequence of MCP tools server-side in a single call. "
+                "Avoids back-and-forth round-trips between client and server. "
+                "Each step specifies a tool name and params. Use '$prev.key' in "
+                "params to reference the previous step's output (e.g., "
+                "'$prev.model_path' passes the model_path from the prior step). "
+                "Stops on first failure and returns partial results. "
+                "Set dry_run=True to validate the pipeline without executing. "
+                "Example steps: "
+                '[{"tool":"system.preflight_check","params":{"model_name":"meta-llama/Llama-3.2-3B-Instruct"}},'
+                '{"tool":"finetune.train","params":{"dataset_path":"data.jsonl"}},'
+                '{"tool":"test.inference","params":{"model_path":"$prev.model_path"}}]'
+            ),
+        )
+        async def run_pipeline(steps: str, dry_run: bool = False) -> str:
+            from shared.pipeline_executor import PipelineExecutor, PipelineStep
+
+            parsed_steps = [PipelineStep(**s) for s in json.loads(steps)]
+            executor = PipelineExecutor(self.mcp._tools)
+            result = await executor.execute(parsed_steps, dry_run=dry_run)
+            return result.model_dump_json(indent=2)
 
     # -- Orchestration --
     def _register_orchestration_tools(self):
@@ -747,6 +1785,306 @@ class AgentYGateway:
                 deploy_port=deploy_port,
             )
             return json.dumps(result, indent=2)
+
+    # -- Judge (Advanced LLM-as-a-Judge) --
+    def _register_judge_tools(self):
+        @self.mcp.tool(
+            name="judge.evaluate",
+            description="Run a single LLM-as-a-judge evaluation on one sample with custom criteria/rubric",
+        )
+        async def judge_evaluate(
+            question: str,
+            generated: str,
+            reference: Optional[str] = None,
+            generated_b: Optional[str] = None,
+            judge_type: str = "pointwise",
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+        ) -> str:
+            result = await self.advanced_judge.evaluate_single(
+                question=question, generated=generated,
+                reference=reference, generated_b=generated_b,
+                judge_type=judge_type, judge_model=judge_model,
+                criteria=criteria, rubric=rubric,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.evaluate_multi",
+            description="Run multiple LLM judges in parallel on one sample and aggregate scores",
+        )
+        async def judge_evaluate_multi(
+            question: str,
+            generated: str,
+            reference: Optional[str] = None,
+            generated_b: Optional[str] = None,
+            judge_type: str = "pointwise",
+            judges: Optional[List[Dict]] = None,
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+            aggregation: str = "mean",
+        ) -> str:
+            result = await self.advanced_judge.evaluate_multi_judge(
+                question=question, generated=generated,
+                reference=reference, generated_b=generated_b,
+                judge_type=judge_type, judges=judges,
+                criteria=criteria, rubric=rubric,
+                aggregation=aggregation,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.evaluate_batch",
+            description="Run batch evaluation with multi-judge support and custom criteria",
+        )
+        async def judge_evaluate_batch(
+            test_data: List[Dict],
+            judge_type: str = "pointwise",
+            judges: Optional[List[Dict]] = None,
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+            aggregation: str = "mean",
+        ) -> str:
+            result = await self.advanced_judge.evaluate_batch(
+                test_data=test_data, judge_type=judge_type,
+                judges=judges, criteria=criteria,
+                rubric=rubric, aggregation=aggregation,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.compare_pair",
+            description="Pairwise comparison: which of two outputs is better?",
+        )
+        async def judge_compare_pair(
+            question: str,
+            generated_a: str,
+            generated_b: str,
+            reference: Optional[str] = None,
+            judges: Optional[List[Dict]] = None,
+            criteria: Optional[List[Dict]] = None,
+        ) -> str:
+            result = await self.advanced_judge.evaluate_multi_judge(
+                question=question,
+                generated=generated_a,
+                generated_b=generated_b,
+                reference=reference,
+                judge_type="pairwise",
+                judges=judges,
+                criteria=criteria,
+                aggregation="mean",
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.list_types",
+            description="List available judge evaluation types (pointwise, pairwise, reference_free, rubric)",
+        )
+        async def judge_list_types() -> str:
+            return json.dumps(self.advanced_judge.list_judge_types(), indent=2)
+
+        @self.mcp.tool(
+            name="judge.export",
+            description="Export judge evaluation results as JSONL or JSON",
+        )
+        async def judge_export(
+            results: List[Dict],
+            output_path: str,
+            format: str = "jsonl",
+        ) -> str:
+            result = await self.advanced_judge.export_results(
+                results=results, output_path=output_path, format=format,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.create_rubric",
+            description="Validate a rubric definition and return the parsed result",
+        )
+        async def judge_create_rubric(
+            name: str,
+            criteria: List[Dict],
+            description: str = "",
+        ) -> str:
+            from model_evaluator_pipeline.judges.models import JudgeCriterion, JudgeRubric
+            try:
+                rubric = JudgeRubric(
+                    name=name, description=description,
+                    criteria=[JudgeCriterion(**c) for c in criteria],
+                )
+                return json.dumps({
+                    "success": True,
+                    "rubric": rubric.model_dump(),
+                }, indent=2)
+            except Exception as e:
+                return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    # -- FT Evaluator (Domain Knowledge Judge) --
+    def _register_ft_evaluator_tools(self):
+        @self.mcp.tool(
+            name="ft_eval.single",
+            description="Domain knowledge PASS/FAIL evaluation on one sample (single judge)",
+        )
+        async def ft_eval_single(
+            instruction: str,
+            generated: str,
+            reference: str,
+            judge_model: Optional[str] = None,
+            ksmi_label: Optional[str] = None,
+        ) -> str:
+            verdict = await self.ft_evaluator.evaluate_single(
+                instruction=instruction,
+                generated=generated,
+                reference=reference,
+                judge_model=judge_model,
+                ksmi_label=ksmi_label,
+            )
+            return json.dumps(verdict.model_dump(), indent=2)
+
+        @self.mcp.tool(
+            name="ft_eval.batch",
+            description="Batch domain knowledge evaluation with multi-judge + KSMI labels",
+        )
+        async def ft_eval_batch(
+            test_data: List[Dict],
+            judge_models: Optional[List[str]] = None,
+        ) -> str:
+            result = await self.ft_evaluator.evaluate_batch(
+                test_data=test_data,
+                judge_models=judge_models,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="ft_eval.summary",
+            description="Compute stakeholder summary (pass rate, failure types, severity, KSMI breakdown)",
+        )
+        async def ft_eval_summary(results: List[Dict]) -> str:
+            from model_evaluator_pipeline.models.ft_evaluator import FTEvalResult
+            parsed = [FTEvalResult(**r) for r in results]
+            summary = self.ft_evaluator.compute_summary(parsed)
+            return json.dumps({"success": True, "summary": summary.model_dump()}, indent=2)
+
+        @self.mcp.tool(
+            name="ft_eval.export",
+            description="Export domain knowledge evaluation results as JSONL or JSON",
+        )
+        async def ft_eval_export(
+            results: List[Dict],
+            output_path: str,
+            format: str = "jsonl",
+        ) -> str:
+            from model_evaluator_pipeline.models.ft_evaluator import FTEvalResult
+            parsed = [FTEvalResult(**r) for r in results]
+            result = await self.ft_evaluator.export_results(
+                results=parsed,
+                output_path=output_path,
+                format=format,
+            )
+            return json.dumps(result, indent=2)
+
+    # ------------------------------------------------------------------ #
+    # Dataset tools
+    # ------------------------------------------------------------------ #
+    def _register_dataset_tools(self):
+        @self.mcp.tool(
+            name="dataset.save",
+            description=(
+                "Save data_points to a file (JSONL, JSON, or Parquet). Use after "
+                "generate.from_document, clean.dataset, normalize.dataset, or "
+                "evaluate.filter_by_quality to persist results to disk. "
+                "Returns dataset_id (derived from filename) and file_path."
+            ),
+        )
+        async def dataset_save(
+            data_points: List[Dict],
+            output_path: str,
+            format: str = "jsonl",
+        ) -> str:
+            return json.dumps(
+                await self.dataset_service.save(data_points, output_path, format),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.load",
+            description=(
+                "Load a dataset from file and return data_points. "
+                "Auto-detects format from extension (.jsonl, .json, .parquet, .csv). "
+                "Pipe results into clean.dataset, evaluate.dataset, or finetune.train."
+            ),
+        )
+        async def dataset_load(file_path: str) -> str:
+            return json.dumps(
+                await self.dataset_service.load(file_path), indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.preview",
+            description="Show first N rows from a dataset file without loading everything.",
+        )
+        async def dataset_preview(file_path: str, n: int = 5) -> str:
+            return json.dumps(
+                await self.dataset_service.preview(file_path, n), indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.info",
+            description=(
+                "Get metadata about a dataset file: row count, columns, "
+                "detected technique (sft/dpo/grpo/kto), file size."
+            ),
+        )
+        async def dataset_info(file_path: str) -> str:
+            return json.dumps(
+                await self.dataset_service.info(file_path), indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.split",
+            description=(
+                "Split a dataset file into train/val/test files with configurable "
+                "ratios and random seed. Returns paths to the three split files."
+            ),
+        )
+        async def dataset_split(
+            file_path: str,
+            output_dir: str,
+            train_ratio: float = 0.8,
+            val_ratio: float = 0.1,
+            test_ratio: float = 0.1,
+            seed: int = 42,
+        ) -> str:
+            return json.dumps(
+                await self.dataset_service.split(
+                    file_path, output_dir,
+                    train_ratio=train_ratio, val_ratio=val_ratio,
+                    test_ratio=test_ratio, seed=seed,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.merge",
+            description=(
+                "Merge multiple dataset files into one. "
+                "Optionally deduplicate by a key (default: instruction)."
+            ),
+        )
+        async def dataset_merge(
+            file_paths: List[str],
+            output_path: str,
+            deduplicate: bool = False,
+            dedup_key: str = "instruction",
+        ) -> str:
+            return json.dumps(
+                await self.dataset_service.merge(
+                    file_paths, output_path,
+                    deduplicate=deduplicate, dedup_key=dedup_key,
+                ),
+                indent=2,
+            )
 
     # ------------------------------------------------------------------ #
     # Diagnostics
