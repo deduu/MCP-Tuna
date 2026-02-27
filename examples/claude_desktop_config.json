@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": {
+        "OPENAI_API_KEY": "sk-...",
+        "HF_TOKEN": "hf_..."
+      }
+    }
+  }
+}

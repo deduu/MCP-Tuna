@@ -1,10 +1,244 @@
-# AgentY
+# Transcendence
 
-End-to-end LLM fine-tuning platform that generates, evaluates, and trains on custom datasets. Designed to be extensible and AI-agent-friendly via the MCP protocol.
+End-to-end LLM fine-tuning platform that generates, evaluates, and trains on custom datasets. Exposed as **82 MCP tools** across 11 namespaces — first-of-its-kind for the MCP ecosystem.
+
+## Quick Start
+
+```bash
+# Install (all servers)
+pip install transcendence[all-servers]
+
+# Or with uv
+uv pip install transcendence[all-servers]
+```
+
+Add to your MCP client and start fine-tuning with natural language:
+
+```
+"Generate an SFT dataset from my docs, evaluate quality, train a LoRA adapter, and deploy it."
+```
+
+## Installation Tiers
+
+Install only what you need:
+
+| Extra | What it enables | Key dependencies |
+|-------|----------------|------------------|
+| `data` | Dataset generation (SFT/DPO/GRPO) | openai |
+| `eval` | Dataset quality scoring & filtering | openai, scikit-learn |
+| `model-eval` | Model comparison & benchmarking | rouge-score, evaluate, pandas |
+| `model-eval-full` | + BERTScore metric | bert-score |
+| `training` | LoRA fine-tuning | torch, transformers, peft, trl |
+| `hosting` | Model deployment | torch, transformers, fastapi |
+| `orchestration` | Agent trajectory training data | openai |
+| `all-servers` | Everything above | all |
+
+```bash
+# Data generation only (no GPU needed)
+pip install transcendence[data]
+
+# Training + hosting (GPU)
+pip install transcendence[training,hosting]
+```
+
+## Available Servers
+
+| Server | Command | Tools | Required extra |
+|--------|---------|-------|----------------|
+| **Unified Gateway** | `transcendence-gateway` | 82 | `all-servers` |
+| Data Prep | `transcendence-data` | 22 | `data` |
+| Evaluation | `transcendence-eval` | 4 | `eval` |
+| Model Eval | `transcendence-model-eval` | 15 | `model-eval` |
+| Training | `transcendence-train` | 11 | `training` |
+| Hosting | `transcendence-host` | 5 | `hosting` |
+| Orchestration | `transcendence-orchestrate` | 3 | `orchestration` |
+
+All servers support two transport modes:
+
+```bash
+transcendence-gateway              # stdio mode (Claude Desktop, Cursor, Claude Code)
+transcendence-gateway http         # HTTP mode (default port 8000)
+transcendence-gateway http --port 9000
+transcendence-gateway --version
+transcendence-gateway --help
+```
+
+## MCP Client Setup
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+Or zero-install with `uvx` (no `pip install` needed):
+
+```json
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "uvx",
+      "args": ["--from", "transcendence[all-servers]", "transcendence-gateway"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### Codex (OpenAI)
+
+Add to `~/.codex/config.toml` (global) or `.codex/config.toml` (project-scoped):
+
+**Stdio mode** (Codex launches the server automatically):
+
+```toml
+[mcp_servers.transcendence]
+command = "transcendence-gateway"
+
+[mcp_servers.transcendence.env]
+OPENAI_API_KEY = "sk-..."
+HF_TOKEN = "hf_..."
+```
+
+**HTTP mode** (connect to a running server):
+
+```toml
+[mcp_servers.transcendence]
+url = "http://localhost:8000/mcp"
+```
+
+> Codex supports both stdio and HTTP transports. The CLI and VS Code extension share the same config.
+
+### Cursor
+
+Place in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Edit `~/.codeium/windsurf/mcp_config.json` (or add via Windsurf Settings > Cascade > MCP Servers):
+
+```json
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### VS Code (Copilot)
+
+Place in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### JetBrains (IntelliJ, PyCharm, WebStorm)
+
+Go to **Settings > Tools > AI Assistant > Model Context Protocol (MCP)**, click **Add**, switch to **As JSON**, and paste:
+
+```json
+{
+  "command": "transcendence-gateway",
+  "env": { "OPENAI_API_KEY": "sk-..." }
+}
+```
+
+Or click **Import from Claude** if you already have Claude Desktop configured.
+
+### Claude Code
+
+Place in `.mcp.json` at project root:
+
+```json
+{
+  "mcpServers": {
+    "transcendence": {
+      "command": "transcendence-gateway",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### Split servers (lightweight, per-task)
+
+Use individual servers if you only need a subset of tools:
+
+```json
+{
+  "mcpServers": {
+    "transcendence-data": {
+      "command": "transcendence-data",
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    },
+    "transcendence-train": {
+      "command": "transcendence-train",
+      "env": { "HF_TOKEN": "hf_..." }
+    }
+  }
+}
+```
+
+See `examples/` for more configuration templates.
+
+## Docker
+
+```bash
+# GPU (all servers, CUDA 12.4)
+docker build -t transcendence .
+docker run --gpus all -p 8000:8000 \
+  -e OPENAI_API_KEY=sk-... \
+  -v hf-cache:/root/.cache/huggingface \
+  transcendence
+
+# CPU (data + eval only, no torch)
+docker build --target cpu -t transcendence-cpu .
+docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... transcendence-cpu
+
+# docker compose (includes PostgreSQL)
+docker compose up -d
+```
+
+Then connect any MCP client via HTTP:
+
+```toml
+# Codex example
+[mcp_servers.transcendence]
+url = "http://localhost:8000/mcp"
+```
 
 ## Architecture
-
-AgentY is composed of three independent pipelines that work together:
 
 ```
 Documents (PDF, MD, Excel)
@@ -15,407 +249,71 @@ Documents (PDF, MD, Excel)
   │  Pipeline                    │  using LLMs (OpenAI, custom BaseLLM)
   └──────────────┬───────────────┘
                  |
-                 v
-  ┌──────────────────────────────┐
-  │  Data Evaluator              │  Score & filter datasets on complexity, quality,
-  │  Pipeline                    │  IFD, and semantic similarity
-  └──────────────┬───────────────┘
-                 |
-                 v
+       ┌─────────┼─────────┐
+       v         v         v
+  ┌─────────┐ ┌────────┐ ┌──────────┐
+  │ Cleaner │ │Normaliz│ │Evaluator │  Clean, normalize, score & filter
+  └────┬────┘ └───┬────┘ └────┬─────┘
+       └──────────┼───────────┘
+                  v
   ┌──────────────────────────────┐
   │  Fine-tuning                 │  Train LoRA adapters, run inference,
   │  Pipeline                    │  compare base vs fine-tuned models
+  └──────────────┬───────────────┘
+                 v
+  ┌──────────────────────────────┐
+  │  Hosting                     │  Deploy as MCP tool or FastAPI endpoint
+  │  Pipeline                    │
   └──────────────────────────────┘
 ```
 
-## Quick Start
+**Orchestration path:** Generate problems → Collect agent trajectories → Score (accuracy + cost + latency) → Format → Train → Host
 
-### Prerequisites
-
-- Python 3.11+
-- `OPENAI_API_KEY` environment variable (for generation/evaluation)
-- CUDA-capable GPU (recommended for fine-tuning)
-
-### Installation
+## Development
 
 ```bash
-uv sync
-# or
-pip install -e .
+# Install all dependencies
+uv sync --all-extras
+
+# Run tests
+uv run pytest -x -q
+
+# Lint & format
+uv run ruff check .
+uv run ruff format .
+
+# Start gateway locally
+python scripts/run_gateway.py http 8000
 ```
 
-### Generate a Dataset
-
-```python
-from AgentY.data_generator_pipeline.services.pipeline_service import PipelineService
-
-service = PipelineService()
-
-# Load a document
-doc = await service.load_document("path/to/document.pdf")
-
-# Generate SFT data from the document
-results = await service.generate_from_document(
-    technique="sft",
-    file_path="path/to/document.pdf",
-)
-
-# Export
-await service.export_dataset(results, "output/dataset.jsonl", format="jsonl")
-```
-
-### Evaluate a Dataset
-
-```python
-from AgentY.data_evaluator_pipeline.pipeline import InstructionTuningPipeline
-from AgentY.data_evaluator_pipeline.core.evaluator import MetricEvaluator
-from AgentY.data_evaluator_pipeline.core.metrics.complexity import ComplexityMetric
-from AgentY.data_evaluator_pipeline.core.metrics.ifd import InstructionFollowingDifficultyMetric
-from AgentY.data_evaluator_pipeline.core.metrics.quality import LLMQualityMetric
-from AgentY.data_evaluator_pipeline.selection.quality import QualityThresholdSelector
-from AgentY.data_evaluator_pipeline.analysis.dataset_analyzer import DatasetAnalyzer
-from AgentY.data_evaluator_pipeline.providers.llm.openai import OpenAILLMProvider
-from AgentY.data_evaluator_pipeline.io.loaders import load_jsonl
-
-# Configure metrics and weights
-llm = OpenAILLMProvider()
-metrics = [ComplexityMetric(), InstructionFollowingDifficultyMetric(), LLMQualityMetric(llm)]
-weights = {"complexity": 0.3, "ifd": -0.2, "quality": 0.9}
-
-evaluator = MetricEvaluator(metrics, weights)
-selector = QualityThresholdSelector(evaluator, threshold=0.6)
-analyzer = DatasetAnalyzer(evaluator)
-pipeline = InstructionTuningPipeline(evaluator, selector, analyzer)
-
-dataset = load_jsonl("output/dataset.jsonl")
-result = pipeline.run(dataset)
-# result -> {"original": stats, "selected": stats, "subset": [DataPoint, ...]}
-```
-
-### Fine-tune a Model
-
-```python
-from AgentY.finetuning_pipeline.services.pipeline_service import FineTuningService
-
-service = FineTuningService()
-
-# Load dataset
-dataset = service.load_dataset_from_file("output/dataset.jsonl", format="jsonl")
-
-# Train with LoRA
-result = await service.train_model(
-    dataset=dataset,
-    output_dir="./models/my-model",
-    base_model="meta-llama/Llama-3.2-3B-Instruct",
-    num_epochs=3,
-    use_lora=True,
-)
-
-# Run inference
-responses = await service.run_inference(
-    prompts=["Explain quantum computing"],
-    model_path="meta-llama/Llama-3.2-3B-Instruct",
-    adapter_path="./models/my-model",
-)
-
-# Compare base vs fine-tuned
-comparison = await service.compare_models(
-    prompts=["Explain quantum computing"],
-    base_model_path="meta-llama/Llama-3.2-3B-Instruct",
-    finetuned_adapter_path="./models/my-model",
-)
-```
-
----
-
-## MCP Setup (Connect Your AI Editor)
-
-AgentY exposes all pipelines as MCP tools via a unified gateway. Connect your AI editor to use them.
-
-### Auto-Setup (Recommended)
-
-```bash
-# Interactive menu — choose which clients to configure
-python scripts/setup_mcp.py
-
-# Configure all supported clients at once
-python scripts/setup_mcp.py --all
-
-# Configure a specific client
-python scripts/setup_mcp.py --vscode
-python scripts/setup_mcp.py --claude-desktop
-python scripts/setup_mcp.py --claude-code
-python scripts/setup_mcp.py --cursor
-
-# Use HTTP transport instead of stdio
-python scripts/setup_mcp.py --all --transport http
-```
-
-### Manual Setup
-
-If you prefer to configure manually, create the appropriate config file for your client:
-
-**VS Code** — `.vscode/mcp.json`:
-```json
-{
-  "servers": {
-    "agenty-gateway": {
-      "command": "uv",
-      "args": ["run", "python", "scripts/run_gateway.py"]
-    }
-  }
-}
-```
-
-**Claude Desktop** — platform-specific global config (see [docs](https://modelcontextprotocol.io/quickstart/user)):
-```json
-{
-  "mcpServers": {
-    "agenty-gateway": {
-      "command": "uv",
-      "args": ["--directory", "/absolute/path/to/AgentY", "run", "python", "scripts/run_gateway.py"]
-    }
-  }
-}
-```
-> Replace `/absolute/path/to/AgentY` with your actual project path. Claude Desktop doesn't support relative paths.
-
-**Claude Code** — `.mcp.json` (project root):
-```json
-{
-  "mcpServers": {
-    "agenty-gateway": {
-      "command": "uv",
-      "args": ["run", "python", "scripts/run_gateway.py"]
-    }
-  }
-}
-```
-
-**Cursor** — `.cursor/mcp.json`:
-```json
-{
-  "mcpServers": {
-    "agenty-gateway": {
-      "command": "uv",
-      "args": ["run", "python", "scripts/run_gateway.py"]
-    }
-  }
-}
-```
-
-### HTTP Transport Alternative
-
-If you prefer HTTP over stdio, start the gateway manually and point your client at it:
-
-```bash
-# Start the gateway in HTTP mode
-python scripts/run_gateway.py http 8002
-```
-
-Then use this config instead (example for VS Code):
-```json
-{
-  "servers": {
-    "agenty-gateway": {
-      "type": "http",
-      "url": "http://localhost:8002/mcp"
-    }
-  }
-}
-```
-
-### Verification
-
-After setup, verify the gateway is working:
-
-```bash
-# Health check (HTTP mode)
-curl http://localhost:8002/health
-
-# List available tools (HTTP mode)
-curl http://localhost:8002/tools
-```
-
-For stdio mode, your MCP client should automatically connect and list the available tools.
-
----
-
-## Pipelines
-
-### 1. Data Generator Pipeline
-
-Generates fine-tuning datasets from documents using LLMs.
-
-**Supported techniques:**
-
-| Technique | Format | Description |
-|-----------|--------|-------------|
-| **SFT** | `instruction`, `input`, `output` | Supervised fine-tuning pairs |
-| **DPO** | `prompt`, `chosen`, `rejected` | Direct preference optimization pairs |
-| **GRPO** | `prompt`, `responses[]`, `rewards[]` | Group relative policy optimization with multiple responses |
-
-**Key components:**
-
-- `core/base.py` -- Abstract `BaseGenerator`, `BaseParser`, `BaseLLM`
-- `core/factory.py` -- `PipelineFactory.create(technique, llm, ...)` builds pipelines by technique
-- `core/pipeline.py` -- `FineTuningPipeline` orchestrates page-by-page generation
-- `generators/` -- SFT, DPO, GRPO generator implementations
-- `generators/registry.py` -- Register custom generators at runtime
-- `models/datapoints.py` -- Typed datapoint dataclasses: `SFTDataPoint`, `DPODataPoint`, `GRPODataPoint`
-- `exporters/dataset.py` -- Export to JSON, JSONL, CSV, Excel, HuggingFace datasets
-- `parsers/json_extractor.py` -- Extracts JSON arrays from LLM responses (handles thinking tags, fenced blocks)
-- `prompts/templates/` -- Prompt templates per technique (`.txt` files)
-- `services/pipeline_service.py` -- Stateless service layer exposing all operations
-- `mcp/server.py` -- MCP server exposing tools for AI agent integration
-
-**MCP tools:**
-`load_document`, `generate_from_page`, `generate_from_document`, `generate_batch`, `export_dataset`, `list_techniques`, `get_technique_schema`
-
-### 2. Data Evaluator Pipeline
-
-Evaluates and filters instruction-response datasets for quality.
-
-**Metrics:**
-
-| Metric | Module | What it measures |
-|--------|--------|------------------|
-| **Complexity** | `core/metrics/complexity.py` | Vocabulary richness, technical vocabulary, semantic density, structure |
-| **IFD** | `core/metrics/ifd.py` | Instruction-following difficulty (specificity, output complexity, alignment) |
-| **LLM Quality** | `core/metrics/quality.py` | LLM-judged response quality (calls OpenAI, returns 0-1 score) |
-| **Semantic Similarity** | `core/metrics/similarity.py` | Cosine similarity between instruction and output embeddings |
-
-**Key components:**
-
-- `core/data.py` -- `DataPoint` (frozen dataclass: instruction, input, output)
-- `core/evaluator.py` -- `MetricEvaluator` computes weighted scores across all metrics
-- `selection/quality.py` -- `QualityThresholdSelector` filters by combined score threshold
-- `analysis/dataset_analyzer.py` -- Computes per-metric statistics (mean, std, min, max)
-- `pipeline.py` -- `InstructionTuningPipeline` orchestrates evaluate -> select -> analyze
-- `io/loaders.py` -- `load_jsonl()` loads datasets
-- `xls_to_jsonl.py` -- Excel to JSONL converter with deduplication
-- `providers/` -- Pluggable LLM and embedding providers (OpenAI, Cohere)
-
-**Language support:** English (`en.json`), Indonesian (`id.json`) via config files in `core/metrics/configs/`.
-
-### 3. Fine-tuning Pipeline
-
-Trains LoRA adapters and runs inference on language models.
-
-**Capabilities:**
-- SFT training with LoRA (4-bit quantized)
-- Evaluation metrics: perplexity, semantic entropy, token entropy
-- Inference with adapter merging
-- Base vs fine-tuned model comparison
-- HuggingFace Hub model discovery and search
-- GPU memory management
-
-**Key components:**
-
-- `services/pipeline_service.py` -- `FineTuningService` with methods for dataset loading, training, inference, comparison, and model discovery
-- `scripts/run_mcp_server.py` -- MCP server exposing training/inference tools
-
-**Training defaults:**
-
-| Parameter | Default |
-|-----------|---------|
-| Base model | `meta-llama/Llama-3.2-3B-Instruct` |
-| Epochs | 3 |
-| LoRA rank | 8 |
-| LoRA alpha | 16 |
-| LoRA dropout | 0.05 |
-| Quantization | 4-bit (nf4, bfloat16) |
-| Max tokens | 512 |
-
-**MCP tools:**
-`load_dataset`, `prepare_dataset`, `train_model`, `train_from_data`, `run_inference`, `compare_models`, `list_available_base_models`, `search_huggingface_models`, `get_huggingface_model_info`, `list_models`, `get_model_info`, `clear_gpu_memory`
-
-**Recommended models by use case:**
-
-| Use Case | Models |
-|----------|--------|
-| General | Llama 3.2 3B, Mistral 7B, Gemma 2 2B |
-| Low memory | Llama 3.2 1B, Phi 2, Gemma 2 2B |
-| Speed | Llama 3.2 1B, TinyLlama 1.1B |
-| Quality | Mistral 7B, Llama 3.1 8B |
-| Multilingual | Gemma 2 2B, Llama 3.2 3B |
-| Indonesian | Llama 3.2 3B, Gemma 2 2B |
-
----
-
-## MCP Server Usage
-
-Each pipeline exposes an MCP server for AI agent integration.
-
-**Data Generator:**
-```bash
-python -m AgentY.data_generator_pipeline.scripts.run_mcp_server
-```
-
-**Fine-tuning:**
-```bash
-python AgentY/finetuning_pipeline/scripts/run_mcp_server.py
-```
-
----
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | For data/eval | OpenAI API access |
+| `HF_TOKEN` | For training | HuggingFace model downloads and hub push |
+| `HF_HOME` | No | HuggingFace model cache directory |
 
 ## Project Structure
 
 ```
 AgentY/
-├── data_generator_pipeline/
-│   ├── core/                    # Base classes, factory, pipeline runner
-│   ├── generators/              # SFT, DPO, GRPO generators + registry
-│   ├── models/                  # Typed datapoint dataclasses
-│   ├── exporters/               # Dataset export (JSON, JSONL, CSV, Excel, HF)
-│   ├── parsers/                 # JSON extraction from LLM responses
-│   ├── prompts/                 # Prompt template manager + .txt templates
-│   ├── services/                # Stateless pipeline service
-│   ├── mcp/                     # MCP server
-│   └── scripts/                 # CLI scripts, config.yaml
-│
-├── data_evaluator_pipeline/
-│   ├── core/
-│   │   ├── data.py              # DataPoint dataclass
-│   │   ├── evaluator.py         # MetricEvaluator (weighted scoring)
-│   │   └── metrics/             # Complexity, IFD, Quality, Similarity
-│   │       └── configs/         # Language configs (en.json, id.json)
-│   ├── analysis/                # Dataset statistics analyzer
-│   ├── selection/               # Quality threshold selector
-│   ├── providers/               # LLM + embedding providers (OpenAI, Cohere)
-│   ├── io/                      # JSONL loader
-│   └── pipeline.py              # Main pipeline orchestrator
-│
-├── finetuning_pipeline/
-│   ├── services/                # Training, inference, model management
-│   ├── scripts/                 # MCP server launcher
-│   └── tests/                   # Unit tests
-│
-└── __init__.py
+├── mcp_gateway.py              # Unified MCP gateway (82 tools)
+├── scripts/                    # Entry points for all servers
+├── servers/                    # Standalone split server implementations
+├── shared/                     # Cross-pipeline models, config, utilities
+├── data_generator_pipeline/    # SFT/DPO/GRPO dataset generation
+├── data_cleaning_pipeline/     # Deduplication & schema validation
+├── data_normalization_pipeline/# Format conversion (SFT ↔ DPO ↔ GRPO ↔ KTO)
+├── data_evaluator_pipeline/    # Quality scoring & filtering
+├── model_evaluator_pipeline/   # Model comparison & benchmarking
+├── finetuning_pipeline/        # LoRA training + inference
+├── hosting_pipeline/           # Model deployment
+├── orchestration/              # Agent trajectory training data
+├── src/agentsoul/              # Bundled agent framework
+└── app/                        # FastAPI backend
 ```
 
-## Configuration
+## License
 
-| Variable | Used By | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | Generator, Evaluator | OpenAI API access |
-| `HF_HOME` | Fine-tuning | HuggingFace model cache directory |
-
-**Generator config** (`data_generator_pipeline/scripts/config.yaml`):
-```yaml
-model: "gpt-4o"
-output_dir: "./data_sft"
-generator_kwargs:
-  num_responses: 4
-batch_size: 10
-max_retries: 3
-```
-
-**Evaluator language configs** (`data_evaluator_pipeline/core/metrics/configs/{lang}.json`):
-Language-specific word lists for complexity scoring (simple words, clause markers, reasoning connectors, explanatory phrases, spaCy model name).
-
-## Dependencies
-
-Core: `openai`, `transformers`, `torch`, `peft`, `datasets`, `langchain`, `spacy`, `pandas`, `mcp`, `fastapi`
-
-See `pyproject.toml` for the full dependency list.
+MIT

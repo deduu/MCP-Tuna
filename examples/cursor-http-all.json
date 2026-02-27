@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "transcendence-data": {
+      "url": "http://localhost:8010/mcp"
+    },
+    "transcendence-eval": {
+      "url": "http://localhost:8011/mcp"
+    },
+    "transcendence-model-eval": {
+      "url": "http://localhost:8012/mcp"
+    },
+    "transcendence-train": {
+      "url": "http://localhost:8013/mcp"
+    },
+    "transcendence-host": {
+      "url": "http://localhost:8014/mcp"
+    },
+    "transcendence-orchestrate": {
+      "url": "http://localhost:8015/mcp"
+    }
+  }
+}

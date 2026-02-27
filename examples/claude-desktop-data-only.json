@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "transcendence-data": {
+      "command": "transcendence-data",
+      "args": [],
+      "env": {
+        "OPENAI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
