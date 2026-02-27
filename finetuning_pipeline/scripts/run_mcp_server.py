@@ -199,7 +199,7 @@ class FineTuningMCP:
             description=(
                 "Fine-tune a model using curriculum learning. "
                 "Automatically scores the dataset, splits into difficulty stages "
-                "(easy → hard), and trains stage-by-stage. "
+                "(easy -> hard), and trains stage-by-stage. "
                 "Dataset must have instruction/input/output OR prompt/response columns."
             ),
         )

@@ -21,6 +21,9 @@ class FineTuningService:
         self._training = None
         self._inference = None
         self._curriculum = None
+        self._sequential = None
+        self._resources = None
+        self._adapter = None
         self.discovery = ModelDiscoveryService()
 
     def _ensure_gpu(self):
@@ -47,6 +50,25 @@ class FineTuningService:
             from .curriculum_service import CurriculumService
             self._curriculum = CurriculumService(config=self.config)
         return self._curriculum
+
+    def _ensure_sequential(self):
+        if self._sequential is None:
+            from .sequential_service import SequentialTrainingService
+            self._sequential = SequentialTrainingService(config=self.config)
+        return self._sequential
+
+    def _ensure_resources(self):
+        if self._resources is None:
+            from .resource_service import ResourceService
+            self._resources = ResourceService()
+        return self._resources
+
+    # ---- Resources ----
+    def check_resources(self) -> Dict[str, Any]:
+        return self._ensure_resources().check_resources()
+
+    def preflight_check(self, *a, **kw) -> Dict[str, Any]:
+        return self._ensure_resources().preflight_check(*a, **kw)
 
     # ---- GPU ----
     def clear_gpu_memory(self) -> Dict[str, Any]:
@@ -79,6 +101,9 @@ class FineTuningService:
     async def train_curriculum_model(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_curriculum().train_curriculum_model(*a, **kw)
 
+    async def train_sequential(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_sequential().train_sequential(*a, **kw)
+
     # ---- Inference ----
     async def run_inference(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_inference().run_inference(*a, **kw)
@@ -104,3 +129,16 @@ class FineTuningService:
 
     def get_recommended_models(self, use_case: str = "general") -> Dict[str, Any]:
         return self.discovery.get_recommended_models(use_case)
+
+    # ---- Adapter ----
+    def _ensure_adapter(self):
+        if self._adapter is None:
+            from .adapter_service import AdapterService
+            self._adapter = AdapterService()
+        return self._adapter
+
+    async def merge_adapter(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_adapter().merge_adapter(*a, **kw)
+
+    async def export_gguf(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_adapter().export_gguf(*a, **kw)

@@ -82,6 +82,10 @@ class TrainingService:
             "fp16": bool(kwargs.pop("fp16", cuda_available and not bf16_supported)),
             "report_to": report_to,
             "seed": int(kwargs.pop("seed", 42)),
+            "gradient_checkpointing": bool(
+                kwargs.pop("gradient_checkpointing", False)
+            ),
+            "optim": str(kwargs.pop("optim", "adamw_torch")),
         }
 
     def _build_config(
@@ -180,6 +184,7 @@ class TrainingService:
             torch_dtype=model_dtype,
             quantization_config=quantization_config,
             local_files_only=local_files_only,
+            low_cpu_mem_usage=True,
         )
 
         # Prepare quantized model for stable gradient computation
@@ -343,6 +348,7 @@ class TrainingService:
         completion_only_loss: bool = True,
         early_stopping_patience: Optional[int] = None,
         push_to_hub: Optional[str] = None,
+        extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train a model with (Q)LoRA SFT using TRL's SFTTrainer.
@@ -470,7 +476,9 @@ class TrainingService:
                 trainer_kwargs["peft_config"] = peft_config
             if "dataset_text_field" in trainer_sig:
                 trainer_kwargs["dataset_text_field"] = "text"
-            elif "formatting_func" in trainer_sig:
+            elif "formatting_func" in trainer_sig and not completion_only_loss:
+                # formatting_func is incompatible with completion_only_loss;
+                # dataset already has a "text" column so newer TRL auto-detects it.
                 trainer_kwargs["formatting_func"] = lambda examples: examples["text"]
             if "max_seq_length" in trainer_sig:
                 trainer_kwargs["max_seq_length"] = int(kwargs.pop("max_seq_length", 2048))
@@ -489,6 +497,8 @@ class TrainingService:
                 callbacks.append(
                     EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
                 )
+            if extra_callbacks:
+                callbacks.extend(extra_callbacks)
             if callbacks and "callbacks" in trainer_sig:
                 trainer_kwargs["callbacks"] = callbacks
 
@@ -579,6 +589,7 @@ class TrainingService:
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         save_best_model: bool = True,
         evaluation_dataset: Optional[Any] = None,
+        extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train with DPO (Direct Preference Optimization).
@@ -650,6 +661,8 @@ class TrainingService:
                 trainer_kwargs["tokenizer"] = tokenizer
             elif "processing_class" in trainer_sig:
                 trainer_kwargs["processing_class"] = tokenizer
+            if extra_callbacks and "callbacks" in trainer_sig:
+                trainer_kwargs["callbacks"] = list(extra_callbacks)
 
             trainer = DPOTrainer(**trainer_kwargs)
 
@@ -713,6 +726,7 @@ class TrainingService:
         max_prompt_length: int = 512,
         max_completion_length: int = 256,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
+        extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train with GRPO (Group Relative Policy Optimization).
@@ -807,6 +821,8 @@ class TrainingService:
                 trainer_kwargs["tokenizer"] = tokenizer
             elif "processing_class" in trainer_sig:
                 trainer_kwargs["processing_class"] = tokenizer
+            if extra_callbacks and "callbacks" in trainer_sig:
+                trainer_kwargs["callbacks"] = list(extra_callbacks)
 
             trainer = GRPOTrainer(**trainer_kwargs)
 
@@ -874,6 +890,7 @@ class TrainingService:
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         save_best_model: bool = True,
         evaluation_dataset: Optional[Any] = None,
+        extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train with KTO (Kahneman-Tversky Optimization).
@@ -949,6 +966,8 @@ class TrainingService:
                 trainer_kwargs["tokenizer"] = tokenizer
             elif "processing_class" in trainer_sig:
                 trainer_kwargs["processing_class"] = tokenizer
+            if extra_callbacks and "callbacks" in trainer_sig:
+                trainer_kwargs["callbacks"] = list(extra_callbacks)
 
             trainer = KTOTrainer(**trainer_kwargs)
 

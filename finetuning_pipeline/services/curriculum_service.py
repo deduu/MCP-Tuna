@@ -37,6 +37,7 @@ class CurriculumService:
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
         resume_stage: Optional[int] = None,
+        extra_callbacks: Optional[List] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Train a model using curriculum learning.
@@ -104,6 +105,9 @@ class CurriculumService:
             stage_data = list(self._prepare_training_data(bucket))
             score_range = self._score_range(bucket, score_column)
 
+            # Copy kwargs so pop() calls inside train_model don't
+            # mutate the original dict for subsequent stages.
+            stage_kwargs = dict(kwargs)
             train_result = await training_svc.train_model(
                 dataset=stage_data,
                 output_dir=stage_dir,
@@ -112,7 +116,8 @@ class CurriculumService:
                 use_lora=use_lora,
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
-                **kwargs,
+                extra_callbacks=extra_callbacks,
+                **stage_kwargs,
             )
 
             stage_results.append(
@@ -144,8 +149,13 @@ class CurriculumService:
         total_seconds = round(time.perf_counter() - t_start, 2)
         final_model_path = str(Path(output_dir) / f"stage_{num_stages}")
 
+        # Check if any stage actually succeeded
+        any_success = any(
+            sr.get("training_result", {}).get("success")
+            for sr in stage_results
+        )
         return {
-            "success": True,
+            "success": any_success,
             "final_model_path": final_model_path,
             "base_model": original_base,
             "num_stages": num_stages,
@@ -249,6 +259,7 @@ class CurriculumService:
             original_base,
             torch_dtype=torch.float16,
             device_map="auto",
+            low_cpu_mem_usage=True,
         )
         model = PeftModel.from_pretrained(model, stage_dir)
         model = model.merge_and_unload()
