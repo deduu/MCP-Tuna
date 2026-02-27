@@ -53,6 +53,32 @@ class OrchestrationConfig(PipelineConfig):
     base_model: str = "meta-llama/Llama-3.2-3B-Instruct"
 
 
+class ModelEvaluationConfig(PipelineConfig):
+    metrics: List[str] = ["rouge", "bertscore", "llm_judge"]
+    max_new_tokens: int = 1024
+    temperature: float = 0.1
+    judge_model: str = "gpt-4o"
+    bertscore_model: str = "roberta-large"
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+
+class AdvancedJudgeConfig(PipelineConfig):
+    """Configuration for the advanced LLM-as-a-judge evaluation system."""
+    default_judge_type: str = "pointwise"
+    default_judge_model: str = "gpt-4o"
+    default_aggregation: str = "mean"
+    timeout_s: float = 30.0
+
+
+class FTEvaluatorConfig(PipelineConfig):
+    """Configuration for domain knowledge fine-tune evaluation."""
+    judge_models: List[str] = ["gpt-4o"]
+    temperature: float = 0.0
+    max_tokens: int = 2048
+    system_prompt_path: Optional[str] = None
+
+
 class HostingConfig(BaseModel):
     model_path: str
     adapter_path: Optional[str] = None

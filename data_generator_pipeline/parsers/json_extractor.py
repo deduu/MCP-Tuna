@@ -1,34 +1,18 @@
 # ============================================================================
-# FILE: src/finetuning/parsers/json_extractor.py
+# FILE: data_generator_pipeline/parsers/json_extractor.py
+#
+# Thin wrapper around shared.json_extractor that satisfies the BaseParser ABC.
 # ============================================================================
 
-import json
-import re
 from ..core.base import BaseParser
+from shared.json_extractor import JsonExtractor as _SharedExtractor
 
 
 class JsonExtractor(BaseParser):
-    """Extract JSON from LLM responses."""
+    """Extract JSON from LLM responses (delegates to shared.json_extractor)."""
+
+    def __init__(self):
+        self._inner = _SharedExtractor()
 
     def extract(self, content: str) -> list:
-        # Remove thinking tags if present
-        if "</think>" in content:
-            content = content.split("</think>")[-1]
-
-        # Extract fenced JSON if exists
-        match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
-        if match:
-            content = match.group(1)
-
-        content = content.strip()
-
-        try:
-            parsed = json.loads(content)
-            # Ensure it's always a list
-            if isinstance(parsed, dict):
-                return [parsed]
-            return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Invalid JSON returned:\n{content[:500]}"
-            ) from e
+        return self._inner.extract(content)

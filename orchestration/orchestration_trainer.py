@@ -13,8 +13,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_generator_pipeline.parsers.json_extractor import JsonExtractor
-from data_generator_pipeline.exporters.dataset import DatasetExporter
+from shared.json_extractor import JsonExtractor
+from shared.dataset_exporter import DatasetExporter
 from orchestration.trajectory import Trajectory, TrajectoryRecorder
 from orchestration.rewards import OrchestrationRewardFunction
 

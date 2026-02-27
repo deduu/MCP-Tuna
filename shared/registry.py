@@ -47,3 +47,4 @@ class Registry:
 generator_registry = Registry("generators")
 metric_registry = Registry("metrics")
 exporter_registry = Registry("exporters")
+judge_registry = Registry("judges")
