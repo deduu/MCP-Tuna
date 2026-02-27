@@ -332,6 +332,129 @@ class PipelineOrchestrator:
             "deployment": deploy_result,
         }
 
+    async def compare_flat_vs_curriculum(
+        self,
+        dataset_path: str,
+        output_dir: str = "./output/comparison",
+        base_model: Optional[str] = None,
+        num_epochs_flat: int = 3,
+        num_stages: int = 3,
+        num_epochs_per_stage: int = 1,
+        difficulty_order: str = "easy_first",
+        use_lora: bool = True,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        test_data_path: Optional[str] = None,
+        test_prompts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Run flat SFT and curriculum SFT on the same dataset, then compare.
+
+        Steps:
+        1. Load the dataset once
+        2. Train flat SFT (single stage, all data)
+        3. Train curriculum SFT (staged easy→hard)
+        4. Compare both models vs base (if test prompts provided)
+        5. Return structured side-by-side results
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        resolved_base = base_model or "meta-llama/Llama-3.2-3B-Instruct"
+
+        # 1. Load dataset
+        load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+        if not load_result.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to load dataset: {load_result.get('error')}",
+            }
+
+        dataset = load_result["dataset_object"]
+
+        # 2. Flat SFT
+        flat_dir = str(output_path / "flat_sft")
+        flat_result = await self.finetuner.train_model(
+            dataset=dataset,
+            output_dir=flat_dir,
+            base_model=base_model,
+            num_epochs=num_epochs_flat,
+            use_lora=use_lora,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+        )
+
+        # 3. Curriculum SFT
+        curriculum_dir = str(output_path / "curriculum_sft")
+        curriculum_result = await self.finetuner.train_curriculum_model(
+            dataset=dataset,
+            output_dir=curriculum_dir,
+            base_model=base_model,
+            num_stages=num_stages,
+            num_epochs_per_stage=num_epochs_per_stage,
+            difficulty_order=difficulty_order,
+            use_lora=use_lora,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+        )
+
+        # 4. Side-by-side comparison (qualitative)
+        flat_model = flat_result.get("model_path") if flat_result.get("success") else None
+        curriculum_model = (
+            curriculum_result.get("final_model_path")
+            if curriculum_result.get("success")
+            else None
+        )
+
+        comparison_result = None
+        comparison_prompts = list(test_prompts) if test_prompts else []
+
+        # Extract prompts from test data if provided
+        if not comparison_prompts and test_data_path:
+            test_load = await self.finetuner.load_dataset_from_file(
+                test_data_path, "jsonl"
+            )
+            if test_load.get("success"):
+                test_ds = test_load["dataset_object"]
+                for i in range(min(5, len(test_ds))):
+                    row = test_ds[i] if hasattr(test_ds, "__getitem__") else {}
+                    prompt = row.get("prompt", row.get("instruction", ""))
+                    if prompt:
+                        comparison_prompts.append(prompt)
+
+        if comparison_prompts and flat_model and curriculum_model:
+            flat_vs_base = await self.finetuner.compare_models(
+                prompts=comparison_prompts,
+                base_model_path=resolved_base,
+                finetuned_adapter_path=flat_model,
+            )
+            curriculum_vs_base = await self.finetuner.compare_models(
+                prompts=comparison_prompts,
+                base_model_path=resolved_base,
+                finetuned_adapter_path=curriculum_model,
+            )
+            comparison_result = {
+                "flat_vs_base": flat_vs_base,
+                "curriculum_vs_base": curriculum_vs_base,
+            }
+
+        return {
+            "success": True,
+            "dataset_path": dataset_path,
+            "base_model": resolved_base,
+            "flat_sft": {
+                "training": flat_result,
+                "model_path": flat_model,
+                "total_epochs": num_epochs_flat,
+            },
+            "curriculum_sft": {
+                "training": curriculum_result,
+                "model_path": curriculum_model,
+                "num_stages": num_stages,
+                "epochs_per_stage": num_epochs_per_stage,
+                "difficulty_order": difficulty_order,
+            },
+            "comparison": comparison_result,
+        }
+
     async def train_orchestrator(
         self,
         domain_description: str,

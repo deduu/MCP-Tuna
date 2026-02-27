@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from shared.config import HostingConfig
 
@@ -146,3 +146,36 @@ class HostingService:
             server.should_exit = True
 
         return {"success": True, "deployment_id": deployment_id, "status": "stopped"}
+
+    async def health_check(self, deployment_id: str) -> Dict[str, Any]:
+        """Check health of a running deployment."""
+        if deployment_id not in self._deployments:
+            return {"success": False, "error": f"Deployment {deployment_id} not found"}
+
+        dep = self._deployments[deployment_id]
+        task = dep.get("task")
+        is_alive = task is not None and not task.done()
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "deployment_id": deployment_id,
+            "status": "running" if is_alive else "stopped",
+            "model_path": dep.get("model_path"),
+            "endpoint": (
+                f"http://{dep['host']}:{dep['port']}"
+                if dep.get("transport") == "http" or dep.get("server")
+                else "stdio"
+            ),
+        }
+
+        # For API deployments, try hitting the /health endpoint
+        if is_alive and dep.get("server"):
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=5) as client:
+                    resp = await client.get(f"http://{dep['host']}:{dep['port']}/health")
+                    result["health_response"] = resp.json()
+            except Exception:
+                result["health_response"] = None
+
+        return result
