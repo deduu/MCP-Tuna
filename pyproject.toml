@@ -3,63 +3,84 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agenty"
-version = "0.1.0"
+name = "transcendence"
+version = "0.2.0"
 description = "End-to-end LLM fine-tuning platform with MCP tool support"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 keywords = ["llm", "fine-tuning", "mcp", "sft", "dpo", "grpo", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 dependencies = [
-    # agentsoul core (bundled in src/agentsoul/)
-    "openai>=1.0",
-    "accelerate>=1.0.0",
-    "bitsandbytes>=0.44.0",
-    "httpx>=0.25",
-    "mcp>=1.0",
+    # Core — required by all servers (no GPU)
     "pydantic>=2.0",
     "python-dotenv>=1.0",
-    "transformers",
-    "datasets",
-    "tqdm",
+    "httpx>=0.25",
+    "mcp>=1.0",
     "pyyaml",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+# -- Per-server dependency groups --
+data = [
+    "openai>=1.0",
+]
+eval = [
+    "openai>=1.0",
+    "scikit-learn",
+]
+model-eval = [
+    "openai>=1.0",
+    "rouge-score>=0.1",
+    "evaluate>=0.4",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "absl-py>=2.0",
+]
+model-eval-full = [
+    "transcendence[model-eval]",
+    "bert-score>=0.3",
+]
+training = [
+    "torch>=2.3.0",
+    "transformers",
+    "accelerate>=1.0.0",
+    "bitsandbytes>=0.44.0",
     "peft>=0.13",
     "trl>=0.12",
+    "datasets",
     "sentence-transformers",
     "scikit-learn",
     "scipy",
     "hf-xet>=1.2.0",
+]
+hosting = [
     "torch>=2.3.0",
-    # agentsoul server
+    "transformers",
+    "accelerate>=1.0.0",
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "sse-starlette>=1.0",
 ]
-
-[project.optional-dependencies]
+orchestration = [
+    "openai>=1.0",
+]
+export = [
+    "llama-cpp-python>=0.2",
+]
+# -- Infrastructure groups --
 backend = [
     "sqlalchemy>=2.0",
     "asyncpg>=0.29",
-]
-training = [
-    "torch>=2.2",
-    "transformers>=4.40",
-    "peft>=0.13",
-    "trl>=0.12",
-    "datasets>=3.0",
-    "accelerate>=0.27",
-]
-local = [
-    "torch>=2.2",
-    "transformers>=4.40",
-    "accelerate>=0.27",
-    "bitsandbytes>=0.43",
-]
-eval = [
-    "cohere>=5.0",
-    "openpyxl>=3.1",
-    "pandas>=2.0",
 ]
 memory = [
     "chromadb>=0.4",
@@ -74,14 +95,46 @@ tracing = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "ruff",
 ]
-all = ["agenty[backend,training,local,eval,memory,retrieval,tracing,dev]"]
+# -- Composite groups --
+all-servers = [
+    "transcendence[data,eval,model-eval-full,training,hosting,orchestration]",
+]
+all = [
+    "transcendence[all-servers,backend,memory,retrieval,tracing,dev,export]",
+]
+
+[project.scripts]
+transcendence-gateway = "scripts.run_gateway:main"
+transcendence-data = "scripts.run_data_server:main"
+transcendence-eval = "scripts.run_eval_server:main"
+transcendence-model-eval = "scripts.run_model_eval_server:main"
+transcendence-train = "scripts.run_train_server:main"
+transcendence-host = "scripts.run_host_server:main"
+transcendence-orchestrate = "scripts.run_orchestrate_server:main"
 
 [project.urls]
 Repository = "https://github.com/deduu/AgentY"
+Issues = "https://github.com/deduu/AgentY/issues"
+Changelog = "https://github.com/deduu/AgentY/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentsoul"]
+packages = [
+    "src/agentsoul",
+    "scripts",
+    "servers",
+    "shared",
+    "data_generator_pipeline",
+    "data_cleaning_pipeline",
+    "data_normalization_pipeline",
+    "data_evaluator_pipeline",
+    "model_evaluator_pipeline",
+    "finetuning_pipeline",
+    "hosting_pipeline",
+    "orchestration",
+]
+force-include = { "mcp_gateway.py" = "mcp_gateway.py" }
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }

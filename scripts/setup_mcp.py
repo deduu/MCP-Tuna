@@ -68,7 +68,7 @@ def build_http_entry(port: int = 8002) -> dict:
     }
 
 
-SERVER_NAME = "agenty-gateway"
+SERVER_NAME = "transcendence-gateway"
 
 
 # ---------------------------------------------------------------------------

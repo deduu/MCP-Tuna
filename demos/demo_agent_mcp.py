@@ -145,7 +145,7 @@ async def main():
     # Build MCP tool configs
     mcp_tools = [{
         "type": "mcp",
-        "server_label": "agenty-gateway",
+        "server_label": "transcendence-gateway",
         "server_url": gateway_url,
         "server_description": "AgentY data pipeline tools",
     }]

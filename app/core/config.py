@@ -89,7 +89,7 @@ class MCPSettings:
     """MCP server connections available to agents."""
     servers: List[MCPServerConfig] = field(default_factory=lambda: [
         MCPServerConfig(
-            server_label="agenty-gateway",
+            server_label="transcendence-gateway",
             server_url=os.getenv("AGENTY_GATEWAY_URL", "http://localhost:8002/mcp"),
             server_description="AgentY pipeline tools (generate, clean, evaluate, finetune, host)",
         ),
