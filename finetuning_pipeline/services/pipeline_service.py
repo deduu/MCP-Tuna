@@ -15,7 +15,7 @@ from .model_discovery_service import ModelDiscoveryService
 class FineTuningService:
     """Facade that composes GPU, training, inference, and discovery sub-services."""
 
-    def __init__(self, default_base_model: str = "meta-llama/Llama-3.2-3B-Instruct"):
+    def __init__(self, default_base_model: str = "Qwen/Qwen3-1.7B"):
         self.config = FinetuningConfig(base_model=default_base_model)
         self._gpu = None
         self._training = None

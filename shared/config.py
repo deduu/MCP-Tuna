@@ -35,7 +35,7 @@ class NormalizationConfig(BaseModel):
 
 
 class FinetuningConfig(PipelineConfig):
-    base_model: str = "meta-llama/Llama-3.2-3B-Instruct"
+    base_model: str = "Qwen/Qwen3-1.7B"
     num_epochs: int = 3
     use_lora: bool = True
     lora_r: int = 8
@@ -50,7 +50,7 @@ class OrchestrationConfig(PipelineConfig):
     latency_budget: float = 60.0       # seconds per task
     reward_weights: Dict[str, float] = {"accuracy": 0.5, "cost": 0.25, "latency": 0.25}
     output_format: str = "sft"         # sft | dpo | grpo
-    base_model: str = "meta-llama/Llama-3.2-3B-Instruct"
+    base_model: str = "Qwen/Qwen3-1.7B"
 
 
 class ModelEvaluationConfig(PipelineConfig):
@@ -85,3 +85,13 @@ class HostingConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8001
     transport: str = "http"  # http | stdio
+
+
+class ChatConfig(BaseModel):
+    endpoint: Optional[str] = None
+    model_path: Optional[str] = None
+    adapter_path: Optional[str] = None
+    max_new_tokens: int = 512
+    temperature: float = 0.7
+    system_prompt: Optional[str] = None
+    streaming: bool = True

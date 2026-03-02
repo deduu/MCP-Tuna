@@ -30,7 +30,7 @@ finetuning_pipeline/
 ## Config (`shared/config.py` → `FinetuningConfig`)
 ```python
 FinetuningConfig(
-    base_model="meta-llama/Llama-3.2-3B-Instruct",
+    base_model="Qwen/Qwen3-1.7B",
     num_epochs=3,
     use_lora=True,
     lora_r=8,

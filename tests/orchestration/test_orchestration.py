@@ -409,7 +409,7 @@ class TestOrchestrationConfig:
         assert cfg.latency_budget == 60.0
         assert cfg.reward_weights == {"accuracy": 0.5, "cost": 0.25, "latency": 0.25}
         assert cfg.output_format == "sft"
-        assert cfg.base_model == "meta-llama/Llama-3.2-3B-Instruct"
+        assert cfg.base_model == "Qwen/Qwen3-1.7B"
 
     def test_inherits_pipeline_config(self):
         cfg = OrchestrationConfig(model="gpt-4o-mini", debug=True)
