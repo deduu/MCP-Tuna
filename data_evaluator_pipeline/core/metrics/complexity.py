@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 
 import spacy
 from transformers import AutoTokenizer

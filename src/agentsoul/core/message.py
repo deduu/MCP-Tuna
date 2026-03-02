@@ -1,8 +1,8 @@
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 
 from agentsoul.providers.base import BaseLLM
-from agentsoul.core.models import ToolCall, MessageRole, Message, LLMResponse
+from agentsoul.core.models import ToolCall, MessageRole, Message
 
 
 class MessageFormatter:

@@ -1,5 +1,4 @@
 import logging
-import asyncio
 import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +10,6 @@ from app.api.api_deck import router as deck_router
 from agentsoul.utils.logger import configure_logging
 from shared.diagnostics import init_diagnostics, session_id_var
 
-from app.core.config import settings
 import os
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 

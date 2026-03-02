@@ -7,9 +7,7 @@ Exposes the fine-tuning pipeline as MCP tools for AI agents.
 
 from ..services.pipeline_service import PipelineService
 from agentsoul.server import MCPServer, StdioTransport, HTTPTransport
-import asyncio
-from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 import json
 import sys
 import os
@@ -199,6 +197,6 @@ if __name__ == "__main__":
         transport = StdioTransport()
 
     # Start the server
-    print(f"Starting Fine-tuning Pipeline MCP Server...", file=sys.stderr)
-    print(f"Available techniques will be listed on first connection", file=sys.stderr)
+    print("Starting Fine-tuning Pipeline MCP Server...", file=sys.stderr)
+    print("Available techniques will be listed on first connection", file=sys.stderr)
     server.run(transport)

@@ -145,6 +145,14 @@ name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
+[tool.ruff.lint.per-file-ignores]
+"*/__init__.py" = ["F401"]          # re-exports are intentional
+"app/generation/registry.py" = ["E402"]  # dotenv must load before imports
+"data_generator_pipeline/test/*" = ["E402", "F821"]  # legacy test scripts
+"data_generator_pipeline/test/test_old_pipeline.py" = ["E402"]
+"scripts/e2e_*.py" = ["E402"]       # dotenv before imports
+"scripts/finetune_*.py" = ["E402"]  # dotenv before imports
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

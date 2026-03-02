@@ -1,9 +1,8 @@
 """File management service — read, write, list, upload files within configured boundaries."""
 
 import base64
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 class FileService:

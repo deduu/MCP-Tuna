@@ -2,11 +2,9 @@ import asyncio
 import inspect
 import json
 import logging
-from typing import Dict, List, Tuple, Any
-from agentsoul.core.models import ToolCall, MessageRole, Message, LLMResponse
+from typing import Dict, List
 from agentsoul.utils.schema import generate_tool_schema
 from .base import BaseToolService
-import re
 
 logger = logging.getLogger(__name__)
 

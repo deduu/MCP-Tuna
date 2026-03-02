@@ -1,5 +1,4 @@
-from typing import List, Dict, Any, Optional, AsyncGenerator
-import json
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from ....utils.exception import AgentExecutionError
 from ....utils.timing import TimingContext
@@ -78,7 +77,7 @@ class AgentExecutor:
             raise AgentExecutionError("Agent did not return a complete event")
 
         logger.info(f"Agent result received: {result}")
-        content = result.get("content", "[no content returned]")
+        _content = result.get("content", "[no content returned]")
 
         logger.info(
             f"Completed non-streaming chat | "

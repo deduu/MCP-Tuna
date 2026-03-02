@@ -1,7 +1,6 @@
 """MCP server for file management tools."""
 
 import json
-from typing import Optional
 
 from agentsoul.server import MCPServer
 from .service import FileService

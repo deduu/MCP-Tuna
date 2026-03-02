@@ -1,9 +1,8 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List
+from typing import List
 from urllib.parse import quote_plus
-from sqlalchemy.engine import URL
 from dotenv import load_dotenv
 
 # --------------------------------------------------

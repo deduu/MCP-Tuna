@@ -15,8 +15,6 @@ class DataNormalizationService:
     ) -> Dict[str, Any]:
         """Apply all normalization steps in sequence."""
         config = config or NormalizationConfig()
-        original_count = len(data_points)
-
         if config.strip_whitespace:
             result = await self.strip_and_clean_text(data_points)
             data_points = result["data_points"]

@@ -1,9 +1,6 @@
 # agentsoul/tools/service.py
-import inspect
-import json
-from typing import Dict, List, Tuple, Any, Callable, Optional
+from typing import Dict, List, Tuple, Any
 from abc import ABC, abstractmethod
-from agentsoul.core.models import Message
 
 
 class BaseToolService(ABC):

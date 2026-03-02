@@ -1,8 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, status, Request
 from fastapi.security import APIKeyHeader
-from fastapi.security.api_key import APIKey
 from ..utils.api.chat_api_orchestrator import ChatAPIOrchestrator
 import openai
 import os

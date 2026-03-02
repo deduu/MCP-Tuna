@@ -161,7 +161,6 @@ class TestEvaluateMultiJudge:
         svc = FTEvaluatorService(FTEvaluatorConfig(judge_models=["gpt-4o", "deepseek"]))
 
         pass_resp = _make_chat_response(PASS_RESPONSE)
-        fail_resp = _make_chat_response(FAIL_RESPONSE)
 
         with patch("model_evaluator_pipeline.services.ft_evaluator_service.AsyncOpenAI") as MockClient:
             client = AsyncMock()

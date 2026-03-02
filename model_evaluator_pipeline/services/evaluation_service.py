@@ -11,7 +11,7 @@ from shared.providers import BaseLLM
 
 from ..metrics.rouge import compute_rouge
 from ..metrics.bertscore import compute_bertscore
-from ..metrics.llm_judge import llm_judge, JUDGE_CRITERIA
+from ..metrics.llm_judge import llm_judge
 from ..metrics.perplexity import compute_perplexity
 
 

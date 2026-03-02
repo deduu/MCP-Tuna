@@ -169,7 +169,7 @@ class HuggingFaceProvider(BaseLLM):
         """
         torch = _import_torch()
         transformers = _import_transformers()
-        from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+        from transformers import AutoTokenizer, AutoModelForCausalLM
 
         super().__init__(model_id=model_path)
 

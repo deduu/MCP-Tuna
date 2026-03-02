@@ -1,6 +1,5 @@
 # Re-export unified models from shared layer + generator-specific extensions
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 from shared.models import (
     BaseDataPoint as _SharedBase,

@@ -59,9 +59,8 @@ class ModelDiscoveryService:
     async def get_huggingface_model_info(self, model_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific HuggingFace model."""
         try:
-            from huggingface_hub import HfApi, model_info
+            from huggingface_hub import model_info
 
-            api = HfApi()
             info = model_info(model_id)
 
             result = {

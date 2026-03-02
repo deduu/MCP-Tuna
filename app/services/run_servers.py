@@ -13,7 +13,6 @@ Usage:
 """
 
 import sys
-import os
 
 from agentsoul.server import HTTPTransport
 
@@ -54,7 +53,7 @@ def main():
         start_server(name, port)
     else:
         print("Usage: python -m app.services.run_servers <server_name> [port]")
-        print(f"\nAvailable servers:")
+        print("\nAvailable servers:")
         for name, (_, _, port) in SERVERS.items():
             print(f"  {name:12s}  (default port: {port})")
 

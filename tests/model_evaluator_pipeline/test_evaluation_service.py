@@ -176,7 +176,7 @@ class TestBertScoreMetric:
                 torch.tensor([0.82]),
             )
 
-            result = await compute_bertscore(
+            await compute_bertscore(
                 generated="test",
                 reference="test",
                 model_type="distilbert-base-uncased",

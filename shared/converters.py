@@ -1,7 +1,6 @@
 """Cross-pipeline data converters for bridging generator → evaluator → finetuning."""
 
 import json
-from dataclasses import asdict
 from typing import Any, Dict, List
 
 from .models import BaseDataPoint

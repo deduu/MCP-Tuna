@@ -1,6 +1,5 @@
 import pandas as pd
 import json
-import os
 from pathlib import Path
 
 data_path = Path.cwd() / "data" / "sft"

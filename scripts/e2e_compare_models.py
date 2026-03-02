@@ -190,7 +190,7 @@ async def main():
 
     wall_total = time.time() - wall_start
     print(f"\n  Total wall time: {fmt_time(wall_total)}")
-    print(f"\n  Results saved to:")
+    print("\n  Results saved to:")
     print(f"    {jsonl_path}")
     print(f"    {json_path}")
     print("=" * 70)

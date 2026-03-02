@@ -5,12 +5,10 @@ are included in the trainer's callbacks list.
 """
 from __future__ import annotations
 
-import inspect
-import os
 import tempfile
 import types
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -104,7 +102,7 @@ class TestSFTExtraCallbacks:
             fake_trl.SFTConfig = type("SFTConfig", (), {"__init__": lambda self, **kw: None})
             with patch.dict("sys.modules", {"trl": fake_trl}):
                 # Need to re-import SFTTrainer/SFTConfig as they're imported inside the method
-                result = await svc.train_model(
+                await svc.train_model(
                     dataset=_make_mock_dataset(_sample_sft_data()),
                     output_dir=tempfile.mkdtemp(),
                     extra_callbacks=[fake_cb],
@@ -148,7 +146,7 @@ class TestSFTExtraCallbacks:
                     # No extra_callbacks
                 )
 
-        # Should still succeed
+        # Should still succeed — no crash, and no extra callbacks injected
         assert result.get("success") is True or "callbacks" not in captured_kwargs or captured_kwargs.get("callbacks") == []
 
 
@@ -186,7 +184,7 @@ class TestDPOExtraCallbacks:
             fake_trl.DPOTrainer = capture_dpo_trainer
             fake_trl.DPOConfig = type("DPOConfig", (), {"__init__": lambda self, **kw: None})
             with patch.dict("sys.modules", {"trl": fake_trl}):
-                result = await svc.train_dpo_model(
+                await svc.train_dpo_model(
                     dataset=_make_mock_dataset(_sample_dpo_data(), ["prompt", "chosen", "rejected"]),
                     output_dir=tempfile.mkdtemp(),
                     extra_callbacks=[fake_cb],
@@ -230,7 +228,7 @@ class TestKTOExtraCallbacks:
             fake_trl.KTOTrainer = capture_kto_trainer
             fake_trl.KTOConfig = type("KTOConfig", (), {"__init__": lambda self, **kw: None})
             with patch.dict("sys.modules", {"trl": fake_trl}):
-                result = await svc.train_kto_model(
+                await svc.train_kto_model(
                     dataset=_make_mock_dataset(_sample_kto_data(), ["prompt", "completion", "label"]),
                     output_dir=tempfile.mkdtemp(),
                     extra_callbacks=[fake_cb],

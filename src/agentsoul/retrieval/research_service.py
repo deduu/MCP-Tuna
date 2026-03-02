@@ -14,7 +14,6 @@ agentic loop.
 """
 
 import asyncio
-import json
 import logging
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 

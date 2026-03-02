@@ -171,7 +171,7 @@ async def main():
         print("\nSome servers are not reachable. Start them first:")
         print(f"  python -m AgentY.scripts.run_gateway http {port}")
         if include_web:
-            print(f"  python -m app.services.run_servers web")
+            print("  python -m app.services.run_servers web")
         print()
         return
 

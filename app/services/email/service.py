@@ -3,7 +3,7 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class EmailService:

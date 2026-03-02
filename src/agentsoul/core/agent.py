@@ -2,11 +2,10 @@ import asyncio
 import json
 import time
 import re
-import os
 from typing import List, Dict, Any, Optional, AsyncGenerator, Union
 from agentsoul.providers.base import BaseLLM
 from agentsoul.tools.service import ToolService
-from agentsoul.core.models import ToolCall, MessageRole, Message, LLMResponse, ReflectionMode, ReflectionPolicy
+from agentsoul.core.models import ToolCall, MessageRole, Message, ReflectionMode, ReflectionPolicy
 from agentsoul.core.message import MessageFormatter
 from agentsoul.core.tool_strategy import ToolCallingStrategy
 from agentsoul.core.strategies.json_schema import JsonSchemaStrategy
@@ -1341,7 +1340,7 @@ class AgentSoul:
                 max_char_length = int(max_token_length * avg_token_length)
                 result_str = result_str[:max_char_length]
                 self.logger.debug("Truncated tool result length: %d characters.", len(result_str))
-        except Exception as e:
+        except Exception:
             return result_str
         return result_str
 

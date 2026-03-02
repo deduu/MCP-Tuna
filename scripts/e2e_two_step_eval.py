@@ -86,7 +86,7 @@ async def main():
 
     print(f"\n  Loaded {len(comparison_data)} comparison results from:")
     print(f"    {COMPARISON_JSONL}")
-    print(f"\n  Cleaned instructions (# Note: stripped):")
+    print("\n  Cleaned instructions (# Note: stripped):")
     for i, instr in enumerate(cleaned_instructions):
         print(f"    {i + 1}. {instr[:80]}...")
 
@@ -152,8 +152,8 @@ async def main():
         })
 
     print(f"  Samples:    {len(step1_data)}")
-    print(f"  Metrics:    rouge, bertscore, llm_judge")
-    print(f"  Note:       Using freshly generated outputs (cleaned instructions)")
+    print("  Metrics:    rouge, bertscore, llm_judge")
+    print("  Note:       Using freshly generated outputs (cleaned instructions)")
     print()
 
     t0 = time.time()
@@ -209,7 +209,7 @@ async def main():
     judge_models = ["gpt-4o"]
     print(f"  Samples:       {len(step2_data)}")
     print(f"  Judge models:  {judge_models}")
-    print(f"  Failure taxonomy: K-Gap, K-Hallucination, K-Outdated, K-Leakage, K-Instruction")
+    print("  Failure taxonomy: K-Gap, K-Hallucination, K-Outdated, K-Leakage, K-Instruction")
     print()
 
     t0 = time.time()
@@ -254,25 +254,25 @@ async def main():
 
     ft_dist = summary.get("failure_type_distribution", {})
     if ft_dist:
-        print(f"\n  Failure types:")
+        print("\n  Failure types:")
         for ft, count in ft_dist.items():
             print(f"    {ft}: {count}")
 
     sev_dist = summary.get("severity_distribution", {})
     if sev_dist:
-        print(f"\n  Severity:")
+        print("\n  Severity:")
         for sev, count in sev_dist.items():
             print(f"    {sev}: {count}")
 
     action_dist = summary.get("action_distribution", {})
     if action_dist:
-        print(f"\n  Suggested actions:")
+        print("\n  Suggested actions:")
         for act, count in action_dist.items():
             print(f"    {act}: {count}")
 
     judge_rates = summary.get("per_judge_pass_rate", {})
     if judge_rates:
-        print(f"\n  Per-judge pass rate:")
+        print("\n  Per-judge pass rate:")
         for model, rate in judge_rates.items():
             print(f"    {model}: {rate * 100:.1f}%")
 

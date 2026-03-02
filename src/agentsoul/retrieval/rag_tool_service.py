@@ -8,7 +8,7 @@ Requires: pip install agentsoul[retrieval]
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from agentsoul.tools.service import ToolService
 

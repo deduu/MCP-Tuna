@@ -8,7 +8,6 @@ import pytest
 
 from model_evaluator_pipeline.judges.models import (
     JudgeCriterion,
-    JudgeType,
     PairwiseResult,
 )
 from model_evaluator_pipeline.judges.pairwise import PairwiseJudge

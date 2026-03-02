@@ -4,9 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

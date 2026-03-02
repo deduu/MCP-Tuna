@@ -6,8 +6,3 @@ class ModelRoutingError(Exception):
 class AgentExecutionError(Exception):
     """Error during agent execution."""
     pass
-
-
-class ModelRoutingError(Exception):
-    """Custom exception for model routing errors."""
-    pass

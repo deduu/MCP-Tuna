@@ -10,7 +10,7 @@ import json
 import asyncio
 import logging
 import uuid
-from typing import Any, Callable, Optional, Union, get_type_hints, Dict
+from typing import Any, Callable, Optional, Dict
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from mcp.server import Server
@@ -103,7 +103,7 @@ class HTTPTransport(Transport):
         """Start the HTTP transport with dual protocol support."""
         try:
             from fastapi import FastAPI, Request, Response, Header
-            from fastapi.responses import StreamingResponse
+            from fastapi.responses import StreamingResponse  # noqa: F401
             from sse_starlette.sse import EventSourceResponse
             import uvicorn
         except ImportError:
@@ -355,7 +355,7 @@ class HTTPTransport(Transport):
 
             try:
                 if method == "initialize":
-                    client_caps = params.get("capabilities", {})
+                    _client_caps = params.get("capabilities", {})
                     client_protocol = params.get(
                         "protocolVersion", "2025-06-18")
 
@@ -379,7 +379,7 @@ class HTTPTransport(Transport):
                         }
                     }
 
-                    log("MCP-HANDLE", f"[OK] Initialize successful!")
+                    log("MCP-HANDLE", "[OK] Initialize successful!")
                     log("MCP-HANDLE",
                         f"   Protocol: {result['protocolVersion']}")
                     log("MCP-HANDLE",
@@ -671,7 +671,6 @@ class MCPServer:
 
     def run(self, transport: Transport = None):
         """Start the MCP server with specified transport."""
-        import sys
 
         if transport is None:
             transport = StdioTransport()

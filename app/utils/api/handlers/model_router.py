@@ -2,7 +2,6 @@ import logging
 from typing import Dict, Any
 
 from ..utils.exception import ModelRoutingError
-from ..utils.timing import TimingContext
 from app.generation.qwen3_registry import route_qwen3
 
 logger = logging.getLogger("api.chat")

@@ -1,7 +1,7 @@
 """MCP server for data normalization tools."""
 
 import json
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from agentsoul.server import MCPServer
 from ..services.normalization_service import DataNormalizationService

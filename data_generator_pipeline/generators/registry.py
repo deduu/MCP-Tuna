@@ -5,7 +5,6 @@ from ..models.datapoints import (
     SFTDataPoint,
     DPODataPoint,
     GRPODataPoint,
-    KTODataPoint,
 )
 from .sft import SFTGenerator
 from .dpo import DPOGenerator

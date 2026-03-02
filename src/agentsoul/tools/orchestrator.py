@@ -6,17 +6,15 @@ import inspect
 import itertools
 import json
 import shlex
-from dataclasses import dataclass, field
 from enum import Enum
 
 from agentsoul.tools.service import ToolService
 from agentsoul.tools.base import BaseToolService
-from agentsoul.core.models import MessageRole, Message
 from agentsoul.utils.logger import get_logger
 
 # Only import for type checking, not at runtime
 if TYPE_CHECKING:
-    from agentsoul.core.agent import AgentSoul
+    pass
 
 # ═══════════════════════════════════════════════════════════
 # A2A Communication Module

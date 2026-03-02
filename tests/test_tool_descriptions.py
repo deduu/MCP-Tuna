@@ -15,7 +15,6 @@ TRAINING_TOOLS = [
     "finetune.train_dpo",
     "finetune.train_grpo",
     "finetune.train_kto",
-    "finetune.train_curriculum",
 ]
 
 HOSTING_TOOLS = [

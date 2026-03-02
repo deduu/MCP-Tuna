@@ -6,7 +6,7 @@ from typing import List, Dict, Type
 from dataclasses import asdict
 import tqdm
 from .base import BaseGenerator
-from ..models.datapoints import BaseDataPoint, SFTDataPoint
+from ..models.datapoints import BaseDataPoint
 
 
 class FineTuningPipeline:

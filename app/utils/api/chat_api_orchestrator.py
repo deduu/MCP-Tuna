@@ -10,8 +10,7 @@ from .handlers.request_parser import RequestParser
 from .handlers.model_router import ModelRouteDecider, ModelRoutingError, ModelSelector
 from .handlers.tool_selector import ToolSelector
 from .handlers.agent_executor import AgentExecutor, StreamHandler
-from .handlers.model_router import ModelRouteDecider
-from .models.request import ChatRequest, AgentContext
+from .models.request import AgentContext
 from .responses.builder import ResponseBuilder
 from .utils.timing import TimingContext
 from .utils.exception import AgentExecutionError

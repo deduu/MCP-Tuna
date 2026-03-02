@@ -1,7 +1,6 @@
 """Database service — safe read/write operations against the configured PostgreSQL database."""
 
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker

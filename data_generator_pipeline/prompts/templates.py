@@ -3,7 +3,6 @@
 # FILE: src/finetuning/prompts/templates.py
 # ============================================================================
 
-import os
 from pathlib import Path
 
 

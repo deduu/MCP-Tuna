@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from model_evaluator_pipeline.judges.models import (
-    CriterionScore,
     JudgeCriterion,
     JudgeRubric,
     JudgeType,

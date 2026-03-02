@@ -16,13 +16,12 @@ import os
 import tempfile
 import types
 from contextlib import contextmanager
-from typing import Any, Dict, List
+from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from finetuning_pipeline.services.training_service import TrainingService
-from shared.config import FinetuningConfig
 
 
 # ──────────────────────────────────────────────

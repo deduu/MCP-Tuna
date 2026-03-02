@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from model_evaluator_pipeline.judges.models import JudgeType
 from model_evaluator_pipeline.services.judge_service import AdvancedJudgeService
 from shared.config import AdvancedJudgeConfig
 
