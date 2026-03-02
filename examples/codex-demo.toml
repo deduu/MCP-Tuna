@@ -1,0 +1,17 @@
+# Codex CLI — Demo config (data + train servers only)
+# Place at ~/.codex/config.toml or .codex/config.toml (project scope)
+#
+# Minimal setup for demo: generate data from docs + fine-tune.
+# Uses split servers to keep tool count low (~30 tools total).
+
+[mcp_servers.transcendence-data]
+command = "transcendence-data"
+
+[mcp_servers.transcendence-data.env]
+OPENAI_API_KEY = "sk-..."
+
+[mcp_servers.transcendence-train]
+command = "transcendence-train"
+
+[mcp_servers.transcendence-train.env]
+HF_TOKEN = "hf_..."

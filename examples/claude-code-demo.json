@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "transcendence-data": {
+      "command": "transcendence-data",
+      "args": [],
+      "env": {
+        "OPENAI_API_KEY": "sk-..."
+      }
+    },
+    "transcendence-train": {
+      "command": "transcendence-train",
+      "args": [],
+      "env": {
+        "HF_TOKEN": "hf_..."
+      }
+    }
+  }
+}
