@@ -113,6 +113,7 @@ transcendence-model-eval = "scripts.run_model_eval_server:main"
 transcendence-train = "scripts.run_train_server:main"
 transcendence-host = "scripts.run_host_server:main"
 transcendence-orchestrate = "scripts.run_orchestrate_server:main"
+transcendence-chat = "scripts.chat_cli:main"
 
 [project.urls]
 Repository = "https://github.com/deduu/AgentY"
