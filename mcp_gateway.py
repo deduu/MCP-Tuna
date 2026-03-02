@@ -21,6 +21,7 @@ from agentsoul.server import MCPServer
 from dotenv import load_dotenv
 from shared.config import (
     AdvancedJudgeConfig,
+    ChatConfig,
     FTEvaluatorConfig,
     GeneratorConfig,
     CleaningConfig,
@@ -54,6 +55,7 @@ class AgentYGateway:
         self._ft_evaluator_svc = None
         self._job_manager_instance = None
         self._dataset_svc = None
+        self._chat_sessions: Dict[str, Any] = {}
 
         self._config = config
         self._register_all_tools()
@@ -263,7 +265,13 @@ class AgentYGateway:
             adapter_path=model_path,
             port=deploy_port,
         )
-        return await self.hoster.deploy_as_mcp(config)
+        result = await self.hoster.deploy_as_mcp(config)
+        if result.get("success"):
+            endpoint = result.get("endpoint", "")
+            result["chat_command"] = (
+                f"python scripts/chat_cli.py --endpoint {endpoint}"
+            )
+        return result
 
     # ------------------------------------------------------------------ #
     # Tool registration
@@ -726,7 +734,9 @@ class AgentYGateway:
                 "Fine-tune a model using a dataset file (SFT with QLoRA). "
                 "Returns model_path usable as base_model in finetune.train_dpo, "
                 "finetune.train_grpo, finetune.train_kto, or finetune.train_curriculum. "
-                "Use host.deploy_mcp with the returned model_path to serve the model."
+                "Set deploy=True to auto-deploy after training. "
+                "After deployment, use host.chat to let the user chat with the model, "
+                "or share the chat_command from the deployment result for CLI access."
             ),
         )
         async def train(
@@ -794,7 +804,7 @@ class AgentYGateway:
                 "Fine-tune a model with DPO (Direct Preference Optimization) -- "
                 "dataset needs prompt/chosen/rejected columns. "
                 "Accepts base_model from a previous finetune.train result (model_path). "
-                "Returns model_path for chaining with further training or host.deploy_mcp."
+                "Set deploy=True to auto-deploy; then use host.chat for interactive chat."
             ),
         )
         async def train_dpo(
@@ -834,7 +844,7 @@ class AgentYGateway:
                 "Fine-tune a model with GRPO (Group Relative Policy Optimization) -- "
                 "dataset needs prompt/responses/rewards columns. "
                 "Accepts base_model from a previous finetune.train result (model_path). "
-                "Returns model_path for chaining with further training or host.deploy_mcp."
+                "Set deploy=True to auto-deploy; then use host.chat for interactive chat."
             ),
         )
         async def train_grpo(
@@ -870,7 +880,7 @@ class AgentYGateway:
                 "Fine-tune a model with KTO (Kahneman-Tversky Optimization) -- "
                 "dataset needs prompt/completion/label columns. "
                 "Accepts base_model from a previous finetune.train result (model_path). "
-                "Returns model_path for chaining with further training or host.deploy_mcp."
+                "Set deploy=True to auto-deploy; then use host.chat for interactive chat."
             ),
         )
         async def train_kto(
@@ -909,7 +919,7 @@ class AgentYGateway:
             description=(
                 "Curriculum fine-tune: auto-scores dataset by difficulty, trains easy-to-hard "
                 "in stages. Each stage's output model feeds into the next stage automatically. "
-                "Returns final_model_path for chaining with host.deploy_mcp or evaluate_model.batch."
+                "Set deploy=True to auto-deploy; then use host.chat for interactive chat."
             ),
         )
         async def train_curriculum(
@@ -1539,6 +1549,55 @@ class AgentYGateway:
         async def host_health(deployment_id: str) -> str:
             return json.dumps(await self.hoster.health_check(deployment_id), indent=2)
 
+        @self.mcp.tool(
+            name="host.chat",
+            description=(
+                "Chat with a deployed or local fine-tuned model. "
+                "IMPORTANT: After any finetune.train* with deploy=True succeeds, "
+                "offer to use this tool so the user can test the model interactively. "
+                "Pass the endpoint from the deployment result, or a model_path for direct loading. "
+                "Use conversation_id to maintain multi-turn context across calls. "
+                "Also share the deployment's chat_command for standalone CLI access."
+            ),
+        )
+        async def chat_with_model(
+            message: str,
+            endpoint: Optional[str] = None,
+            model_path: Optional[str] = None,
+            adapter_path: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            max_new_tokens: int = 512,
+            system_prompt: Optional[str] = None,
+        ) -> str:
+            from hosting_pipeline.services.chat_service import ChatSession
+
+            cid = conversation_id or str(uuid.uuid4())[:8]
+
+            if cid in self._chat_sessions:
+                session = self._chat_sessions[cid]
+            else:
+                config = ChatConfig(
+                    endpoint=endpoint,
+                    model_path=model_path,
+                    adapter_path=adapter_path,
+                    max_new_tokens=max_new_tokens,
+                    system_prompt=system_prompt,
+                )
+                session = ChatSession(config)
+                await session.initialize()
+                self._chat_sessions[cid] = session
+
+            response = await session.send_message(message)
+            return json.dumps(
+                {
+                    "success": True,
+                    "conversation_id": cid,
+                    "response": response,
+                    "turns": session.get_info()["turns"],
+                },
+                indent=2,
+            )
+
     # -- Workflow --
     def _register_workflow_tools(self):
         @self.mcp.tool(name="workflow.full_pipeline",
@@ -1694,6 +1753,28 @@ class AgentYGateway:
             executor = PipelineExecutor(self.mcp._tools)
             result = await executor.execute(parsed_steps, dry_run=dry_run)
             return result.model_dump_json(indent=2)
+
+        @self.mcp.tool(
+            name="workflow.guided_pipeline",
+            description=(
+                "Describe what you want to do in plain English. Returns the exact "
+                "sequence of MCP tool calls with parameters to execute your goal. "
+                "Use this FIRST when you don't know which tools to call. "
+                "This is a pure planning tool — it does NOT execute anything. "
+                "Take the returned steps and either pass them to workflow.run_pipeline "
+                "or call the tools individually."
+            ),
+        )
+        async def guided_pipeline(
+            goal: str,
+            file_path: Optional[str] = None,
+            base_model: Optional[str] = None,
+        ) -> str:
+            from shared.workflow_planner import WorkflowPlanner
+
+            planner = WorkflowPlanner()
+            plan = planner.plan(goal, file_path=file_path, base_model=base_model)
+            return json.dumps(plan, indent=2)
 
     # -- Orchestration --
     def _register_orchestration_tools(self):
