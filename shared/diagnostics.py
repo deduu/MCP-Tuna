@@ -1,5 +1,5 @@
 """
-Structured diagnostic layer for Transcendence.
+Structured diagnostic layer for MCP Tuna.
 
 Writes per-session JSONL files to logs/sessions/ and threads a trace_id
 (UUID per request) across all async calls via ContextVars.

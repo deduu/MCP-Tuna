@@ -21,7 +21,7 @@ class TrainServer:
         self._config = config or {}
         self._finetuning_svc = None
         self._job_manager_instance = None
-        self.mcp = MCPServer("transcendence-train", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-train", "1.0.0")
         self._register_tools()
 
     @property
@@ -70,7 +70,7 @@ class TrainServer:
             ), indent=2)
 
         @self.mcp.tool(name="system.setup_check",
-                       description="Validate all prerequisites for Transcendence")
+                       description="Validate all prerequisites for MCP Tuna")
         async def setup_check() -> str:
             checks = []
             has_key = bool(os.getenv("OPENAI_API_KEY"))

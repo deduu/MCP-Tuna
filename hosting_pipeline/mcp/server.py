@@ -13,7 +13,7 @@ class HostingMCPServer:
 
     def __init__(self):
         self.service = HostingService()
-        self.mcp = MCPServer("transcendence-hosting", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-hosting", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):

@@ -1,39 +1,39 @@
 {
   "mcpServers": {
-    "transcendence-data": {
-      "command": "transcendence-data",
+    "mcp-tuna-data": {
+      "command": "mcp-tuna-data",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
     },
-    "transcendence-eval": {
-      "command": "transcendence-eval",
+    "mcp-tuna-eval": {
+      "command": "mcp-tuna-eval",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
     },
-    "transcendence-model-eval": {
-      "command": "transcendence-model-eval",
+    "mcp-tuna-model-eval": {
+      "command": "mcp-tuna-model-eval",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
     },
-    "transcendence-train": {
-      "command": "transcendence-train",
+    "mcp-tuna-train": {
+      "command": "mcp-tuna-train",
       "args": [],
       "env": {
         "HF_TOKEN": "hf_..."
       }
     },
-    "transcendence-host": {
-      "command": "transcendence-host",
+    "mcp-tuna-host": {
+      "command": "mcp-tuna-host",
       "args": []
     },
-    "transcendence-orchestrate": {
-      "command": "transcendence-orchestrate",
+    "mcp-tuna-orchestrate": {
+      "command": "mcp-tuna-orchestrate",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."

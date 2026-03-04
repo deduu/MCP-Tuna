@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "transcendence-data": {
-      "command": "transcendence-data",
+    "mcp-tuna-data": {
+      "command": "mcp-tuna-data",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."

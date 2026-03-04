@@ -17,7 +17,7 @@ class EvalServer:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self._config = config or {}
         self._inner = None
-        self.mcp = MCPServer("transcendence-eval", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-eval", "1.0.0")
         self._register_tools()
 
     @property

@@ -1,4 +1,4 @@
-"""Pydantic configuration schemas for all Transcendence pipelines."""
+"""Pydantic configuration schemas for all MCP Tuna pipelines."""
 
 from typing import Dict, List, Optional
 from pydantic import BaseModel

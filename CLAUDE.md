@@ -1,7 +1,7 @@
-# Transcendence — Development Rules
+# MCP Tuna — Development Rules
 
 ## Project Overview
-Transcendence is an end-to-end LLM fine-tuning platform. It supports two workflow paths:
+MCP Tuna is an end-to-end LLM fine-tuning platform. It supports two workflow paths:
 - **Document Path:** Load docs → Generate (SFT/DPO/GRPO/KTO) → Clean → Normalize → Evaluate → Filter → Train → Host
 - **Orchestration Path:** Generate problems → Collect agent trajectories → Score (accuracy + cost + latency) → Format → Train → Host
 
@@ -81,6 +81,15 @@ User → `app/` (FastAPI) → `ChatAPIOrchestrator` → `AgentFactory.create_age
 - `from __future__ import annotations` at top of every file
 - Type annotations on all public functions
 - Pydantic v2 with `model_config`
+
+## Naming History & Backwards Compatibility
+This project was renamed twice: **AgentY → Transcendence → MCP Tuna** (`mcp-tuna`).
+- The canonical name is **mcp-tuna** (package) / **MCP Tuna** (display) / **TunaGateway** (class).
+- `mcp_gateway.py` exports backwards-compatible aliases: `AgentYGateway = TunaGateway`, `TranscendenceGateway = TunaGateway`. **Do not remove these.**
+- `CHANGELOG.md` contains historical references to "Transcendence" — these are intentional.
+- The GitHub repo may still use the old `AgentY` URL. Do not "fix" these unless the repo is renamed.
+- CLI commands all use the `mcp-tuna-*` prefix (e.g., `mcp-tuna-gateway`, `mcp-tuna-data`).
+- Env vars use `MCP_TUNA_*` prefix (e.g., `MCP_TUNA_GATEWAY_PORT`).
 
 ## Meta
 If this file exceeds 100 lines, split into per-directory CLAUDE.md files.

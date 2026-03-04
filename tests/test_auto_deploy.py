@@ -13,9 +13,9 @@ from unittest.mock import AsyncMock, MagicMock
 @pytest.mark.asyncio
 async def test_auto_deploy_called_when_deploy_true_and_success():
     """deploy=True + successful training → deploy_as_mcp should be called."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._finetuning_svc = MagicMock()
     gw._finetuning_svc.config = MagicMock()
     gw._finetuning_svc.config.base_model = "meta-llama/Llama-3.2-3B-Instruct"
@@ -43,9 +43,9 @@ async def test_auto_deploy_called_when_deploy_true_and_success():
 @pytest.mark.asyncio
 async def test_auto_deploy_not_called_when_deploy_false():
     """deploy=False → deploy_as_mcp should never be called."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._hosting_svc = AsyncMock()
 
     train_result = {"success": True, "model_path": "/output/sft_v1"}
@@ -60,9 +60,9 @@ async def test_auto_deploy_not_called_when_deploy_false():
 @pytest.mark.asyncio
 async def test_auto_deploy_not_called_on_training_failure():
     """Training failure → no deploy attempt even if deploy=True."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._hosting_svc = AsyncMock()
 
     train_result = {"success": False, "error": "OOM"}
@@ -76,9 +76,9 @@ async def test_auto_deploy_not_called_on_training_failure():
 @pytest.mark.asyncio
 async def test_auto_deploy_uses_correct_port():
     """deploy_port should be passed to HostingConfig."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._finetuning_svc = MagicMock()
     gw._finetuning_svc.config.base_model = "fake-base"
     gw._hosting_svc = AsyncMock()
@@ -96,9 +96,9 @@ async def test_auto_deploy_uses_correct_port():
 @pytest.mark.asyncio
 async def test_auto_deploy_uses_explicit_base_model():
     """When base_model is provided, it should be used as model_path in HostingConfig."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._finetuning_svc = MagicMock()
     gw._finetuning_svc.config.base_model = "default-base"
     gw._hosting_svc = AsyncMock()
@@ -117,9 +117,9 @@ async def test_auto_deploy_uses_explicit_base_model():
 @pytest.mark.asyncio
 async def test_auto_deploy_handles_final_model_path():
     """For curriculum/sequential results using final_model_path instead of model_path."""
-    from mcp_gateway import TranscendenceGateway
+    from mcp_gateway import TunaGateway
 
-    gw = TranscendenceGateway.__new__(TranscendenceGateway)
+    gw = TunaGateway.__new__(TunaGateway)
     gw._finetuning_svc = MagicMock()
     gw._finetuning_svc.config.base_model = "fake-base"
     gw._hosting_svc = AsyncMock()

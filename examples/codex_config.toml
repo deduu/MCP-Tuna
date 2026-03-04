@@ -1,24 +1,24 @@
 # Codex CLI — ~/.codex/config.toml (or .codex/config.toml for project scope)
 #
 # Stdio mode (recommended — Codex launches the server automatically)
-[mcp_servers.transcendence]
-command = "transcendence-gateway"
+[mcp_servers.mcp-tuna]
+command = "mcp-tuna-gateway"
 
-[mcp_servers.transcendence.env]
+[mcp_servers.mcp-tuna.env]
 OPENAI_API_KEY = "sk-..."
 HF_TOKEN = "hf_..."
 
 # -- OR: HTTP mode (connect to a running server) --
-# [mcp_servers.transcendence]
+# [mcp_servers.mcp-tuna]
 # url = "http://localhost:8000/mcp"
 
 # -- OR: Split servers (lightweight, per-task) --
-# [mcp_servers.transcendence-data]
-# command = "transcendence-data"
-# [mcp_servers.transcendence-data.env]
+# [mcp_servers.mcp-tuna-data]
+# command = "mcp-tuna-data"
+# [mcp_servers.mcp-tuna-data.env]
 # OPENAI_API_KEY = "sk-..."
 #
-# [mcp_servers.transcendence-train]
-# command = "transcendence-train"
-# [mcp_servers.transcendence-train.env]
+# [mcp_servers.mcp-tuna-train]
+# command = "mcp-tuna-train"
+# [mcp_servers.mcp-tuna-train.env]
 # HF_TOKEN = "hf_..."

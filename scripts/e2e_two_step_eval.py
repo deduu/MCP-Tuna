@@ -1,6 +1,6 @@
 """
-Transcendence E2E Test — Two-Step Evaluation Pipeline via MCP Gateway
-======================================================================
+MCP Tuna E2E Test — Two-Step Evaluation Pipeline via MCP Gateway
+=================================================================
 
 Step 0: Re-run inference on the fine-tuned model with cleaned instructions
 Step 1: Score outputs with ROUGE + BERTScore + LLM-Judge (evaluate_model.batch)
@@ -11,7 +11,7 @@ Uses the existing fine-tuned Llama-3.2-1B adapter and comparison results
 instructions stripped of the agent-system "# Note:" block.
 
 Usage:
-    cd transcendence
+    cd mcp-tuna
     uv run python scripts/e2e_two_step_eval.py
 """
 from __future__ import annotations
@@ -65,7 +65,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  Transcendence E2E: Two-Step Evaluation Pipeline")
+    print("  MCP Tuna E2E: Two-Step Evaluation Pipeline")
     print("  (with re-generated outputs from cleaned instructions)")
     print("=" * 70)
 
@@ -95,8 +95,8 @@ async def main():
     print("  [1/5] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import TranscendenceGateway
-    gateway = TranscendenceGateway()
+    from mcp_gateway import TunaGateway
+    gateway = TunaGateway()
 
     tool_names = list(gateway.mcp._tools.keys())
     eval_tools = [t for t in tool_names if "evaluate_model" in t or "ft_eval" in t]

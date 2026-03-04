@@ -76,7 +76,7 @@ class HostingService:
             if config.adapter_path:
                 provider.load_adapter(config.adapter_path)
 
-            app = FastAPI(title=f"Transcendence Model: {config.model_path}")
+            app = FastAPI(title=f"MCP Tuna Model: {config.model_path}")
 
             @app.post("/generate")
             async def generate(prompt: str, max_new_tokens: int = 512):

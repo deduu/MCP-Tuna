@@ -24,7 +24,7 @@ class ModelEvalMCPServer:
         self._eval_config = eval_config
         self._judge_config = judge_config
         self._ft_config = ft_config
-        self.mcp = MCPServer("transcendence-model-eval", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-model-eval", "1.0.0")
         self._register_tools()
 
     # -- lazy service accessors --

@@ -1,5 +1,5 @@
 """
-Transcendence CLI Chat — Interactive REPL for chatting with fine-tuned models.
+MCP Tuna CLI Chat — Interactive REPL for chatting with fine-tuned models.
 
 Usage:
     # API mode (connect to a deployed model):
@@ -26,7 +26,7 @@ if sys.stderr.encoding != "utf-8":
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="transcendence-chat",
+        prog="mcp-tuna-chat",
         description="Interactive CLI chat with a fine-tuned model.",
     )
     parser.add_argument(
@@ -77,7 +77,7 @@ def _print_banner(info: dict) -> None:
     """Print the welcome banner with session info."""
     sys.stdout.write("\n")
     sys.stdout.write("=" * 50 + "\n")
-    sys.stdout.write("  Transcendence Chat\n")
+    sys.stdout.write("  MCP Tuna Chat\n")
     sys.stdout.write("=" * 50 + "\n")
 
     mode = info.get("mode", "unknown")

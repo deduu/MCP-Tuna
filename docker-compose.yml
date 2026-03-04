@@ -11,11 +11,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  transcendence-gateway:
+  mcp-tuna-gateway:
     build:
       context: .
       target: gpu
-    container_name: transcendence_gateway
+    container_name: mcp_tuna_gateway
     ports:
       - "8000:8000"
     environment:

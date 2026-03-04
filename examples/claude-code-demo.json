@@ -1,14 +1,14 @@
 {
   "mcpServers": {
-    "transcendence-data": {
-      "command": "transcendence-data",
+    "mcp-tuna-data": {
+      "command": "mcp-tuna-data",
       "args": [],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
     },
-    "transcendence-train": {
-      "command": "transcendence-train",
+    "mcp-tuna-train": {
+      "command": "mcp-tuna-train",
       "args": [],
       "env": {
         "HF_TOKEN": "hf_..."

@@ -1,9 +1,9 @@
 # ============================================================================
-# Transcendence — Multi-stage Dockerfile
+# MCP Tuna — Multi-stage Dockerfile
 #
 # Build targets:
-#   docker build -t transcendence .                    # GPU (default)
-#   docker build --target cpu -t transcendence-cpu .   # CPU only
+#   docker build -t mcp-tuna .                    # GPU (default)
+#   docker build --target cpu -t mcp-tuna-cpu .   # CPU only
 # ============================================================================
 
 # ---------- GPU image (default) ----------
@@ -32,7 +32,7 @@ COPY . .
 RUN uv sync --frozen --no-dev --extra all-servers
 
 EXPOSE 8000
-CMD ["uv", "run", "transcendence-gateway", "http", "--port", "8000"]
+CMD ["uv", "run", "mcp-tuna-gateway", "http", "--port", "8000"]
 
 # ---------- CPU image (data + eval only, no torch) ----------
 FROM python:3.11-slim AS cpu
@@ -51,4 +51,4 @@ COPY . .
 RUN uv sync --frozen --no-dev --extra data --extra eval
 
 EXPOSE 8000
-CMD ["uv", "run", "transcendence-gateway", "http", "--port", "8000"]
+CMD ["uv", "run", "mcp-tuna-gateway", "http", "--port", "8000"]

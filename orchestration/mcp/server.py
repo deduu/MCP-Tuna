@@ -15,7 +15,7 @@ class OrchestrationMCPServer:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self._svc = None
         self._config = config or {}
-        self.mcp = MCPServer("transcendence-orchestrate", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-orchestrate", "1.0.0")
         self._register_tools()
 
     @property

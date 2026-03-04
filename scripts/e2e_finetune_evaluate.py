@@ -1,12 +1,12 @@
 """
-Transcendence E2E Test — Fine-tune Llama 3.2 3B-Instruct + Compare via MCP Gateway
-=====================================================================================
+MCP Tuna E2E Test — Fine-tune Llama 3.2 3B-Instruct + Compare via MCP Gateway
+================================================================================
 
 Exercises the full MCP tool chain:
   finetune.train  →  test.compare_models (base vs fine-tuned)
 
 Usage:
-    cd transcendence
+    cd mcp-tuna
     uv run python scripts/e2e_finetune_evaluate.py
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  Transcendence E2E Test: Fine-tune + Evaluate via MCP Gateway")
+    print("  MCP Tuna E2E Test: Fine-tune + Evaluate via MCP Gateway")
     print("=" * 70)
 
     # ── Validate prerequisites ──
@@ -93,8 +93,8 @@ async def main():
     print("  [1/5] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import TranscendenceGateway
-    gateway = TranscendenceGateway()
+    from mcp_gateway import TunaGateway
+    gateway = TunaGateway()
 
     tool_names = list(gateway.mcp._tools.keys())
     print(f"  Registered {len(tool_names)} tools")

@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 
 from agentsoul.providers.base import BaseLLM as AgentBaseLLM
 
-# Re-export so all Transcendence code imports BaseLLM from one place
+# Re-export so all MCP Tuna code imports BaseLLM from one place
 BaseLLM = AgentBaseLLM
 
 

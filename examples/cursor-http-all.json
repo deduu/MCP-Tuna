@@ -1,21 +1,21 @@
 {
   "mcpServers": {
-    "transcendence-data": {
+    "mcp-tuna-data": {
       "url": "http://localhost:8010/mcp"
     },
-    "transcendence-eval": {
+    "mcp-tuna-eval": {
       "url": "http://localhost:8011/mcp"
     },
-    "transcendence-model-eval": {
+    "mcp-tuna-model-eval": {
       "url": "http://localhost:8012/mcp"
     },
-    "transcendence-train": {
+    "mcp-tuna-train": {
       "url": "http://localhost:8013/mcp"
     },
-    "transcendence-host": {
+    "mcp-tuna-host": {
       "url": "http://localhost:8014/mcp"
     },
-    "transcendence-orchestrate": {
+    "mcp-tuna-orchestrate": {
       "url": "http://localhost:8015/mcp"
     }
   }

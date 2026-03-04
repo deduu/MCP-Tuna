@@ -1,4 +1,4 @@
-# Contributing to Transcendence
+# Contributing to MCP Tuna
 
 Thanks for your interest in contributing!
 
@@ -7,7 +7,7 @@ Thanks for your interest in contributing!
 ```bash
 # Clone and install
 git clone https://github.com/deduu/AgentY.git
-cd transcendence
+cd mcp-tuna
 uv sync --all-extras
 
 # Verify

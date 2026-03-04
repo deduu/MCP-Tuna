@@ -64,7 +64,7 @@ class AdapterService:
     ) -> Dict[str, Any]:
         """Export a model to GGUF format for llama.cpp / Ollama.
 
-        Requires ``llama-cpp-python`` (install via ``pip install transcendence[export]``).
+        Requires ``llama-cpp-python`` (install via ``pip install mcp-tuna[export]``).
         """
         if quantization not in self._SUPPORTED_QUANTIZATIONS:
             return {
@@ -82,7 +82,7 @@ class AdapterService:
                 "success": False,
                 "error": (
                     "llama-cpp-python is not installed. "
-                    "Install with: pip install transcendence[export]"
+                    "Install with: pip install mcp-tuna[export]"
                 ),
             }
 

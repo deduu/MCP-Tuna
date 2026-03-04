@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "transcendence"
+name = "mcp-tuna"
 version = "0.2.0"
 description = "End-to-end LLM fine-tuning platform with MCP tool support"
 readme = "README.md"
@@ -47,7 +47,7 @@ model-eval = [
     "absl-py>=2.0",
 ]
 model-eval-full = [
-    "transcendence[model-eval]",
+    "mcp-tuna[model-eval]",
     "bert-score>=0.3",
 ]
 training = [
@@ -99,21 +99,21 @@ dev = [
 ]
 # -- Composite groups --
 all-servers = [
-    "transcendence[data,eval,model-eval-full,training,hosting,orchestration]",
+    "mcp-tuna[data,eval,model-eval-full,training,hosting,orchestration]",
 ]
 all = [
-    "transcendence[all-servers,backend,memory,retrieval,tracing,dev,export]",
+    "mcp-tuna[all-servers,backend,memory,retrieval,tracing,dev,export]",
 ]
 
 [project.scripts]
-transcendence-gateway = "scripts.run_gateway:main"
-transcendence-data = "scripts.run_data_server:main"
-transcendence-eval = "scripts.run_eval_server:main"
-transcendence-model-eval = "scripts.run_model_eval_server:main"
-transcendence-train = "scripts.run_train_server:main"
-transcendence-host = "scripts.run_host_server:main"
-transcendence-orchestrate = "scripts.run_orchestrate_server:main"
-transcendence-chat = "scripts.chat_cli:main"
+mcp-tuna-gateway = "scripts.run_gateway:main"
+mcp-tuna-data = "scripts.run_data_server:main"
+mcp-tuna-eval = "scripts.run_eval_server:main"
+mcp-tuna-model-eval = "scripts.run_model_eval_server:main"
+mcp-tuna-train = "scripts.run_train_server:main"
+mcp-tuna-host = "scripts.run_host_server:main"
+mcp-tuna-orchestrate = "scripts.run_orchestrate_server:main"
+mcp-tuna-chat = "scripts.chat_cli:main"
 
 [project.urls]
 Repository = "https://github.com/deduu/AgentY"

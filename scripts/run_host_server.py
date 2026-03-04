@@ -1,4 +1,4 @@
-"""Entry point for transcendence-host (model hosting MCP server).
+"""Entry point for mcp-tuna-host (model hosting MCP server).
 
 Usage:
     python -m scripts.run_host_server           # stdio mode
@@ -10,7 +10,7 @@ from servers.host_server import HostServer
 
 
 def main():
-    server_main(HostServer, "transcendence-host", default_port=8014)
+    server_main(HostServer, "mcp-tuna-host", default_port=8014)
 
 
 if __name__ == "__main__":

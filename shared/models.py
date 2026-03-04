@@ -1,4 +1,4 @@
-"""Unified data models used by all Transcendence pipelines."""
+"""Unified data models used by all MCP Tuna pipelines."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional

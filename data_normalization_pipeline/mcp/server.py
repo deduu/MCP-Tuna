@@ -13,7 +13,7 @@ class NormalizationMCPServer:
 
     def __init__(self):
         self.service = DataNormalizationService()
-        self.mcp = MCPServer("transcendence-normalizer", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-normalizer", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):

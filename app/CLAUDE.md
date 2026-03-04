@@ -42,7 +42,7 @@ Rules: No business logic in route handlers. Orchestrators compose; handlers are 
 ## Config (`core/config.py`)
 All settings via dataclasses loaded from `.env`:
 - `DatabaseSettings`: PostgreSQL (`insights_pg`, port 55432 via Docker Compose)
-- `MCPSettings.servers`: transcendence-gateway (8002), email (8003), file (8004), web (8005)
+- `MCPSettings.servers`: mcp-tuna-gateway (8002), email (8003), file (8004), web (8005)
 - `AppSettings.frontend_url`: `http://localhost:5173` (CORS allowlist)
 
 ## Services (`services/`)

@@ -1,6 +1,6 @@
 """
-Transcendence E2E — Curriculum SFT: 3B vs 1B Comparison
-=========================================================
+MCP Tuna E2E — Curriculum SFT: 3B vs 1B Comparison
+====================================================
 
 Trains Llama-3.2-3B-Instruct with 4-bit QLoRA curriculum learning,
 evaluates with the two-step pipeline, then compares side-by-side
@@ -15,7 +15,7 @@ VRAM budget (RTX 3050 Ti, 4 GB):
   Total:                 ~2.55 GB  → fits in 4 GB
 
 Usage:
-    cd transcendence
+    cd mcp-tuna
     uv run python scripts/e2e_curriculum_3b_vs_1b.py
 """
 from __future__ import annotations
@@ -114,7 +114,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  Transcendence E2E: 3B Curriculum SFT vs 1B Flat SFT Comparison")
+    print("  MCP Tuna E2E: 3B Curriculum SFT vs 1B Flat SFT Comparison")
     print("=" * 70)
 
     # ── Verify paths ──
@@ -141,8 +141,8 @@ async def main():
     print("  [1/8] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import TranscendenceGateway
-    gateway = TranscendenceGateway()
+    from mcp_gateway import TunaGateway
+    gateway = TunaGateway()
     print(f"  Registered {len(gateway.mcp._tools)} tools")
 
     # ── STEP 1: Preflight Check ──

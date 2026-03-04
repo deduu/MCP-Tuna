@@ -9,13 +9,13 @@ import sys
 
 
 def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
-    """Standard entry point for all Transcendence standalone MCP servers.
+    """Standard entry point for all MCP Tuna standalone MCP servers.
 
     Usage:
-        transcendence-<name>              # stdio mode
-        transcendence-<name> http         # HTTP mode, default port
-        transcendence-<name> http --port 9000
-        transcendence-<name> --version
+        mcp-tuna-<name>              # stdio mode
+        mcp-tuna-<name> http         # HTTP mode, default port
+        mcp-tuna-<name> http --port 9000
+        mcp-tuna-<name> --version
     """
     if sys.stderr.encoding != "utf-8":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -29,7 +29,7 @@ def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
 
     parser = argparse.ArgumentParser(
         prog=name,
-        description=f"{name} — Transcendence standalone MCP server.",
+        description=f"{name} — MCP Tuna standalone MCP server.",
     )
     parser.add_argument(
         "--version", action="version", version="%(prog)s 0.2.0"

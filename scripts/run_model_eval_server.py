@@ -1,4 +1,4 @@
-"""Entry point for transcendence-model-eval (model evaluation + judge MCP server).
+"""Entry point for mcp-tuna-model-eval (model evaluation + judge MCP server).
 
 Usage:
     python -m scripts.run_model_eval_server           # stdio mode
@@ -10,7 +10,7 @@ from servers.model_eval_server import ModelEvalServer
 
 
 def main():
-    server_main(ModelEvalServer, "transcendence-model-eval", default_port=8012)
+    server_main(ModelEvalServer, "mcp-tuna-model-eval", default_port=8012)
 
 
 if __name__ == "__main__":

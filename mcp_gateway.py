@@ -1,5 +1,5 @@
 """
-Transcendence Unified MCP Gateway
+MCP Tuna Unified Gateway
 ====================================
 
 Single entry point exposing all pipeline operations as MCP tools.
@@ -34,13 +34,13 @@ from shared.config import (
 )
 
 
-class TranscendenceGateway:
-    """Unified MCP gateway that composes all Transcendence pipeline services."""
+class TunaGateway:
+    """Unified MCP gateway that composes all MCP Tuna pipeline services."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         load_dotenv(override=False)
         config = config or {}
-        self.mcp = MCPServer("transcendence-gateway", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-gateway", "1.0.0")
 
         # Lazily-initialized services (avoid heavy imports at gateway startup)
         self._generator_svc = None
@@ -72,7 +72,7 @@ class TranscendenceGateway:
                 from data_generator_pipeline.services.pipeline_service import PipelineService
             except ImportError:
                 raise ImportError(
-                    "Data generation tools require: pip install transcendence[data]"
+                    "Data generation tools require: pip install mcp-tuna[data]"
                 ) from None
             from shared.provider_factory import create_llm
             gen_config = GeneratorConfig(**{
@@ -104,7 +104,7 @@ class TranscendenceGateway:
                 from data_evaluator_pipeline.services.pipeline_service import EvaluatorService
             except ImportError:
                 raise ImportError(
-                    "Evaluation tools require: pip install transcendence[eval]"
+                    "Evaluation tools require: pip install mcp-tuna[eval]"
                 ) from None
             eval_config = EvaluatorConfig(**self._config.get("evaluator", {}))
             self._evaluator_svc = EvaluatorService(eval_config)
@@ -117,7 +117,7 @@ class TranscendenceGateway:
                 from model_evaluator_pipeline.services.evaluation_service import ModelEvaluationService
             except ImportError:
                 raise ImportError(
-                    "Model evaluation tools require: pip install transcendence[model-eval]"
+                    "Model evaluation tools require: pip install mcp-tuna[model-eval]"
                 ) from None
             eval_config = ModelEvaluationConfig(**{
                 k: v for k, v in self._config.get("model_evaluator", {}).items()
@@ -133,7 +133,7 @@ class TranscendenceGateway:
                 from finetuning_pipeline.services.pipeline_service import FineTuningService
             except ImportError:
                 raise ImportError(
-                    "Training tools require: pip install transcendence[training]"
+                    "Training tools require: pip install mcp-tuna[training]"
                 ) from None
             self._finetuning_svc = FineTuningService(
                 default_base_model=self._config.get("finetuning", {}).get(
@@ -149,7 +149,7 @@ class TranscendenceGateway:
                 from hosting_pipeline.services.hosting_service import HostingService
             except ImportError:
                 raise ImportError(
-                    "Hosting tools require: pip install transcendence[hosting]"
+                    "Hosting tools require: pip install mcp-tuna[hosting]"
                 ) from None
             self._hosting_svc = HostingService()
         return self._hosting_svc
@@ -161,7 +161,7 @@ class TranscendenceGateway:
                 from orchestration.orchestration_trainer import OrchestrationDataService
             except ImportError:
                 raise ImportError(
-                    "Orchestration tools require: pip install transcendence[orchestration]"
+                    "Orchestration tools require: pip install mcp-tuna[orchestration]"
                 ) from None
             from orchestration.rewards import OrchestrationRewardFunction
             from shared.provider_factory import create_llm
@@ -198,7 +198,7 @@ class TranscendenceGateway:
                 from model_evaluator_pipeline.services.judge_service import AdvancedJudgeService
             except ImportError:
                 raise ImportError(
-                    "Judge tools require: pip install transcendence[model-eval]"
+                    "Judge tools require: pip install mcp-tuna[model-eval]"
                 ) from None
             judge_config = AdvancedJudgeConfig(**{
                 k: v for k, v in self._config.get("advanced_judge", {}).items()
@@ -214,7 +214,7 @@ class TranscendenceGateway:
                 from model_evaluator_pipeline.services.ft_evaluator_service import FTEvaluatorService
             except ImportError:
                 raise ImportError(
-                    "Fine-tune evaluation tools require: pip install transcendence[model-eval]"
+                    "Fine-tune evaluation tools require: pip install mcp-tuna[model-eval]"
                 ) from None
             ft_config = FTEvaluatorConfig(**{
                 k: v for k, v in self._config.get("ft_evaluator", {}).items()
@@ -347,7 +347,7 @@ class TranscendenceGateway:
         @self.mcp.tool(
             name="system.setup_check",
             description=(
-                "Validate all prerequisites for using Transcendence: API keys, GPU, "
+                "Validate all prerequisites for using MCP Tuna: API keys, GPU, "
                 "HuggingFace token, disk space, required Python packages. "
                 "Run this first before any pipeline operation."
             ),
@@ -528,7 +528,7 @@ class TranscendenceGateway:
         @self.mcp.tool(
             name="generate.from_hf_dataset",
             description=(
-                "Load a dataset from the HuggingFace Hub and return as Transcendence "
+                "Load a dataset from the HuggingFace Hub and return as MCP Tuna "
                 "data_points. Automatically maps columns if the dataset uses "
                 "standard naming (instruction/input/output or prompt/chosen/rejected). "
                 "Use column_mapping JSON to override: e.g., "
@@ -1047,7 +1047,7 @@ class TranscendenceGateway:
             name="finetune.export_gguf",
             description=(
                 "Export a model to GGUF format for use with llama.cpp or Ollama. "
-                "Requires the llama-cpp-python package (pip install transcendence[export]). "
+                "Requires the llama-cpp-python package (pip install mcp-tuna[export]). "
                 "Supported quantizations: q4_0, q4_k_m, q5_k_m, q8_0, f16."
             ),
         )
@@ -2231,5 +2231,6 @@ class TranscendenceGateway:
         self.mcp.run(transport)
 
 
-# Backwards-compatible alias
-AgentYGateway = TranscendenceGateway
+# Backwards-compatible aliases
+AgentYGateway = TunaGateway
+TranscendenceGateway = TunaGateway

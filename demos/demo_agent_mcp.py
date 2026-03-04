@@ -1,12 +1,12 @@
 """
-Demo: AgentSoul + Transcendence MCP Gateway
-=============================================
+Demo: AgentSoul + MCP Tuna Gateway
+====================================
 
-Shows an AI agent autonomously using Transcendence pipeline tools via MCP.
+Shows an AI agent autonomously using MCP Tuna pipeline tools via MCP.
 
 Prerequisites:
     - OPENAI_API_KEY set in environment (or .env file)
-    - Transcendence Gateway already running:
+    - MCP Tuna Gateway already running:
         python scripts/run_gateway.py http 8002
 
 Usage:
@@ -145,9 +145,9 @@ async def main():
     # Build MCP tool configs
     mcp_tools = [{
         "type": "mcp",
-        "server_label": "transcendence-gateway",
+        "server_label": "mcp-tuna-gateway",
         "server_url": gateway_url,
-        "server_description": "Transcendence data pipeline tools",
+        "server_description": "MCP Tuna data pipeline tools",
     }]
 
     if include_web:

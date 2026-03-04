@@ -1,4 +1,4 @@
-"""Entry point for transcendence-data (data preparation MCP server).
+"""Entry point for mcp-tuna-data (data preparation MCP server).
 
 Usage:
     python -m scripts.run_data_server           # stdio mode
@@ -10,7 +10,7 @@ from servers.data_server import DataPrepServer
 
 
 def main():
-    server_main(DataPrepServer, "transcendence-data", default_port=8010)
+    server_main(DataPrepServer, "mcp-tuna-data", default_port=8010)
 
 
 if __name__ == "__main__":

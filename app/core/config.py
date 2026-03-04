@@ -88,9 +88,9 @@ class MCPSettings:
     """MCP server connections available to agents."""
     servers: List[MCPServerConfig] = field(default_factory=lambda: [
         MCPServerConfig(
-            server_label="transcendence-gateway",
-            server_url=os.getenv("TRANSCENDENCE_GATEWAY_URL", "http://localhost:8002/mcp"),
-            server_description="Transcendence pipeline tools (generate, clean, evaluate, finetune, host)",
+            server_label="mcp-tuna-gateway",
+            server_url=os.getenv("MCP_TUNA_GATEWAY_URL", "http://localhost:8002/mcp"),
+            server_description="MCP Tuna pipeline tools (generate, clean, evaluate, finetune, host)",
         ),
         MCPServerConfig(
             server_label="database-tools",

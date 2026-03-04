@@ -1,1 +1,1 @@
-"""Transcendence shared foundation — unified models, providers, registries, and configs."""
+"""MCP Tuna shared foundation — unified models, providers, registries, and configs."""

@@ -22,7 +22,7 @@ class DataPrepServer:
         self._cleaning_svc = None
         self._normalization_svc = None
         self._dataset_svc = None
-        self.mcp = MCPServer("transcendence-data", "1.0.0")
+        self.mcp = MCPServer("mcp-tuna-data", "1.0.0")
         self._register_tools()
 
     # -- lazy accessors --

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": {
         "OPENAI_API_KEY": "sk-...",
         "HF_TOKEN": "hf_..."

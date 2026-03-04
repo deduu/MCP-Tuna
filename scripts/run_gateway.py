@@ -1,12 +1,12 @@
 """
-Transcendence Gateway — Entry point for the unified MCP server.
+MCP Tuna Gateway — Entry point for the unified MCP server.
 
 Usage:
-    transcendence-gateway              # stdio mode (Claude Desktop)
-    transcendence-gateway http         # HTTP mode, default port 8000
-    transcendence-gateway http --port 9000
-    transcendence-gateway --version
-    transcendence-gateway --help
+    mcp-tuna-gateway              # stdio mode (Claude Desktop)
+    mcp-tuna-gateway http         # HTTP mode, default port 8000
+    mcp-tuna-gateway http --port 9000
+    mcp-tuna-gateway --version
+    mcp-tuna-gateway --help
 """
 
 import argparse
@@ -20,7 +20,7 @@ if sys.stderr.encoding != "utf-8":
 
 from agentsoul.server import StdioTransport, HTTPTransport
 from agentsoul.utils.logger import configure_logging
-from mcp_gateway import TranscendenceGateway
+from mcp_gateway import TunaGateway
 
 __version__ = "0.1.0"
 
@@ -40,8 +40,8 @@ def _check_port(host: str, port: int) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="transcendence-gateway",
-        description="Transcendence — Unified MCP gateway for LLM fine-tuning tools.",
+        prog="mcp-tuna-gateway",
+        description="MCP Tuna — Unified MCP gateway for LLM fine-tuning tools.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -64,7 +64,7 @@ def main():
     configure_logging(level=logging.DEBUG)
 
     try:
-        gateway = TranscendenceGateway()
+        gateway = TunaGateway()
     except Exception as exc:
         print(f"ERROR: failed to initialize gateway: {exc}", flush=True)
         raise SystemExit(1) from exc
@@ -72,11 +72,11 @@ def main():
     if args.transport == "http":
         _check_port(args.host, args.port)
         transport = HTTPTransport(host=args.host, port=args.port)
-        print(f"Starting Transcendence Gateway on http://{args.host}:{args.port}", flush=True)
+        print(f"Starting MCP Tuna Gateway on http://{args.host}:{args.port}", flush=True)
         print(f"Health check: http://localhost:{args.port}/health", flush=True)
     else:
         transport = StdioTransport()
-        print("Starting Transcendence Gateway (stdio mode)", file=sys.stderr)
+        print("Starting MCP Tuna Gateway (stdio mode)", file=sys.stderr)
 
     try:
         gateway.run(transport)

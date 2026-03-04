@@ -1,4 +1,4 @@
-# Transcendence
+# MCP Tuna
 
 End-to-end LLM fine-tuning platform that generates, evaluates, and trains on custom datasets. Exposed as **84 MCP tools** across 16 namespaces — first-of-its-kind for the MCP ecosystem.
 
@@ -6,10 +6,10 @@ End-to-end LLM fine-tuning platform that generates, evaluates, and trains on cus
 
 ```bash
 # Install (all servers)
-pip install transcendence[all-servers]
+pip install mcp-tuna[all-servers]
 
 # Or with uv
-uv pip install transcendence[all-servers]
+uv pip install mcp-tuna[all-servers]
 ```
 
 Add to your MCP client and start fine-tuning with natural language:
@@ -41,35 +41,35 @@ Install only what you need:
 
 ```bash
 # Data generation only (no GPU needed)
-pip install transcendence[data]
+pip install mcp-tuna[data]
 
 # Training + hosting (GPU)
-pip install transcendence[training,hosting]
+pip install mcp-tuna[training,hosting]
 ```
 
 ## Available Servers
 
 | Server | Command | Tools | Required extra |
 |--------|---------|-------|----------------|
-| **Unified Gateway** | `transcendence-gateway` | 84 | `all-servers` |
-| Data Prep | `transcendence-data` | 22 | `data` |
-| Evaluation | `transcendence-eval` | 4 | `eval` |
-| Model Eval | `transcendence-model-eval` | 15 | `model-eval` |
-| Training | `transcendence-train` | 11 | `training` |
-| Hosting | `transcendence-host` | 5 | `hosting` |
-| Orchestration | `transcendence-orchestrate` | 3 | `orchestration` |
-| Chat | `transcendence-chat` | — | `hosting` |
+| **Unified Gateway** | `mcp-tuna-gateway` | 84 | `all-servers` |
+| Data Prep | `mcp-tuna-data` | 22 | `data` |
+| Evaluation | `mcp-tuna-eval` | 4 | `eval` |
+| Model Eval | `mcp-tuna-model-eval` | 15 | `model-eval` |
+| Training | `mcp-tuna-train` | 11 | `training` |
+| Hosting | `mcp-tuna-host` | 5 | `hosting` |
+| Orchestration | `mcp-tuna-orchestrate` | 3 | `orchestration` |
+| Chat | `mcp-tuna-chat` | — | `hosting` |
 
 The gateway exposes 24 additional tools beyond the split servers: system utilities, dataset management, workflow planner, advanced judge (LLM-as-judge), fine-tune evaluation, and model evaluation tools.
 
 All servers support two transport modes:
 
 ```bash
-transcendence-gateway              # stdio mode (Claude Desktop, Cursor, Claude Code)
-transcendence-gateway http         # HTTP mode (default port 8000)
-transcendence-gateway http --port 9000
-transcendence-gateway --version
-transcendence-gateway --help
+mcp-tuna-gateway              # stdio mode (Claude Desktop, Cursor, Claude Code)
+mcp-tuna-gateway http         # HTTP mode (default port 8000)
+mcp-tuna-gateway http --port 9000
+mcp-tuna-gateway --version
+mcp-tuna-gateway --help
 ```
 
 ## MCP Client Setup
@@ -81,8 +81,8 @@ Add to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -94,9 +94,9 @@ Or zero-install with `uvx` (no `pip install` needed):
 ```json
 {
   "mcpServers": {
-    "transcendence": {
+    "mcp-tuna": {
       "command": "uvx",
-      "args": ["--from", "transcendence[all-servers]", "transcendence-gateway"],
+      "args": ["--from", "mcp-tuna[all-servers]", "mcp-tuna-gateway"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -110,10 +110,10 @@ Add to `~/.codex/config.toml` (global) or `.codex/config.toml` (project-scoped):
 **Stdio mode** (Codex launches the server automatically):
 
 ```toml
-[mcp_servers.transcendence]
-command = "transcendence-gateway"
+[mcp_servers.mcp-tuna]
+command = "mcp-tuna-gateway"
 
-[mcp_servers.transcendence.env]
+[mcp_servers.mcp-tuna.env]
 OPENAI_API_KEY = "sk-..."
 HF_TOKEN = "hf_..."
 ```
@@ -121,7 +121,7 @@ HF_TOKEN = "hf_..."
 **HTTP mode** (connect to a running server):
 
 ```toml
-[mcp_servers.transcendence]
+[mcp_servers.mcp-tuna]
 url = "http://localhost:8000/mcp"
 ```
 
@@ -134,8 +134,8 @@ Place in `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -149,8 +149,8 @@ Edit `~/.codeium/windsurf/mcp_config.json` (or add via Windsurf Settings > Casca
 ```json
 {
   "mcpServers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -164,8 +164,8 @@ Place in `.vscode/mcp.json`:
 ```json
 {
   "servers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -178,7 +178,7 @@ Go to **Settings > Tools > AI Assistant > Model Context Protocol (MCP)**, click 
 
 ```json
 {
-  "command": "transcendence-gateway",
+  "command": "mcp-tuna-gateway",
   "env": { "OPENAI_API_KEY": "sk-..." }
 }
 ```
@@ -192,8 +192,8 @@ Place in `.mcp.json` at project root:
 ```json
 {
   "mcpServers": {
-    "transcendence": {
-      "command": "transcendence-gateway",
+    "mcp-tuna": {
+      "command": "mcp-tuna-gateway",
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
@@ -207,12 +207,12 @@ Use individual servers if you only need a subset of tools:
 ```json
 {
   "mcpServers": {
-    "transcendence-data": {
-      "command": "transcendence-data",
+    "mcp-tuna-data": {
+      "command": "mcp-tuna-data",
       "env": { "OPENAI_API_KEY": "sk-..." }
     },
-    "transcendence-train": {
-      "command": "transcendence-train",
+    "mcp-tuna-train": {
+      "command": "mcp-tuna-train",
       "env": { "HF_TOKEN": "hf_..." }
     }
   }
@@ -225,15 +225,15 @@ See `examples/` for more configuration templates.
 
 ```bash
 # GPU (all servers, CUDA 12.4)
-docker build -t transcendence .
+docker build -t mcp-tuna .
 docker run --gpus all -p 8000:8000 \
   -e OPENAI_API_KEY=sk-... \
   -v hf-cache:/root/.cache/huggingface \
-  transcendence
+  mcp-tuna
 
 # CPU (data + eval only, no torch)
-docker build --target cpu -t transcendence-cpu .
-docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... transcendence-cpu
+docker build --target cpu -t mcp-tuna-cpu .
+docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... mcp-tuna-cpu
 
 # docker compose (includes PostgreSQL)
 docker compose up -d
@@ -243,7 +243,7 @@ Then connect any MCP client via HTTP:
 
 ```toml
 # Codex example
-[mcp_servers.transcendence]
+[mcp_servers.mcp-tuna]
 url = "http://localhost:8000/mcp"
 ```
 
@@ -306,7 +306,7 @@ python scripts/run_gateway.py http 8000
 ## Project Structure
 
 ```
-transcendence/
+mcp-tuna/
 ├── mcp_gateway.py              # Unified MCP gateway (84 tools)
 ├── scripts/                    # Entry points for all servers
 ├── servers/                    # Standalone split server implementations

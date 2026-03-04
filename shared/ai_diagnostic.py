@@ -1,5 +1,5 @@
 """
-AI Diagnostic Writer for Transcendence.
+AI Diagnostic Writer for MCP Tuna.
 
 Synchronous writer that lets Claude (running as a Claude Code session)
 record diagnostic findings and request additional data.

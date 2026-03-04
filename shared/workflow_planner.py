@@ -156,12 +156,12 @@ def _orchestration_steps() -> List[PlannedStep]:
 # ---------------------------------------------------------------------------
 
 _SERVERS: Dict[str, List[str]] = {
-    "end_to_end": ["transcendence-data", "transcendence-eval", "transcendence-train", "transcendence-host"],
-    "generate_data": ["transcendence-data", "transcendence-eval"],
-    "fine_tune": ["transcendence-train"],
-    "evaluate": ["transcendence-eval"],
-    "deploy": ["transcendence-host"],
-    "orchestration": ["transcendence-orchestrate", "transcendence-train"],
+    "end_to_end": ["mcp-tuna-data", "mcp-tuna-eval", "mcp-tuna-train", "mcp-tuna-host"],
+    "generate_data": ["mcp-tuna-data", "mcp-tuna-eval"],
+    "fine_tune": ["mcp-tuna-train"],
+    "evaluate": ["mcp-tuna-eval"],
+    "deploy": ["mcp-tuna-host"],
+    "orchestration": ["mcp-tuna-orchestrate", "mcp-tuna-train"],
 }
 
 _NOTES: Dict[str, List[str]] = {

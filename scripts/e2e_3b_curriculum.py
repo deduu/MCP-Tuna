@@ -1,6 +1,6 @@
 """
-Transcendence E2E — SFT Curriculum Training: Llama 3.2 3B on 4 GB VRAM
-========================================================================
+MCP Tuna E2E — SFT Curriculum Training: Llama 3.2 3B on 4 GB VRAM
+===================================================================
 
 Trains Llama-3.2-3B-Instruct with 4-bit QLoRA using single-pass curriculum
 learning: dataset sorted by complexity (easy -> hard), trained in one SFT call.
@@ -15,7 +15,7 @@ VRAM budget (RTX 3050 Ti, 4 GB):
   Total:                 ~2.55 GB  -> fits in 4 GB
 
 Usage:
-    cd transcendence
+    cd mcp-tuna
     uv run python scripts/e2e_3b_curriculum.py
 """
 from __future__ import annotations
@@ -72,7 +72,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  Transcendence E2E: 3B SFT Curriculum Training + Two-Step Evaluation")
+    print("  MCP Tuna E2E: 3B SFT Curriculum Training + Two-Step Evaluation")
     print("=" * 70)
 
     # ── Verify paths ──
@@ -91,8 +91,8 @@ async def main():
     print("  [1/6] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import TranscendenceGateway
-    gateway = TranscendenceGateway()
+    from mcp_gateway import TunaGateway
+    gateway = TunaGateway()
     print(f"  Registered {len(gateway.mcp._tools)} tools")
 
     # ── Check system resources ──

@@ -3,10 +3,10 @@ Demo: API Request with MCP-Wired Agent
 =======================================
 
 Shows that regular OpenAI-compatible API requests automatically get
-tool-equipped agents when the Transcendence gateway is running.
+tool-equipped agents when the MCP Tuna gateway is running.
 
 Prerequisites:
-    - Transcendence Gateway running: python scripts/run_gateway.py http 8000
+    - MCP Tuna Gateway running: python scripts/run_gateway.py http 8000
     - App server running: uvicorn app.api.api_chat:app --port 8080
     - OPENAI_API_KEY set in environment
 

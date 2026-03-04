@@ -1,16 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
-  "name": "transcendence",
-  "display_name": "Transcendence",
+  "name": "mcp-tuna",
+  "display_name": "MCP Tuna",
   "description": "End-to-end LLM fine-tuning platform — generate, clean, normalize, evaluate, train, and host models via MCP tools.",
   "vendor": {
-    "name": "Transcendence",
+    "name": "MCP Tuna",
     "url": "https://github.com/deduu/AgentY"
   },
   "license": "MIT",
   "runtime": "python",
   "config": {
-    "command": "transcendence-gateway",
+    "command": "mcp-tuna-gateway",
     "args": [],
     "env": {
       "OPENAI_API_KEY": {
@@ -24,7 +24,7 @@
     }
   },
   "packages": {
-    "pypi": "transcendence[all-servers]"
+    "pypi": "mcp-tuna[all-servers]"
   },
   "categories": ["machine-learning", "data-processing"],
   "tags": ["fine-tuning", "llm", "sft", "dpo", "grpo", "lora", "training", "datasets", "evaluation"],

@@ -1,4 +1,4 @@
-"""Entry point for transcendence-train (training MCP server).
+"""Entry point for mcp-tuna-train (training MCP server).
 
 Usage:
     python -m scripts.run_train_server           # stdio mode
@@ -10,7 +10,7 @@ from servers.train_server import TrainServer
 
 
 def main():
-    server_main(TrainServer, "transcendence-train", default_port=8013)
+    server_main(TrainServer, "mcp-tuna-train", default_port=8013)
 
 
 if __name__ == "__main__":

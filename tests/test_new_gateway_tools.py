@@ -14,8 +14,8 @@ import pytest
 def _get_gateway_tool_names() -> set[str]:
     """Instantiate gateway and return all registered tool names."""
     with patch("mcp_gateway.load_dotenv"):
-        from mcp_gateway import TranscendenceGateway
-        gw = TranscendenceGateway()
+        from mcp_gateway import TunaGateway
+        gw = TunaGateway()
         return set(gw.mcp._tools.keys())
 
 
