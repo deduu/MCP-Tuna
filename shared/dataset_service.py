@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import random
@@ -49,11 +50,11 @@ class DatasetService:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if format == "jsonl":
-            self._write_jsonl(path, data_points)
+            await asyncio.to_thread(self._write_jsonl, path, data_points)
         elif format == "json":
-            self._write_json(path, data_points)
+            await asyncio.to_thread(self._write_json, path, data_points)
         elif format == "parquet":
-            self._write_parquet(path, data_points)
+            await asyncio.to_thread(self._write_parquet, path, data_points)
 
         columns = list(data_points[0].keys()) if data_points else []
         meta = DatasetMetadata(
@@ -82,13 +83,13 @@ class DatasetService:
             return {"success": False, "error": f"Unsupported extension: {ext}"}
 
         if ext == ".jsonl":
-            data_points = self._read_jsonl(path)
+            data_points = await asyncio.to_thread(self._read_jsonl, path)
         elif ext == ".json":
-            data_points = self._read_json(path)
+            data_points = await asyncio.to_thread(self._read_json, path)
         elif ext == ".parquet":
-            data_points = self._read_parquet(path)
+            data_points = await asyncio.to_thread(self._read_parquet, path)
         elif ext == ".csv":
-            data_points = self._read_csv(path)
+            data_points = await asyncio.to_thread(self._read_csv, path)
         else:
             return {"success": False, "error": f"Unsupported extension: {ext}"}
 
@@ -114,7 +115,7 @@ class DatasetService:
         ext = path.suffix.lower()
 
         if ext == ".jsonl":
-            rows, total = self._preview_jsonl(path, n)
+            rows, total = await asyncio.to_thread(self._preview_jsonl, path, n)
         else:
             # For other formats fall back to full load then slice
             full = await self.load(file_path)
@@ -147,7 +148,7 @@ class DatasetService:
 
         # Determine row count and columns efficiently
         if ext == ".jsonl":
-            row_count, columns = self._inspect_jsonl(path)
+            row_count, columns = await asyncio.to_thread(self._inspect_jsonl, path)
         else:
             full = await self.load(file_path)
             if not full["success"]:

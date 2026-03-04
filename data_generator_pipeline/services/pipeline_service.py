@@ -16,6 +16,9 @@ Key changes:
 # FILE: src/finetuning/services/pipeline_service.py
 # ============================================================================
 
+from __future__ import annotations
+
+import asyncio
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 from dataclasses import asdict
@@ -62,7 +65,7 @@ class PipelineService:
         """
         try:
             loader = get_loader(file_path)
-            file_name, pages = loader.load(file_path)
+            file_name, pages = await asyncio.to_thread(loader.load, file_path)
 
             return {
                 "success": True,
@@ -272,7 +275,9 @@ class PipelineService:
         try:
             # Ensure directory exists
             output_file = Path(output_path)
-            output_file.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                output_file.parent.mkdir, parents=True, exist_ok=True
+            )
 
             # Export based on format
             exporters = {
@@ -290,7 +295,7 @@ class PipelineService:
                     "available_formats": list(exporters.keys()),
                 }
 
-            exporters[format](data_points, output_path)
+            await asyncio.to_thread(exporters[format], data_points, output_path)
 
             return {
                 "success": True,

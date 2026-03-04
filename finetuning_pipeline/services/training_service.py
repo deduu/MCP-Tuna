@@ -5,9 +5,11 @@ run without torch/transformers installed.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import inspect
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -141,12 +143,41 @@ class TrainingService:
             target_modules=target_modules,
         )
 
+    @staticmethod
+    def _preflight_bnb_check() -> bool:
+        """Verify bitsandbytes CUDA kernels in a subprocess.
+
+        If the import or kernel init segfaults, only the subprocess dies
+        — the MCP server stays alive.  Returns True when safe to use 4-bit.
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "import bitsandbytes; "
+            "import torch; "
+            "torch.cuda.is_available(); "
+            "print('ok')"
+        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return result.returncode == 0 and "ok" in result.stdout
+        except Exception:
+            return False
+
     def _load_model_and_tokenizer(
         self, model_name: str, kwargs: dict
     ) -> tuple[Any, Any]:
         """Load tokenizer + model with optional 4-bit quantization."""
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        logger = logging.getLogger(__name__)
 
         local_files_only = bool(kwargs.pop("local_files_only", False))
         load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
@@ -165,23 +196,31 @@ class TrainingService:
 
         quantization_config = None
         if load_in_4bit:
-            try:
-                import bitsandbytes  # noqa: F401
-                from transformers import BitsAndBytesConfig
-
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                    bnb_4bit_use_double_quant=True,
+            # Preflight: verify bitsandbytes kernels in an isolated subprocess
+            # so a CUDA segfault doesn't kill the MCP server.
+            if not self._preflight_bnb_check():
+                logger.warning(
+                    "bitsandbytes preflight failed — falling back to "
+                    "float16/bfloat16 without 4-bit quantization"
                 )
-            except Exception:
-                quantization_config = None
+            else:
+                try:
+                    import bitsandbytes  # noqa: F401
+                    from transformers import BitsAndBytesConfig
+
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=torch.bfloat16,
+                        bnb_4bit_use_double_quant=True,
+                    )
+                except Exception:
+                    quantization_config = None
 
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map="auto",
-            torch_dtype=model_dtype,
+            dtype=model_dtype,
             quantization_config=quantization_config,
             local_files_only=local_files_only,
             low_cpu_mem_usage=True,
@@ -406,7 +445,9 @@ class TrainingService:
                 if eval_result.get("success"):
                     evaluation_dataset = eval_result["dataset_object"]
 
-            model, tokenizer = self._load_model_and_tokenizer(model_name, kwargs)
+            model, tokenizer = await asyncio.to_thread(
+                self._load_model_and_tokenizer, model_name, kwargs
+            )
             cuda_available, bf16_supported = self._detect_precision()
 
             def to_text(example: Dict[str, Any]) -> Dict[str, str]:
@@ -504,12 +545,17 @@ class TrainingService:
 
             trainer = SFTTrainer(**trainer_kwargs)
 
-            interrupted = False
-            try:
-                trainer.train(resume_from_checkpoint=checkpoint)
-            except KeyboardInterrupt:
-                interrupted = True
-                self._save_on_interrupt(trainer, tokenizer, output_dir)
+            def _train_sync():
+                """Run blocking training in a thread."""
+                _interrupted = False
+                try:
+                    trainer.train(resume_from_checkpoint=checkpoint)
+                except KeyboardInterrupt:
+                    _interrupted = True
+                    self._save_on_interrupt(trainer, tokenizer, output_dir)
+                return _interrupted
+
+            interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 trainer.save_model(output_dir)
@@ -625,7 +671,9 @@ class TrainingService:
                     "columns": list(dataset.column_names),
                 }
 
-            model, tokenizer = self._load_model_and_tokenizer(model_name, kwargs)
+            model, tokenizer = await asyncio.to_thread(
+                self._load_model_and_tokenizer, model_name, kwargs
+            )
             cuda_available, bf16_supported = self._detect_precision()
 
             peft_config = None
@@ -666,12 +714,16 @@ class TrainingService:
 
             trainer = DPOTrainer(**trainer_kwargs)
 
-            interrupted = False
-            try:
-                trainer.train(resume_from_checkpoint=checkpoint)
-            except KeyboardInterrupt:
-                interrupted = True
-                self._save_on_interrupt(trainer, tokenizer, output_dir)
+            def _train_sync():
+                _interrupted = False
+                try:
+                    trainer.train(resume_from_checkpoint=checkpoint)
+                except KeyboardInterrupt:
+                    _interrupted = True
+                    self._save_on_interrupt(trainer, tokenizer, output_dir)
+                return _interrupted
+
+            interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 trainer.save_model(output_dir)
@@ -785,7 +837,9 @@ class TrainingService:
                 [c for c in dataset.column_names if c != "prompt"]
             )
 
-            model, tokenizer = self._load_model_and_tokenizer(model_name, kwargs)
+            model, tokenizer = await asyncio.to_thread(
+                self._load_model_and_tokenizer, model_name, kwargs
+            )
             cuda_available, bf16_supported = self._detect_precision()
             training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
 
@@ -826,12 +880,16 @@ class TrainingService:
 
             trainer = GRPOTrainer(**trainer_kwargs)
 
-            interrupted = False
-            try:
-                trainer.train(resume_from_checkpoint=checkpoint)
-            except KeyboardInterrupt:
-                interrupted = True
-                self._save_on_interrupt(trainer, tokenizer, output_dir)
+            def _train_sync():
+                _interrupted = False
+                try:
+                    trainer.train(resume_from_checkpoint=checkpoint)
+                except KeyboardInterrupt:
+                    _interrupted = True
+                    self._save_on_interrupt(trainer, tokenizer, output_dir)
+                return _interrupted
+
+            interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 trainer.save_model(output_dir)
@@ -926,7 +984,9 @@ class TrainingService:
                     "columns": list(dataset.column_names),
                 }
 
-            model, tokenizer = self._load_model_and_tokenizer(model_name, kwargs)
+            model, tokenizer = await asyncio.to_thread(
+                self._load_model_and_tokenizer, model_name, kwargs
+            )
             cuda_available, bf16_supported = self._detect_precision()
 
             peft_config = None
@@ -971,12 +1031,16 @@ class TrainingService:
 
             trainer = KTOTrainer(**trainer_kwargs)
 
-            interrupted = False
-            try:
-                trainer.train(resume_from_checkpoint=checkpoint)
-            except KeyboardInterrupt:
-                interrupted = True
-                self._save_on_interrupt(trainer, tokenizer, output_dir)
+            def _train_sync():
+                _interrupted = False
+                try:
+                    trainer.train(resume_from_checkpoint=checkpoint)
+                except KeyboardInterrupt:
+                    _interrupted = True
+                    self._save_on_interrupt(trainer, tokenizer, output_dir)
+                return _interrupted
+
+            interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 trainer.save_model(output_dir)

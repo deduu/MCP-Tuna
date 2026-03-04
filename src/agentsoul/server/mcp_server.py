@@ -438,10 +438,12 @@ class HTTPTransport(Transport):
 
                     try:
                         # Call the function (handle both sync and async)
+                        # Sync functions are offloaded to a thread so they
+                        # don't block the event loop and starve other requests.
                         if inspect.iscoroutinefunction(func):
                             result = await func(**arguments)
                         else:
-                            result = func(**arguments)
+                            result = await asyncio.to_thread(func, **arguments)
 
                         # Format the result
                         if isinstance(result, str):

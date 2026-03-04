@@ -2,11 +2,15 @@
 # FILE: src/finetuning/core/pipeline.py
 # ============================================================================
 
+from __future__ import annotations
+
+import logging
 from typing import List, Dict, Type
 from dataclasses import asdict
-import tqdm
 from .base import BaseGenerator
 from ..models.datapoints import BaseDataPoint
+
+logger = logging.getLogger(__name__)
 
 
 class FineTuningPipeline:
@@ -29,9 +33,11 @@ class FineTuningPipeline:
     ) -> List[BaseDataPoint]:
         """Process all pages and return structured data points."""
         results = []
+        total = len(pages)
 
-        for page in tqdm.tqdm(pages, desc=f"Processing {file_name}"):
+        for idx, page in enumerate(pages, 1):
             try:
+                logger.info("Processing %s page %d/%d", file_name, idx, total)
                 items = await self.generator.generate_from_page(
                     page["markdown"],
                     **generator_kwargs
@@ -51,7 +57,7 @@ class FineTuningPipeline:
                     results.append(data_point)
 
             except Exception as e:
-                print(f"❌ Page {page['index'] + 1} failed: {e}")
+                logger.error("Page %d failed: %s", page["index"] + 1, e)
                 if self.generator.debug:
                     raise
 

@@ -9,6 +9,7 @@ instruction context so the fine-tuned model learns routing *patterns*,
 not specific tool names.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -260,16 +261,18 @@ class OrchestrationDataService:
         file_format: str = "jsonl",
     ) -> Dict[str, Any]:
         """Export training data to file."""
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            Path(output_path).parent.mkdir, parents=True, exist_ok=True
+        )
 
         if file_format == "jsonl":
-            DatasetExporter.to_jsonl(data, output_path)
+            await asyncio.to_thread(DatasetExporter.to_jsonl, data, output_path)
         elif file_format == "json":
-            DatasetExporter.to_json(data, output_path)
+            await asyncio.to_thread(DatasetExporter.to_json, data, output_path)
         elif file_format == "huggingface":
-            DatasetExporter.to_huggingface(data, output_path)
+            await asyncio.to_thread(DatasetExporter.to_huggingface, data, output_path)
         else:
-            DatasetExporter.to_jsonl(data, output_path)
+            await asyncio.to_thread(DatasetExporter.to_jsonl, data, output_path)
 
         return {
             "success": True,
