@@ -49,6 +49,7 @@ htmlcov/
 # Logs — per-session JSONL and AI diagnostic data are gitignored;
 # logs/CLAUDE.md is tracked so Claude knows how to use the system.
 *.log
+*.log.*
 logs/sessions/
 logs/ai_diagnostics/*.jsonl
 !logs/CLAUDE.md
