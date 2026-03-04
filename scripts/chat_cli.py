@@ -1,5 +1,5 @@
 """
-AgentY CLI Chat — Interactive REPL for chatting with fine-tuned models.
+Transcendence CLI Chat — Interactive REPL for chatting with fine-tuned models.
 
 Usage:
     # API mode (connect to a deployed model):
@@ -77,7 +77,7 @@ def _print_banner(info: dict) -> None:
     """Print the welcome banner with session info."""
     sys.stdout.write("\n")
     sys.stdout.write("=" * 50 + "\n")
-    sys.stdout.write("  AgentY Chat\n")
+    sys.stdout.write("  Transcendence Chat\n")
     sys.stdout.write("=" * 50 + "\n")
 
     mode = info.get("mode", "unknown")

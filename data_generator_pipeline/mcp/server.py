@@ -17,7 +17,7 @@ class GeneratorMCPServer:
 
     def __init__(self, llm_provider, config: Union[GeneratorConfig, Dict[str, Any]]):
         self.service = PipelineService(llm_provider, config)
-        self.mcp = MCPServer("generator-pipeline", "1.0.0")
+        self.mcp = MCPServer("transcendence-generator", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):

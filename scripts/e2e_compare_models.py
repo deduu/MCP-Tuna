@@ -1,12 +1,12 @@
 """
-AgentY E2E Test — Compare base vs fine-tuned Llama 3.2 3B-Instruct via MCP Gateway
-=====================================================================================
+Transcendence E2E Test — Compare base vs fine-tuned Llama 3.2 3B-Instruct via MCP Gateway
+===========================================================================================
 
 Uses the `test.inference` and `test.compare_models` MCP tools to compare
 the base model against the LoRA-adapted model on the SKK test set.
 
 Usage:
-    cd AgentY
+    cd transcendence
     uv run python scripts/e2e_compare_models.py
 """
 from __future__ import annotations
@@ -65,7 +65,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  AgentY E2E: Base vs Fine-tuned Model Comparison")
+    print("  Transcendence E2E: Base vs Fine-tuned Model Comparison")
     print("=" * 70)
 
     # ── Load config + test data ──
@@ -93,8 +93,8 @@ async def main():
 
     # ── Initialize gateway ──
     print("\n  Initializing MCP Gateway...")
-    from mcp_gateway import AgentYGateway
-    gateway = AgentYGateway()
+    from mcp_gateway import TranscendenceGateway
+    gateway = TranscendenceGateway()
     print(f"  Tools: {len(gateway.mcp._tools)} registered")
 
     # ── Compare models ──

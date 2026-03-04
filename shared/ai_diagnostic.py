@@ -1,5 +1,5 @@
 """
-AI Diagnostic Writer for AgentY.
+AI Diagnostic Writer for Transcendence.
 
 Synchronous writer that lets Claude (running as a Claude Code session)
 record diagnostic findings and request additional data.

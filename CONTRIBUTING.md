@@ -7,7 +7,7 @@ Thanks for your interest in contributing!
 ```bash
 # Clone and install
 git clone https://github.com/deduu/AgentY.git
-cd AgentY
+cd transcendence
 uv sync --all-extras
 
 # Verify

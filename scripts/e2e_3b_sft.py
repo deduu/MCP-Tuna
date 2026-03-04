@@ -1,6 +1,6 @@
 """
-AgentY E2E — Regular SFT: Llama 3.2 3B on 4 GB VRAM
-=====================================================
+Transcendence E2E — Regular SFT: Llama 3.2 3B on 4 GB VRAM
+=============================================================
 
 Trains Llama-3.2-3B-Instruct with 4-bit QLoRA using standard SFT
 (no curriculum ordering), then evaluates with the two-step pipeline.
@@ -14,7 +14,7 @@ VRAM budget (RTX 3050 Ti, 4 GB):
   Total:                 ~2.55 GB  -> fits in 4 GB
 
 Usage:
-    cd AgentY
+    cd transcendence
     uv run python scripts/e2e_3b_sft.py
 """
 from __future__ import annotations
@@ -71,7 +71,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  AgentY E2E: 3B Regular SFT + Two-Step Evaluation")
+    print("  Transcendence E2E: 3B Regular SFT + Two-Step Evaluation")
     print("=" * 70)
 
     # ── Verify paths ──
@@ -90,8 +90,8 @@ async def main():
     print("  [1/6] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import AgentYGateway
-    gateway = AgentYGateway()
+    from mcp_gateway import TranscendenceGateway
+    gateway = TranscendenceGateway()
     print(f"  Registered {len(gateway.mcp._tools)} tools")
 
     # ── Check system resources ──

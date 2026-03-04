@@ -70,7 +70,7 @@ class TrainServer:
             ), indent=2)
 
         @self.mcp.tool(name="system.setup_check",
-                       description="Validate all prerequisites for AgentY")
+                       description="Validate all prerequisites for Transcendence")
         async def setup_check() -> str:
             checks = []
             has_key = bool(os.getenv("OPENAI_API_KEY"))

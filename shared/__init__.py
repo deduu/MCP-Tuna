@@ -1,1 +1,1 @@
-"""AgentY shared foundation — unified models, providers, registries, and configs."""
+"""Transcendence shared foundation — unified models, providers, registries, and configs."""

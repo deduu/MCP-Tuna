@@ -120,8 +120,8 @@ def test_hosting_tool_description_mentions_model_path_input(
 @pytest.mark.asyncio
 @patch("app.core.agent_factory.get_registry")
 async def test_agenty_system_prompt_used_when_gateway_connected(mock_registry):
-    """When MCP servers include an AgentY gateway, the system prompt should be set."""
-    from app.core.agent_factory import AGENTY_SYSTEM_PROMPT
+    """When MCP servers include a Transcendence gateway, the system prompt should be set."""
+    from app.core.agent_factory import TRANSCENDENCE_SYSTEM_PROMPT
 
     mock_provider = AsyncMock()
     mock_registry.return_value.get = AsyncMock(return_value=mock_provider)
@@ -142,16 +142,16 @@ async def test_agenty_system_prompt_used_when_gateway_connected(mock_registry):
             system_prompt=None,
         )
 
-        # AgentSoul.create should have been called with the AgentY prompt
+        # AgentSoul.create should have been called with the Transcendence prompt
         MockAgent.create.assert_called_once()
         call_kwargs = MockAgent.create.call_args
-        assert call_kwargs.kwargs.get("system_prompt") == AGENTY_SYSTEM_PROMPT
+        assert call_kwargs.kwargs.get("system_prompt") == TRANSCENDENCE_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
 @patch("app.core.agent_factory.get_registry")
 async def test_custom_system_prompt_overrides_default(mock_registry):
-    """An explicit system_prompt should NOT be replaced by AGENTY_SYSTEM_PROMPT."""
+    """An explicit system_prompt should NOT be replaced by TRANSCENDENCE_SYSTEM_PROMPT."""
     mock_provider = AsyncMock()
     mock_registry.return_value.get = AsyncMock(return_value=mock_provider)
 
@@ -180,7 +180,7 @@ async def test_custom_system_prompt_overrides_default(mock_registry):
 @pytest.mark.asyncio
 @patch("app.core.agent_factory.get_registry")
 async def test_no_agenty_prompt_when_unrelated_server(mock_registry):
-    """When MCP servers don't include AgentY gateway, default prompt should be None."""
+    """When MCP servers don't include Transcendence gateway, default prompt should be None."""
     mock_provider = AsyncMock()
     mock_registry.return_value.get = AsyncMock(return_value=mock_provider)
 

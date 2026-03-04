@@ -1,13 +1,13 @@
 """
-Demo: AgentSoul + AgentY MCP Gateway
-========================================
+Demo: AgentSoul + Transcendence MCP Gateway
+=============================================
 
-Shows an AI agent autonomously using AgentY pipeline tools via MCP.
+Shows an AI agent autonomously using Transcendence pipeline tools via MCP.
 
 Prerequisites:
     - OPENAI_API_KEY set in environment (or .env file)
-    - AgentY Gateway already running:
-        python -m AgentY.scripts.run_gateway http 8002
+    - Transcendence Gateway already running:
+        python scripts/run_gateway.py http 8002
 
 Usage:
     # Connect to gateway on default port 8002
@@ -90,7 +90,7 @@ async def check_server(url: str, label: str) -> bool:
 
 
 async def run_agent(prompt: str, mcp_tools: list):
-    """Create a AgentSoul wired to MCP servers and run a prompt."""
+    """Create an AgentSoul wired to MCP servers and run a prompt."""
     from agentsoul.providers.openai import OpenAIProvider
     from agentsoul.core.agent import AgentSoul
 
@@ -147,7 +147,7 @@ async def main():
         "type": "mcp",
         "server_label": "transcendence-gateway",
         "server_url": gateway_url,
-        "server_description": "AgentY data pipeline tools",
+        "server_description": "Transcendence data pipeline tools",
     }]
 
     if include_web:
@@ -169,7 +169,7 @@ async def main():
 
     if not all_ok:
         print("\nSome servers are not reachable. Start them first:")
-        print(f"  python -m AgentY.scripts.run_gateway http {port}")
+        print(f"  python scripts/run_gateway.py http {port}")
         if include_web:
             print("  python -m app.services.run_servers web")
         print()

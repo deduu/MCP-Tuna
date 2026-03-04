@@ -1,13 +1,14 @@
 """
-AgentY Unified MCP Gateway
-============================
+Transcendence Unified MCP Gateway
+====================================
 
 Single entry point exposing all pipeline operations as MCP tools.
 Uses agentsoul's MCPServer (production-grade HTTP+stdio transport).
 
-44 tools across 11 namespaces:
-  extract, generate, clean, normalize, evaluate,
-  finetune, test, validate, host, workflow, judge
+84 tools across 16 namespaces:
+  system, extract, generate, clean, normalize, evaluate, evaluate_model,
+  dataset, finetune, test, validate, host, workflow, orchestration,
+  judge, ft_eval
 """
 from __future__ import annotations
 
@@ -33,8 +34,8 @@ from shared.config import (
 )
 
 
-class AgentYGateway:
-    """Unified MCP gateway that composes all AgentY pipeline services."""
+class TranscendenceGateway:
+    """Unified MCP gateway that composes all Transcendence pipeline services."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         load_dotenv(override=False)
@@ -346,7 +347,7 @@ class AgentYGateway:
         @self.mcp.tool(
             name="system.setup_check",
             description=(
-                "Validate all prerequisites for using AgentY: API keys, GPU, "
+                "Validate all prerequisites for using Transcendence: API keys, GPU, "
                 "HuggingFace token, disk space, required Python packages. "
                 "Run this first before any pipeline operation."
             ),
@@ -527,7 +528,7 @@ class AgentYGateway:
         @self.mcp.tool(
             name="generate.from_hf_dataset",
             description=(
-                "Load a dataset from the HuggingFace Hub and return as AgentY "
+                "Load a dataset from the HuggingFace Hub and return as Transcendence "
                 "data_points. Automatically maps columns if the dataset uses "
                 "standard naming (instruction/input/output or prompt/chosen/rejected). "
                 "Use column_mapping JSON to override: e.g., "
@@ -2228,3 +2229,7 @@ class AgentYGateway:
         session_id_var.set(gw_session)
         init_diagnostics(log_root="logs")
         self.mcp.run(transport)
+
+
+# Backwards-compatible alias
+AgentYGateway = TranscendenceGateway

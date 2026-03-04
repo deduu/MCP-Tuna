@@ -4,7 +4,7 @@
   "display_name": "Transcendence",
   "description": "End-to-end LLM fine-tuning platform — generate, clean, normalize, evaluate, train, and host models via MCP tools.",
   "vendor": {
-    "name": "AgentY",
+    "name": "Transcendence",
     "url": "https://github.com/deduu/AgentY"
   },
   "license": "MIT",
@@ -29,6 +29,6 @@
   "categories": ["machine-learning", "data-processing"],
   "tags": ["fine-tuning", "llm", "sft", "dpo", "grpo", "lora", "training", "datasets", "evaluation"],
   "tools": {
-    "count": 83
+    "count": 84
   }
 }

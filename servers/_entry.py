@@ -9,7 +9,7 @@ import sys
 
 
 def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
-    """Standard entry point for all AgentY standalone MCP servers.
+    """Standard entry point for all Transcendence standalone MCP servers.
 
     Usage:
         transcendence-<name>              # stdio mode
@@ -29,7 +29,7 @@ def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
 
     parser = argparse.ArgumentParser(
         prog=name,
-        description=f"{name} — AgentY standalone MCP server.",
+        description=f"{name} — Transcendence standalone MCP server.",
     )
     parser.add_argument(
         "--version", action="version", version="%(prog)s 0.2.0"

@@ -1,4 +1,4 @@
-"""Auto-generate MCP client configuration files for AgentY.
+"""Auto-generate MCP client configuration files for Transcendence.
 
 Supports VS Code, Claude Desktop, Claude Code, and Cursor.
 
@@ -39,7 +39,7 @@ def build_stdio_entry(project_root: Path, *, needs_abs_path: bool = False) -> di
     """Build a stdio-mode server entry dict.
 
     Args:
-        project_root: Absolute path to the AgentY project root.
+        project_root: Absolute path to the Transcendence project root.
         needs_abs_path: If True, uses ``uv --directory <abs>`` for clients
             that don't support CWD (e.g. Claude Desktop).
     """
@@ -224,7 +224,7 @@ def interactive_setup(project_root: Path, *, transport: str, port: int) -> None:
     """Present a numbered menu and set up selected clients."""
     entries = list(ALL_CLIENTS.items())
 
-    print("\nAgentY MCP Setup")
+    print("\nTranscendence MCP Setup")
     print("=" * 40)
     print(f"Project root: {project_root}")
     print(f"Transport:    {transport}\n")
@@ -271,7 +271,7 @@ def interactive_setup(project_root: Path, *, transport: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Auto-generate MCP client configs for AgentY.",
+        description="Auto-generate MCP client configs for Transcendence.",
     )
     parser.add_argument("--all", action="store_true", help="Configure all clients")
     parser.add_argument("--vscode", action="store_true", help="Configure VS Code")

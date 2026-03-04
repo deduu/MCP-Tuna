@@ -6,8 +6,8 @@ from agentsoul.core.agent import AgentSoul
 from app.generation.registry import get_registry
 from app.core.config import settings
 
-AGENTY_SYSTEM_PROMPT = """\
-You are a helpful AI assistant with access to the AgentY fine-tuning platform.
+TRANSCENDENCE_SYSTEM_PROMPT = """\
+You are a helpful AI assistant with access to the Transcendence fine-tuning platform.
 
 When working with fine-tuning workflows, follow these chaining patterns:
 0. CHECK: Before training, call system.preflight_check to verify hardware can handle the model + config. Use system.check_resources to see current GPU/RAM/disk status.
@@ -46,14 +46,14 @@ async def create_agent(
 
     tools = _build_tool_configs(mcp_servers)
 
-    # Use AgentY-aware prompt when connected to the gateway and no custom prompt
+    # Use Transcendence-aware prompt when connected to the gateway and no custom prompt
     if system_prompt is None and tools:
         server_configs = mcp_servers or [
             {"server_label": s.server_label} for s in settings.mcp.servers
         ]
         labels = {s.get("server_label", "").lower() for s in server_configs}
         if any("transcendence" in label for label in labels):
-            system_prompt = AGENTY_SYSTEM_PROMPT
+            system_prompt = TRANSCENDENCE_SYSTEM_PROMPT
 
     if tools:
         agent = await AgentSoul.create(

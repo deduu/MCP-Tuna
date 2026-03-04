@@ -1,4 +1,4 @@
-"""Pipeline orchestration — end-to-end workflows composing all AgentY services."""
+"""Pipeline orchestration — end-to-end workflows composing all Transcendence services."""
 
 from .trajectory import TrajectoryRecorder, Trajectory, TurnRecord
 from .rewards import OrchestrationRewardFunction

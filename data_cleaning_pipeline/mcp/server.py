@@ -13,7 +13,7 @@ class CleaningMCPServer:
 
     def __init__(self):
         self.service = DataCleaningService()
-        self.mcp = MCPServer("cleaning-pipeline", "1.0.0")
+        self.mcp = MCPServer("transcendence-cleaner", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):

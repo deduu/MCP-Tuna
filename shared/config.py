@@ -1,4 +1,4 @@
-"""Pydantic configuration schemas for all AgentY pipelines."""
+"""Pydantic configuration schemas for all Transcendence pipelines."""
 
 from typing import Dict, List, Optional
 from pydantic import BaseModel

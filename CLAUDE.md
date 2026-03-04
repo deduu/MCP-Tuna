@@ -1,11 +1,11 @@
-# AgentY — Development Rules
+# Transcendence — Development Rules
 
 ## Project Overview
-AgentY is an end-to-end LLM fine-tuning platform. It supports two workflow paths:
+Transcendence is an end-to-end LLM fine-tuning platform. It supports two workflow paths:
 - **Document Path:** Load docs → Generate (SFT/DPO/GRPO/KTO) → Clean → Normalize → Evaluate → Filter → Train → Host
 - **Orchestration Path:** Generate problems → Collect agent trajectories → Score (accuracy + cost + latency) → Format → Train → Host
 
-Exposed as 28 MCP tools via unified gateway. FastAPI backend provides an OpenAI-compatible API powered by the bundled AgentSoul framework.
+Exposed as 84 MCP tools via unified gateway. FastAPI backend provides an OpenAI-compatible API powered by the bundled AgentSoul framework.
 
 ## Tech Stack
 - Python 3.11, FastAPI, Pydantic v2, asyncio
@@ -24,7 +24,7 @@ Exposed as 28 MCP tools via unified gateway. FastAPI backend provides an OpenAI-
 - `uv run pytest -x -q` — stop on first failure, quiet
 - `uv run ruff check .` — lint
 - `uv run ruff format .` — format
-- `python AgentY/scripts/run_gateway.py` — start MCP gateway (port 8002)
+- `python scripts/run_gateway.py` — start MCP gateway (port 8002)
 - `docker compose up -d` — start PostgreSQL
 
 ## Architecture (MANDATORY)
@@ -77,7 +77,7 @@ User → `app/` (FastAPI) → `ChatAPIOrchestrator` → `AgentFactory.create_age
 - `src/agentsoul/` → no application-specific imports ever
 
 ## Code Style
-- Absolute imports: `AgentY.*` or `agentsoul.*`
+- Absolute imports: `shared.*`, `agentsoul.*`, or pipeline-qualified paths
 - `from __future__ import annotations` at top of every file
 - Type annotations on all public functions
 - Pydantic v2 with `model_config`

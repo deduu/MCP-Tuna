@@ -1,6 +1,6 @@
 # Transcendence
 
-End-to-end LLM fine-tuning platform that generates, evaluates, and trains on custom datasets. Exposed as **82 MCP tools** across 11 namespaces — first-of-its-kind for the MCP ecosystem.
+End-to-end LLM fine-tuning platform that generates, evaluates, and trains on custom datasets. Exposed as **84 MCP tools** across 16 namespaces — first-of-its-kind for the MCP ecosystem.
 
 ## Quick Start
 
@@ -31,7 +31,13 @@ Install only what you need:
 | `training` | LoRA fine-tuning | torch, transformers, peft, trl |
 | `hosting` | Model deployment | torch, transformers, fastapi |
 | `orchestration` | Agent trajectory training data | openai |
-| `all-servers` | Everything above | all |
+| `export` | GGUF model export | llama-cpp-python |
+| `backend` | FastAPI backend + PostgreSQL | sqlalchemy, asyncpg |
+| `memory` | Agent memory (vector store) | chromadb |
+| `retrieval` | Retrieval (BM25 + FAISS) | faiss-cpu, rank-bm25 |
+| `tracing` | Observability | auditi |
+| `dev` | Development tools | pytest, ruff |
+| `all-servers` | All server extras | all |
 
 ```bash
 # Data generation only (no GPU needed)
@@ -45,13 +51,16 @@ pip install transcendence[training,hosting]
 
 | Server | Command | Tools | Required extra |
 |--------|---------|-------|----------------|
-| **Unified Gateway** | `transcendence-gateway` | 82 | `all-servers` |
+| **Unified Gateway** | `transcendence-gateway` | 84 | `all-servers` |
 | Data Prep | `transcendence-data` | 22 | `data` |
 | Evaluation | `transcendence-eval` | 4 | `eval` |
 | Model Eval | `transcendence-model-eval` | 15 | `model-eval` |
 | Training | `transcendence-train` | 11 | `training` |
 | Hosting | `transcendence-host` | 5 | `hosting` |
 | Orchestration | `transcendence-orchestrate` | 3 | `orchestration` |
+| Chat | `transcendence-chat` | — | `hosting` |
+
+The gateway exposes 24 additional tools beyond the split servers: system utilities, dataset management, workflow planner, advanced judge (LLM-as-judge), fine-tune evaluation, and model evaluation tools.
 
 All servers support two transport modes:
 
@@ -297,8 +306,8 @@ python scripts/run_gateway.py http 8000
 ## Project Structure
 
 ```
-AgentY/
-├── mcp_gateway.py              # Unified MCP gateway (82 tools)
+transcendence/
+├── mcp_gateway.py              # Unified MCP gateway (84 tools)
 ├── scripts/                    # Entry points for all servers
 ├── servers/                    # Standalone split server implementations
 ├── shared/                     # Cross-pipeline models, config, utilities

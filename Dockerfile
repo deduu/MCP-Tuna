@@ -1,5 +1,5 @@
 # ============================================================================
-# AgentY — Multi-stage Dockerfile
+# Transcendence — Multi-stage Dockerfile
 #
 # Build targets:
 #   docker build -t transcendence .                    # GPU (default)

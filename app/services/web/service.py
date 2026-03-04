@@ -50,7 +50,7 @@ class WebService:
                 resp = await client.get(
                     "https://html.duckduckgo.com/html/",
                     params={"q": query},
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; AgentY/1.0)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; Transcendence/1.0)"},
                 )
                 resp.raise_for_status()
 

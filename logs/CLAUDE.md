@@ -1,7 +1,7 @@
-# AgentY Diagnostic Logs — AI Agent Guide
+# Transcendence Diagnostic Logs — AI Agent Guide
 
 This file tells you (Claude) exactly how to read session logs, write findings,
-and request additional data when diagnosing bugs in the AgentY backend.
+and request additional data when diagnosing bugs in the Transcendence backend.
 
 ---
 

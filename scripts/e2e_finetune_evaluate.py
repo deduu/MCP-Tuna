@@ -1,12 +1,12 @@
 """
-AgentY E2E Test — Fine-tune Llama 3.2 3B-Instruct + Compare via MCP Gateway
-=============================================================================
+Transcendence E2E Test — Fine-tune Llama 3.2 3B-Instruct + Compare via MCP Gateway
+=====================================================================================
 
 Exercises the full MCP tool chain:
   finetune.train  →  test.compare_models (base vs fine-tuned)
 
 Usage:
-    cd AgentY
+    cd transcendence
     uv run python scripts/e2e_finetune_evaluate.py
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ async def main():
     wall_start = time.time()
 
     print("=" * 70)
-    print("  AgentY E2E Test: Fine-tune + Evaluate via MCP Gateway")
+    print("  Transcendence E2E Test: Fine-tune + Evaluate via MCP Gateway")
     print("=" * 70)
 
     # ── Validate prerequisites ──
@@ -93,8 +93,8 @@ async def main():
     print("  [1/5] Initializing MCP Gateway...")
     print("-" * 70)
 
-    from mcp_gateway import AgentYGateway
-    gateway = AgentYGateway()
+    from mcp_gateway import TranscendenceGateway
+    gateway = TranscendenceGateway()
 
     tool_names = list(gateway.mcp._tools.keys())
     print(f"  Registered {len(tool_names)} tools")

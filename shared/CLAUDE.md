@@ -35,7 +35,7 @@ metric's `compute()` method must call an LLM synchronously.
 
 ## Exception Hierarchy (to create in rebuild)
 ```
-AgentYError (base)
+TranscendenceError (base)
 ├── PipelineError
 │   ├── GenerationError
 │   ├── EvaluationError

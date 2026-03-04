@@ -13,7 +13,7 @@ class EvaluatorMCPServer:
 
     def __init__(self, config: Optional[EvaluatorConfig] = None):
         self.service = EvaluatorService(config)
-        self.mcp = MCPServer("evaluator-pipeline", "1.0.0")
+        self.mcp = MCPServer("transcendence-evaluator", "1.0.0")
         self._register_tools()
 
     def _register_tools(self):
