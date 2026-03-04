@@ -6,13 +6,24 @@ load_dotenv()
 
 from agentsoul.providers.base import BaseLLM
 from agentsoul.providers.openai import OpenAIProvider
+from agentsoul.providers.anthropic import AnthropicProvider
+from agentsoul.providers.google import GoogleGeminiProvider
 
 _OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
+_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+_ANTHROPIC_API_BASE = os.getenv("ANTHROPIC_API_BASE")
+_GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 _MODEL_FACTORIES: Dict[str, Callable[..., BaseLLM]] = {
     "gpt-4o": lambda api_key=_OPENAI_API_KEY, base_url=_OPENAI_API_BASE: OpenAIProvider(
         model_id="gpt-4o", api_key=api_key, base_url=base_url
+    ),
+    "claude-sonnet-4-20250514": lambda api_key=_ANTHROPIC_API_KEY, base_url=_ANTHROPIC_API_BASE: AnthropicProvider(
+        model_id="claude-sonnet-4-20250514", api_key=api_key, base_url=base_url
+    ),
+    "gemini-2.0-flash": lambda api_key=_GOOGLE_API_KEY, base_url=None: GoogleGeminiProvider(
+        model_id="gemini-2.0-flash", api_key=api_key,
     ),
 }
 

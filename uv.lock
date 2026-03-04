@@ -186,6 +186,25 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.84.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/04/ea/0869d6df9ef83dcf393aeefc12dd81677d091c6ffc86f783e51cf44062f2/anthropic-0.84.0.tar.gz", hash = "sha256:72f5f90e5aebe62dca316cb013629cfa24996b0f5a4593b8c3d712bc03c43c37", size = 539457, upload-time = "2026-02-25T05:22:38.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/ca/218fa25002a332c0aa149ba18ffc0543175998b1f65de63f6d106689a345/anthropic-0.84.0-py3-none-any.whl", hash = "sha256:861c4c50f91ca45f942e091d83b60530ad6d4f98733bfe648065364da05d29e7", size = 455156, upload-time = "2026-02-25T05:22:40.468Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -814,6 +833,15 @@ wheels = [
 ]
 
 [[package]]
+name = "docstring-parser"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/9d/c3b43da9515bd270df0f80548d9944e389870713cc1fe2b8fb35fe2bcefd/docstring_parser-0.17.0.tar.gz", hash = "sha256:583de4a309722b3315439bb31d64ba3eebada841f2e2cee23b99df001434c912", size = 27442, upload-time = "2025-07-21T07:35:01.868Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/e2/2537ebcff11c1ee1ff17d8d0b6f4db75873e3b0fb32c2d4a2ee31ecb310a/docstring_parser-0.17.0-py3-none-any.whl", hash = "sha256:cf2569abd23dce8099b300f9b4fa8191e9582dda731fd533daf54c4551658708", size = 36896, upload-time = "2025-07-21T07:35:00.684Z" },
+]
+
+[[package]]
 name = "durationpy"
 version = "0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1077,6 +1105,46 @@ wheels = [
 [package.optional-dependencies]
 http = [
     { name = "aiohttp" },
+]
+
+[[package]]
+name = "google-auth"
+version = "2.48.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pyasn1-modules" },
+    { name = "rsa" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/41/242044323fbd746615884b1c16639749e73665b718209946ebad7ba8a813/google_auth-2.48.0.tar.gz", hash = "sha256:4f7e706b0cd3208a3d940a19a822c37a476ddba5450156c3e6624a71f7c841ce", size = 326522, upload-time = "2026-01-26T19:22:47.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/1d/d6466de3a5249d35e832a52834115ca9d1d0de6abc22065f049707516d47/google_auth-2.48.0-py3-none-any.whl", hash = "sha256:2e2a537873d449434252a9632c28bfc268b0adb1e53f9fb62afc5333a975903f", size = 236499, upload-time = "2026-01-26T19:22:45.099Z" },
+]
+
+[package.optional-dependencies]
+requests = [
+    { name = "requests" },
+]
+
+[[package]]
+name = "google-genai"
+version = "1.65.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "google-auth", extra = ["requests"] },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "sniffio" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/79/f9/cc1191c2540d6a4e24609a586c4ed45d2db57cfef47931c139ee70e5874a/google_genai-1.65.0.tar.gz", hash = "sha256:d470eb600af802d58a79c7f13342d9ea0d05d965007cae8f76c7adff3d7a4750", size = 497206, upload-time = "2026-02-26T00:20:33.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/3c/3fea4e7c91357c71782d7dcaad7a2577d636c90317e003386893c25bc62c/google_genai-1.65.0-py3-none-any.whl", hash = "sha256:68c025205856919bc03edb0155c11b4b833810b7ce17ad4b7a9eeba5158f6c44", size = 724429, upload-time = "2026-02-26T00:20:32.186Z" },
 ]
 
 [[package]]
@@ -1792,6 +1860,205 @@ sdist = { url = "https://files.pythonhosted.org/packages/fc/6d/62e76bbb8144d6ed8
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
 ]
+
+[[package]]
+name = "mcp-tuna"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "anthropic" },
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "absl-py" },
+    { name = "accelerate" },
+    { name = "asyncpg" },
+    { name = "auditi" },
+    { name = "bert-score" },
+    { name = "bitsandbytes" },
+    { name = "chromadb" },
+    { name = "datasets" },
+    { name = "evaluate" },
+    { name = "faiss-cpu" },
+    { name = "fastapi" },
+    { name = "hf-xet" },
+    { name = "llama-cpp-python" },
+    { name = "openai" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "rank-bm25" },
+    { name = "rouge-score" },
+    { name = "ruff" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "sentence-transformers" },
+    { name = "sqlalchemy" },
+    { name = "sse-starlette" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
+    { name = "uvicorn" },
+]
+all-servers = [
+    { name = "absl-py" },
+    { name = "accelerate" },
+    { name = "bert-score" },
+    { name = "bitsandbytes" },
+    { name = "datasets" },
+    { name = "evaluate" },
+    { name = "fastapi" },
+    { name = "hf-xet" },
+    { name = "openai" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "rouge-score" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "sentence-transformers" },
+    { name = "sse-starlette" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
+    { name = "uvicorn" },
+]
+backend = [
+    { name = "asyncpg" },
+    { name = "sqlalchemy" },
+]
+data = [
+    { name = "openai" },
+]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+eval = [
+    { name = "openai" },
+    { name = "scikit-learn" },
+]
+export = [
+    { name = "llama-cpp-python" },
+]
+hosting = [
+    { name = "accelerate" },
+    { name = "fastapi" },
+    { name = "sse-starlette" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "uvicorn" },
+]
+memory = [
+    { name = "chromadb" },
+]
+model-eval = [
+    { name = "absl-py" },
+    { name = "evaluate" },
+    { name = "openai" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "rouge-score" },
+]
+model-eval-full = [
+    { name = "absl-py" },
+    { name = "bert-score" },
+    { name = "evaluate" },
+    { name = "openai" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "rouge-score" },
+]
+orchestration = [
+    { name = "openai" },
+]
+retrieval = [
+    { name = "faiss-cpu" },
+    { name = "rank-bm25" },
+]
+tracing = [
+    { name = "auditi" },
+]
+training = [
+    { name = "accelerate" },
+    { name = "bitsandbytes" },
+    { name = "datasets" },
+    { name = "hf-xet" },
+    { name = "peft" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "sentence-transformers" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "absl-py", marker = "extra == 'model-eval'", specifier = ">=2.0" },
+    { name = "accelerate", marker = "extra == 'hosting'", specifier = ">=1.0.0" },
+    { name = "accelerate", marker = "extra == 'training'", specifier = ">=1.0.0" },
+    { name = "anthropic", specifier = ">=0.42" },
+    { name = "asyncpg", marker = "extra == 'backend'", specifier = ">=0.29" },
+    { name = "auditi", marker = "extra == 'tracing'" },
+    { name = "bert-score", marker = "extra == 'model-eval-full'", specifier = ">=0.3" },
+    { name = "bitsandbytes", marker = "extra == 'training'", specifier = ">=0.44.0" },
+    { name = "chromadb", marker = "extra == 'memory'", specifier = ">=0.4" },
+    { name = "datasets", marker = "extra == 'training'" },
+    { name = "evaluate", marker = "extra == 'model-eval'", specifier = ">=0.4" },
+    { name = "faiss-cpu", marker = "extra == 'retrieval'", specifier = ">=1.7" },
+    { name = "fastapi", marker = "extra == 'hosting'", specifier = ">=0.100" },
+    { name = "google-genai", specifier = ">=1.0" },
+    { name = "hf-xet", marker = "extra == 'training'", specifier = ">=1.2.0" },
+    { name = "httpx", specifier = ">=0.25" },
+    { name = "llama-cpp-python", marker = "extra == 'export'", specifier = ">=0.2" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "mcp-tuna", extras = ["all-servers", "backend", "memory", "retrieval", "tracing", "dev", "export"], marker = "extra == 'all'" },
+    { name = "mcp-tuna", extras = ["data", "eval", "model-eval-full", "training", "hosting", "orchestration"], marker = "extra == 'all-servers'" },
+    { name = "mcp-tuna", extras = ["model-eval"], marker = "extra == 'model-eval-full'" },
+    { name = "openai", specifier = ">=1.0" },
+    { name = "openai", marker = "extra == 'data'", specifier = ">=1.0" },
+    { name = "openai", marker = "extra == 'eval'", specifier = ">=1.0" },
+    { name = "openai", marker = "extra == 'model-eval'", specifier = ">=1.0" },
+    { name = "openai", marker = "extra == 'orchestration'", specifier = ">=1.0" },
+    { name = "openpyxl", marker = "extra == 'model-eval'", specifier = ">=3.1" },
+    { name = "pandas", marker = "extra == 'model-eval'", specifier = ">=2.0" },
+    { name = "peft", marker = "extra == 'training'", specifier = ">=0.13" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml" },
+    { name = "rank-bm25", marker = "extra == 'retrieval'", specifier = ">=0.2" },
+    { name = "rouge-score", marker = "extra == 'model-eval'", specifier = ">=0.1" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "scikit-learn", marker = "extra == 'eval'" },
+    { name = "scikit-learn", marker = "extra == 'training'" },
+    { name = "scipy", marker = "extra == 'training'" },
+    { name = "sentence-transformers", marker = "extra == 'training'" },
+    { name = "sqlalchemy", marker = "extra == 'backend'", specifier = ">=2.0" },
+    { name = "sse-starlette", marker = "extra == 'hosting'", specifier = ">=1.0" },
+    { name = "torch", marker = "extra == 'hosting'", specifier = ">=2.3.0", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "torch", marker = "extra == 'training'", specifier = ">=2.3.0", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "tqdm" },
+    { name = "transformers", marker = "extra == 'hosting'" },
+    { name = "transformers", marker = "extra == 'training'" },
+    { name = "trl", marker = "extra == 'training'", specifier = ">=0.12" },
+    { name = "uvicorn", marker = "extra == 'hosting'", specifier = ">=0.20" },
+]
+provides-extras = ["data", "eval", "model-eval", "model-eval-full", "training", "hosting", "orchestration", "export", "backend", "memory", "retrieval", "tracing", "dev", "all-servers", "all"]
 
 [[package]]
 name = "mdurl"
@@ -2897,6 +3164,27 @@ wheels = [
 ]
 
 [[package]]
+name = "pyasn1"
+version = "0.6.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/b6/6e630dff89739fcd427e3f72b3d905ce0acb85a45d4ec3e2678718a3487f/pyasn1-0.6.2.tar.gz", hash = "sha256:9b59a2b25ba7e4f8197db7686c09fb33e658b98339fadb826e9512629017833b", size = 146586, upload-time = "2026-01-16T18:04:18.534Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/b5/a96872e5184f354da9c84ae119971a0a4c221fe9b27a4d94bd43f2596727/pyasn1-0.6.2-py3-none-any.whl", hash = "sha256:1eb26d860996a18e9b6ed05e7aae0e9fc21619fcee6af91cca9bad4fbea224bf", size = 83371, upload-time = "2026-01-16T18:04:17.174Z" },
+]
+
+[[package]]
+name = "pyasn1-modules"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyasn1" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6", size = 307892, upload-time = "2025-03-28T02:41:22.17Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a", size = 181259, upload-time = "2025-03-28T02:41:19.028Z" },
+]
+
+[[package]]
 name = "pybase64"
 version = "1.4.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3654,6 +3942,18 @@ wheels = [
 ]
 
 [[package]]
+name = "rsa"
+version = "4.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyasn1" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/8a/22b7beea3ee0d44b1916c0c1cb0ee3af23b700b6da9f04991899d0c555d4/rsa-4.9.1.tar.gz", hash = "sha256:e7bdbfdb5497da4c07dfd35530e1a902659db6ff241e39d9953cad06ebd0ae75", size = 29034, upload-time = "2025-04-16T09:51:18.218Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl", hash = "sha256:68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762", size = 34696, upload-time = "2025-04-16T09:51:17.142Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.15.4"
 source = { registry = "https://pypi.org/simple" }
@@ -4059,199 +4359,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374, upload-time = "2026-02-03T17:35:50.982Z" },
 ]
-
-[[package]]
-name = "transcendence"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "absl-py" },
-    { name = "accelerate" },
-    { name = "asyncpg" },
-    { name = "auditi" },
-    { name = "bert-score" },
-    { name = "bitsandbytes" },
-    { name = "chromadb" },
-    { name = "datasets" },
-    { name = "evaluate" },
-    { name = "faiss-cpu" },
-    { name = "fastapi" },
-    { name = "hf-xet" },
-    { name = "llama-cpp-python" },
-    { name = "openai" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "rank-bm25" },
-    { name = "rouge-score" },
-    { name = "ruff" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "sentence-transformers" },
-    { name = "sqlalchemy" },
-    { name = "sse-starlette" },
-    { name = "torch" },
-    { name = "transformers" },
-    { name = "trl" },
-    { name = "uvicorn" },
-]
-all-servers = [
-    { name = "absl-py" },
-    { name = "accelerate" },
-    { name = "bert-score" },
-    { name = "bitsandbytes" },
-    { name = "datasets" },
-    { name = "evaluate" },
-    { name = "fastapi" },
-    { name = "hf-xet" },
-    { name = "openai" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "rouge-score" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "sentence-transformers" },
-    { name = "sse-starlette" },
-    { name = "torch" },
-    { name = "transformers" },
-    { name = "trl" },
-    { name = "uvicorn" },
-]
-backend = [
-    { name = "asyncpg" },
-    { name = "sqlalchemy" },
-]
-data = [
-    { name = "openai" },
-]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-eval = [
-    { name = "openai" },
-    { name = "scikit-learn" },
-]
-export = [
-    { name = "llama-cpp-python" },
-]
-hosting = [
-    { name = "accelerate" },
-    { name = "fastapi" },
-    { name = "sse-starlette" },
-    { name = "torch" },
-    { name = "transformers" },
-    { name = "uvicorn" },
-]
-memory = [
-    { name = "chromadb" },
-]
-model-eval = [
-    { name = "absl-py" },
-    { name = "evaluate" },
-    { name = "openai" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "rouge-score" },
-]
-model-eval-full = [
-    { name = "absl-py" },
-    { name = "bert-score" },
-    { name = "evaluate" },
-    { name = "openai" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "rouge-score" },
-]
-orchestration = [
-    { name = "openai" },
-]
-retrieval = [
-    { name = "faiss-cpu" },
-    { name = "rank-bm25" },
-]
-tracing = [
-    { name = "auditi" },
-]
-training = [
-    { name = "accelerate" },
-    { name = "bitsandbytes" },
-    { name = "datasets" },
-    { name = "hf-xet" },
-    { name = "peft" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "sentence-transformers" },
-    { name = "torch" },
-    { name = "transformers" },
-    { name = "trl" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "absl-py", marker = "extra == 'model-eval'", specifier = ">=2.0" },
-    { name = "accelerate", marker = "extra == 'hosting'", specifier = ">=1.0.0" },
-    { name = "accelerate", marker = "extra == 'training'", specifier = ">=1.0.0" },
-    { name = "asyncpg", marker = "extra == 'backend'", specifier = ">=0.29" },
-    { name = "auditi", marker = "extra == 'tracing'" },
-    { name = "bert-score", marker = "extra == 'model-eval-full'", specifier = ">=0.3" },
-    { name = "bitsandbytes", marker = "extra == 'training'", specifier = ">=0.44.0" },
-    { name = "chromadb", marker = "extra == 'memory'", specifier = ">=0.4" },
-    { name = "datasets", marker = "extra == 'training'" },
-    { name = "evaluate", marker = "extra == 'model-eval'", specifier = ">=0.4" },
-    { name = "faiss-cpu", marker = "extra == 'retrieval'", specifier = ">=1.7" },
-    { name = "fastapi", marker = "extra == 'hosting'", specifier = ">=0.100" },
-    { name = "hf-xet", marker = "extra == 'training'", specifier = ">=1.2.0" },
-    { name = "httpx", specifier = ">=0.25" },
-    { name = "llama-cpp-python", marker = "extra == 'export'", specifier = ">=0.2" },
-    { name = "mcp", specifier = ">=1.0" },
-    { name = "openai", marker = "extra == 'data'", specifier = ">=1.0" },
-    { name = "openai", marker = "extra == 'eval'", specifier = ">=1.0" },
-    { name = "openai", marker = "extra == 'model-eval'", specifier = ">=1.0" },
-    { name = "openai", marker = "extra == 'orchestration'", specifier = ">=1.0" },
-    { name = "openpyxl", marker = "extra == 'model-eval'", specifier = ">=3.1" },
-    { name = "pandas", marker = "extra == 'model-eval'", specifier = ">=2.0" },
-    { name = "peft", marker = "extra == 'training'", specifier = ">=0.13" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "pyyaml" },
-    { name = "rank-bm25", marker = "extra == 'retrieval'", specifier = ">=0.2" },
-    { name = "rouge-score", marker = "extra == 'model-eval'", specifier = ">=0.1" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scikit-learn", marker = "extra == 'eval'" },
-    { name = "scikit-learn", marker = "extra == 'training'" },
-    { name = "scipy", marker = "extra == 'training'" },
-    { name = "sentence-transformers", marker = "extra == 'training'" },
-    { name = "sqlalchemy", marker = "extra == 'backend'", specifier = ">=2.0" },
-    { name = "sse-starlette", marker = "extra == 'hosting'", specifier = ">=1.0" },
-    { name = "torch", marker = "extra == 'hosting'", specifier = ">=2.3.0", index = "https://download.pytorch.org/whl/cu124" },
-    { name = "torch", marker = "extra == 'training'", specifier = ">=2.3.0", index = "https://download.pytorch.org/whl/cu124" },
-    { name = "tqdm" },
-    { name = "transcendence", extras = ["all-servers", "backend", "memory", "retrieval", "tracing", "dev", "export"], marker = "extra == 'all'" },
-    { name = "transcendence", extras = ["data", "eval", "model-eval-full", "training", "hosting", "orchestration"], marker = "extra == 'all-servers'" },
-    { name = "transcendence", extras = ["model-eval"], marker = "extra == 'model-eval-full'" },
-    { name = "transformers", marker = "extra == 'hosting'" },
-    { name = "transformers", marker = "extra == 'training'" },
-    { name = "trl", marker = "extra == 'training'", specifier = ">=0.12" },
-    { name = "uvicorn", marker = "extra == 'hosting'", specifier = ">=0.20" },
-]
-provides-extras = ["data", "eval", "model-eval", "model-eval-full", "training", "hosting", "orchestration", "export", "backend", "memory", "retrieval", "tracing", "dev", "all-servers", "all"]
 
 [[package]]
 name = "transformers"
