@@ -2,6 +2,7 @@ import { Settings } from 'lucide-react'
 import { GatewayConnection } from './GatewayConnection'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { EnvironmentSection } from './EnvironmentSection'
+import { ApiKeysSection } from './ApiKeysSection'
 import { MaintenanceSection } from './MaintenanceSection'
 
 export function SettingsPage() {
@@ -20,6 +21,7 @@ export function SettingsPage() {
       <GatewayConnection />
       <DiagnosticsSection />
       <EnvironmentSection />
+      <ApiKeysSection />
       <MaintenanceSection />
     </div>
   )

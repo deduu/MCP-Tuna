@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
-import { useStartTraining } from '@/api/hooks/useTraining'
+import { useStartTraining, useAutoSuggestModel } from '@/api/hooks/useTraining'
 import { useDatasets } from '@/api/hooks/useDatasets'
-import { useToolExecution } from '@/api/hooks/useToolExecution'
+import { mcpCall } from '@/api/client'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Sparkles } from 'lucide-react'
 import { ModelBrowser } from './ModelBrowser'
+import type { AutoPrescribeCandidate } from '@/api/types'
 
 interface NewTrainingPanelProps {
   open: boolean
@@ -50,44 +51,49 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
   const [schemaValid, setSchemaValid] = useState<'pass' | 'warn' | null>(null)
   const [qualityValid, setQualityValid] = useState<'pass' | 'warn' | null>(null)
 
+  const [suggestions, setSuggestions] = useState<AutoPrescribeCandidate[]>([])
+
   const { data: datasets = [] } = useDatasets()
   const startTraining = useStartTraining()
-  const validateTool = useToolExecution()
-  const qualityTool = useToolExecution()
+  const autoSuggest = useAutoSuggestModel()
 
-  // Debounced pre-validation
+  // Debounced pre-validation — uses mcpCall directly to avoid mutation state issues
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const runValidation = useCallback(() => {
+  useEffect(() => {
     if (!datasetPath) {
       setSchemaValid(null)
       setQualityValid(null)
       return
     }
 
-    validateTool.mutate(
-      { toolName: 'validate.schema', args: { dataset_path: datasetPath, technique } },
-      {
-        onSuccess: (res) => setSchemaValid(res.success ? 'pass' : 'warn'),
-        onError: () => setSchemaValid('warn'),
-      },
-    )
-    qualityTool.mutate(
-      { toolName: 'validate.data_quality', args: { dataset_path: datasetPath } },
-      {
-        onSuccess: (res) => setQualityValid(res.success ? 'pass' : 'warn'),
-        onError: () => setQualityValid('warn'),
-      },
-    )
-  }, [datasetPath, technique])
-
-  useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(runValidation, 800)
+    debounceRef.current = setTimeout(() => {
+      mcpCall<{ success: boolean; technique_detected?: string; missing_columns?: string[] }>(
+        'validate.schema', { dataset_path: datasetPath, technique },
+      )
+        .then((res) => {
+          setSchemaValid(res.success ? 'pass' : 'warn')
+          if (!res.success && (res.missing_columns ?? []).length > 0) {
+            const detected = res.technique_detected
+              ? `${res.technique_detected.toUpperCase()} format`
+              : 'unknown format'
+            toast.warning(
+              `Dataset is ${detected} — missing ${(res.missing_columns ?? []).join(', ')} for ${technique.toUpperCase()}`,
+            )
+          }
+        })
+        .catch(() => setSchemaValid('warn'))
+
+      mcpCall<{ success: boolean }>('validate.data_quality', { dataset_path: datasetPath })
+        .then((res) => setQualityValid(res.success ? 'pass' : 'warn'))
+        .catch(() => setQualityValid('warn'))
+    }, 800)
+
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [runValidation])
+  }, [datasetPath, technique])
 
   function handleSubmit() {
     if (!modelPath || !datasetPath) {
@@ -168,8 +174,67 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
 
         {/* Model path */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Model</label>
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">Model</label>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 text-xs"
+              disabled={!datasetPath || autoSuggest.isPending}
+              onClick={() => {
+                autoSuggest.mutate(
+                  { dataset_path: datasetPath, technique, use_case: 'general' },
+                  {
+                    onSuccess: (data) => {
+                      if (data.technique_warning) {
+                        toast.warning(data.technique_warning)
+                      }
+                      if (data.success && data.candidates.length > 0) {
+                        setSuggestions(data.candidates.slice(0, 3))
+                      } else {
+                        toast.error(data.error || 'No models fit your hardware')
+                        setSuggestions([])
+                      }
+                    },
+                    onError: (err) => toast.error(err.message),
+                  },
+                )
+              }}
+            >
+              <Sparkles className="h-3 w-3" />
+              {autoSuggest.isPending ? 'Analyzing...' : 'Suggest Model'}
+            </Button>
+          </div>
           <ModelBrowser value={modelPath} onChange={setModelPath} />
+          {suggestions.length > 0 && (
+            <div className="space-y-1 rounded-md border border-border p-2">
+              <p className="text-xs font-medium text-muted-foreground">Suggested models</p>
+              {suggestions.map((s) => (
+                <button
+                  key={s.model_id}
+                  type="button"
+                  className="w-full cursor-pointer rounded px-2 py-1.5 text-left hover:bg-accent transition-colors"
+                  onClick={() => {
+                    setModelPath(s.model_id)
+                    const cfg = s.prescribe_config?.config ?? {}
+                    if (cfg.learning_rate) setLearningRate(String(cfg.learning_rate))
+                    if (cfg.num_epochs) setEpochs(String(cfg.num_epochs))
+                    if (cfg.per_device_train_batch_size) setBatchSize(String(cfg.per_device_train_batch_size))
+                    if (cfg.lora_r) setLoraR(String(cfg.lora_r))
+                    if (cfg.lora_alpha) setLoraAlpha(String(cfg.lora_alpha))
+                    if (cfg.gradient_accumulation_steps) setGradAccum(String(cfg.gradient_accumulation_steps))
+                    if (cfg.max_seq_length) setMaxSeqLength(String(cfg.max_seq_length))
+                    setSuggestions([])
+                    toast.success(`Applied ${s.model_id} with optimized config`)
+                  }}
+                >
+                  <div className="text-sm font-medium">{s.model_id}</div>
+                  <div className="text-xs text-muted-foreground">{s.why_recommended}</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Dataset path */}
@@ -191,17 +256,18 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
             <Input
               value={datasetPath}
               onChange={(e) => setDatasetPath(e.target.value)}
-              placeholder="Dataset path..."
+              placeholder="Path to .jsonl, .json, .csv, or .parquet file..."
             />
             {datasets.length > 0 && (
               <select
-                className="absolute right-1 top-1 h-7 rounded border-none bg-transparent text-xs text-muted-foreground cursor-pointer"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 appearance-none rounded border-none bg-transparent text-xs text-muted-foreground cursor-pointer opacity-60 hover:opacity-100"
                 value=""
+                title="Pick a dataset"
                 onChange={(e) => {
                   if (e.target.value) setDatasetPath(e.target.value)
                 }}
               >
-                <option value="">Select...</option>
+                <option value="">▾</option>
                 {datasets.map((ds) => (
                   <option key={ds.dataset_id} value={ds.file_path}>
                     {ds.file_path} ({ds.row_count} rows)

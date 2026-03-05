@@ -113,3 +113,81 @@ export interface DatasetInfo {
   technique?: string
   size_bytes: number
 }
+
+// -- HuggingFace Hub search --
+
+export interface HFModel {
+  id: string
+  author: string | null
+  downloads: number
+  likes: number
+  tags: string[]
+  library: string | null
+  created_at: string | null
+}
+
+export interface HFSearchResult {
+  success: boolean
+  query: string
+  task: string
+  models: HFModel[]
+  count: number
+  error?: string
+}
+
+export interface RecommendedModel {
+  model_id: string
+  size: string
+  memory: string
+  description: string
+}
+
+export interface RecommendResult {
+  success: boolean
+  use_case: string
+  recommendations: RecommendedModel[]
+  count: number
+  error?: string
+}
+
+// -- Auto-prescribe --
+
+export interface AutoPrescribeCandidate {
+  rank: number
+  model_id: string
+  params_b: number
+  min_vram_gb: number
+  why_recommended: string
+  prescribe_config: {
+    can_run: boolean
+    config: Record<string, unknown>
+    dataset_plan: Record<string, unknown>
+    resource_snapshot: Record<string, unknown>
+    vram_estimate: Record<string, unknown>
+    warnings: string[]
+    rationale: string[]
+  }
+}
+
+export interface AutoPrescribeResult {
+  success: boolean
+  candidates: AutoPrescribeCandidate[]
+  filters_applied: {
+    available_vram_gb: number
+    technique: string
+    use_case: string
+    models_evaluated: number
+    models_fit: number
+  }
+  error?: string
+  technique_warning?: string
+  resolved_dataset?: string
+}
+
+// -- Confirmation --
+
+export interface ConfirmationRequest {
+  tool: string
+  arguments: Record<string, unknown>
+  message: string
+}
