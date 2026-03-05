@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.api.api_deck import router as deck_router
+from app.api.api_chat import router as chat_router
 
 from agentsoul.utils.logger import configure_logging
 from shared.diagnostics import init_diagnostics, session_id_var
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     """
     Startup/shutdown lifecycle handler for preloading LLM models.
     """
-    logger.info("🚀 Starting Asistent backend... initializing registry")
+    logger.info("Starting backend... initializing registry")
 
     # registry = get_registry()
 
@@ -58,17 +58,17 @@ async def lifespan(app: FastAPI):
     # ]
 
     try:
-        logger.info("🔧 Setting up initial database connections...")
+        logger.info("Setting up initial database connections...")
         # setup_database(settings=settings)
     except Exception as e:
-        logger.exception(f"❌ Failed to set up database connections: {e}")
+        logger.exception(f"Failed to set up database connections: {e}")
 
     try:
-        logger.info("🧠 Preloading Qwen model(s)... this may take a minute")
+        logger.info("Preloading models... this may take a minute")
         # await registry.preload(preload_items)
-        logger.info("✅ Preload complete. Models ready for inference.")
+        logger.info("Preload complete. Models ready for inference.")
     except Exception as e:
-        logger.exception(f"❌ Failed to preload models: {e}")
+        logger.exception(f"Failed to preload models: {e}")
 
     _session_id = str(uuid.uuid4())
     session_id_var.set(_session_id)
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await _diag_writer.close()
-    logger.info("🧹 Shutting down Asistent backend... releasing resources.")
+    logger.info("Shutting down backend... releasing resources.")
 
 
 app = FastAPI(title="Asistent Agent Server", lifespan=lifespan)
@@ -92,6 +92,4 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(deck_router)
-
-# app.include_router(retrieval_router)
+app.include_router(chat_router)

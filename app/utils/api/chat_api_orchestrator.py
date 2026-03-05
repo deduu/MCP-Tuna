@@ -14,6 +14,7 @@ from .models.request import AgentContext
 from .responses.builder import ResponseBuilder
 from .utils.timing import TimingContext
 from .utils.exception import AgentExecutionError
+from .chat_diagnostics import ChatDiagnostics
 from shared.diagnostics import (
     trace_id_var,
     emit_request_start,
@@ -35,9 +36,16 @@ class ChatAPIOrchestrator:
         self.response_builder = ResponseBuilder()
         self.stream_handler = StreamHandler(self.response_builder)
 
-    async def prepare_context(self, request: Request) -> AgentContext:
+    async def prepare_context(self, request: Request, diag: ChatDiagnostics = None) -> AgentContext:
 
         chat_request = await self.parser.parse_openai_chat_completion(request)
+        if diag:
+            diag.step("request_parsed", {
+                "model": chat_request.model_name, "stream": chat_request.stream,
+                "user_prompt": chat_request.user_prompt[:200],
+                "api_key_set": chat_request.api_key is not None,
+                "message_count": len(chat_request.messages),
+            })
 
         route_result, enable_logging = self.route_decider.decide_route_and_enable_logging(
             chat_request.user_prompt,
@@ -79,10 +87,12 @@ class ChatAPIOrchestrator:
         """Handle the complete chat completion request."""
         timing = TimingContext()
         trace_id_var.set(str(uuid.uuid4()))
+        diag = ChatDiagnostics()
+        diag.step("request_received")
 
         try:
             # Prepare context
-            context = await self.prepare_context(request)
+            context = await self.prepare_context(request, diag)
             chat_req = context.chat_request
 
             await emit_request_start(
@@ -94,12 +104,27 @@ class ChatAPIOrchestrator:
             )
 
             # Create agent (wired to MCP servers when available)
+            diag.step("agent_create_start", {
+                "model": context.model_name,
+                "mcp_labels": [s.get('server_label') for s in (context.mcp_servers or [])],
+                "mcp_urls": [s.get('server_url') for s in (context.mcp_servers or [])],
+                "route": context.route,
+            })
             agent = await self.agent_executor.create_agent(
                 model_name=context.model_name,
                 mcp_servers=context.mcp_servers,
                 api_key=chat_req.api_key,
                 base_url=chat_req.base_url,
             )
+            _ts = agent.tool_service if hasattr(agent, 'tool_service') else None
+            _td = _ts.get_tool_descriptions() if _ts else []
+            diag.step("agent_created", {
+                "tool_count": len(_td),
+                "tools_first_10": [d.get('name') for d in _td[:10]],
+                "system_prompt_preview": (agent.system_prompt or "")[:300],
+                "llm_provider": type(agent.llm_provider).__name__,
+                "model_id": getattr(agent.llm_provider, 'model_id', 'unknown'),
+            })
 
             # Handle non-streaming
             if not chat_req.stream:
@@ -124,9 +149,13 @@ class ChatAPIOrchestrator:
                     token_usage=content.get("usage", {}),
                 )
 
+                diag.step("non_streaming_done", {"usage": content.get("usage", {}), "content_preview": content.get("content", "")[:200]})
+                diag.finish()
                 return JSONResponse(content=response)
 
             # Handle streaming
+            diag.step("streaming_start")
+            diag.finish()
             return StreamingResponse(
                 self.stream_handler.stream_agent_response(
                     agent,
@@ -139,6 +168,7 @@ class ChatAPIOrchestrator:
             )
 
         except ModelRoutingError as e:
+            diag.error("ModelRoutingError", e); diag.finish()
             await emit_error(
                 error_type=type(e).__name__,
                 message=str(e),
@@ -155,6 +185,7 @@ class ChatAPIOrchestrator:
             )
             return self.response_builder.build_openai_error_response(e, 500)
         except AgentExecutionError as e:
+            diag.error("AgentExecutionError", e); diag.finish()
             await emit_error(
                 error_type=type(e).__name__,
                 message=str(e),
@@ -171,6 +202,7 @@ class ChatAPIOrchestrator:
             )
             return self.response_builder.build_openai_error_response(e, 500)
         except Exception as e:
+            diag.error("fatal_error", e); diag.finish()
             logger.error(f"🚨 Fatal error in /v1/chat/completions: {e}")
             traceback.print_exc()
             await emit_error(

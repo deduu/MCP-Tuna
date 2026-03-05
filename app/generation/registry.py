@@ -44,7 +44,13 @@ class LLMRegistry:
             raise ValueError(
                 f"Unknown model '{name}'. Available: {list(self.model_factories)}")
 
-        return self.model_factories[name](api_key, base_url)
+        # Only pass non-None values so lambda defaults (from env vars) are preserved
+        kwargs = {}
+        if api_key is not None:
+            kwargs["api_key"] = api_key
+        if base_url is not None:
+            kwargs["base_url"] = base_url
+        return self.model_factories[name](**kwargs)
 
 
 def get_registry() -> LLMRegistry:

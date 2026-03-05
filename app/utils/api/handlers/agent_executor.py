@@ -83,10 +83,14 @@ class AgentExecutor:
 
 
 class StreamHandler:
-    """Handles streaming response generation."""
+    """Handles streaming response generation with granular agent events."""
 
     def __init__(self, response_builder: ResponseBuilder):
         self.response_builder = response_builder
+
+    def _make_agent_event(self, event_type: str, payload: Dict[str, Any]) -> str:
+        """Build an SSE line for a custom agent event (non-OpenAI)."""
+        return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
 
     async def stream_agent_response(
         self,
@@ -96,9 +100,14 @@ class StreamHandler:
         enable_thinking: bool,
         timing: TimingContext
     ) -> AsyncGenerator[str, None]:
-        """Stream agent responses as SSE events."""
-        logger.info("⚙️ Running agent (streaming mode)")
+        """Stream agent responses as SSE events with granular agent activity."""
+        logger.info("Running agent (streaming mode)")
         timing.start_inference()
+
+        # Track tool call metadata between turn_metadata and exec events
+        _pending_tool_calls: Dict[str, Dict[str, Any]] = {}
+        _current_turn = 0
+        _turn_start_time = 0.0
 
         try:
             async for event in agent.run(
@@ -109,37 +118,99 @@ class StreamHandler:
                 event_type = event["type"]
                 content = event.get("content", "")
 
-                # Handle thinking tokens
+                # --- Content tokens ---
                 if event_type == "token":
-                    logger.debug(f"Thinking stream: {content}")
                     chunk = self.response_builder.build_openai_chat_chunk(
                         content, model_name)
                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                # Handle final answer tokens
                 elif event_type == "final_token":
                     timing.record_first_token()
                     chunk = self.response_builder.build_openai_chat_chunk(
                         content, model_name)
                     yield f"data: {json.dumps(chunk)}\n\n"
 
-                # Handle tool execution events
-                elif event_type in ("tool_exec_start", "tool_exec_end"):
-                    logger.debug(f"tool_call: {content}")
+                # --- Turn metadata (tool calls, confidence, usage) ---
+                elif event_type == "turn_metadata":
+                    _current_turn += 1
+                    import time as _time
+                    _turn_start_time = _time.perf_counter()
+
+                    tool_calls = event.get("tool_calls", [])
+                    for tc in tool_calls:
+                        _pending_tool_calls[tc.name] = {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+
+                    # Emit per-turn metrics
+                    usage = event.get("usage")
+                    yield self._make_agent_event("metrics", {
+                        "turn": _current_turn,
+                        "confidence": event.get("confidence_level"),
+                        "perplexity": event.get("perplexity"),
+                        "tokens": event.get("total_tokens"),
+                        "usage": {
+                            "prompt_tokens": usage.prompt_tokens if usage else 0,
+                            "completion_tokens": usage.completion_tokens if usage else 0,
+                        } if usage else None,
+                    })
+
+                # --- Tool execution start ---
+                elif event_type == "tool_exec_start":
+                    tool_name = event.get("tool", "")
+                    tc_info = _pending_tool_calls.get(tool_name, {})
+                    import time as _time
+                    _pending_tool_calls.setdefault(tool_name, {})
+                    _pending_tool_calls[tool_name]["_start"] = _time.perf_counter()
+
+                    yield self._make_agent_event("tool_start", {
+                        "tool": tool_name,
+                        "arguments": tc_info.get("arguments", {}),
+                    })
                     await emit_agent_event(
-                        event_type,
-                        payload={"tool": event.get("name")},
+                        event_type, payload={"tool": tool_name},
                     )
 
-                # Handle pipeline phase events
+                # --- Tool execution end ---
+                elif event_type == "tool_exec_end":
+                    tool_name = event.get("tool", "")
+                    tc_info = _pending_tool_calls.pop(tool_name, {})
+                    import time as _time
+                    start = tc_info.get("_start", _time.perf_counter())
+                    duration_ms = (_time.perf_counter() - start) * 1000
+
+                    yield self._make_agent_event("tool_end", {
+                        "tool": tool_name,
+                        "duration_ms": round(duration_ms, 1),
+                    })
+                    await emit_agent_event(
+                        event_type, payload={"tool": tool_name},
+                    )
+
+                # --- Phase transitions ---
                 elif event_type in ("phase_start", "phase_end"):
+                    phase = event.get("phase", "")
+                    yield self._make_agent_event("phase", {
+                        "phase": phase,
+                        "action": "start" if event_type == "phase_start" else "end",
+                    })
                     await emit_agent_event(
-                        event_type,
-                        payload={"phase": event.get("phase")},
+                        event_type, payload={"phase": phase},
                     )
 
-                # Handle reflection result events
+                # --- Thinking (extracted from content in thinking turns) ---
+                elif event_type == "thinking":
+                    yield self._make_agent_event("thinking", {
+                        "content": content,
+                    })
+
+                # --- Reflection result ---
                 elif event_type == "reflection_result":
+                    yield self._make_agent_event("reflection", {
+                        "is_ready": event.get("is_ready"),
+                        "explanation": event.get("explanation"),
+                    })
                     await emit_agent_event(
                         event_type,
                         payload={
@@ -148,13 +219,22 @@ class StreamHandler:
                         },
                     )
 
-                # Handle completion
+                # --- Completion ---
                 elif event_type == "complete":
                     timing.end_inference()
+
+                    # Send final history with full turn details
+                    history = event.get("history", [])
+                    yield self._make_agent_event("complete", {
+                        "turn_count": len(history),
+                        "history": history,
+                        "usage": event.get("usage", {}),
+                    })
+
                     await emit_agent_event(
                         "complete",
                         payload={
-                            "turn_count": len(event.get("history", [])),
+                            "turn_count": len(history),
                             "total_usage": event.get("usage", {}),
                         },
                     )
@@ -166,9 +246,9 @@ class StreamHandler:
                         token_usage=event.get("usage", {}),
                     )
                     logger.info(
-                        f"✅ Completed streaming chat | "
-                        f"Δtotal={timing.inference_time:.2f}s | "
-                        f"Δfirst_token={timing.first_token_latency:.2f}s"
+                        f"Completed streaming chat | "
+                        f"total={timing.inference_time:.2f}s | "
+                        f"first_token={timing.first_token_latency:.2f}s"
                     )
                     yield "data: [DONE]\n\n"
                     return
@@ -176,7 +256,7 @@ class StreamHandler:
             # Safety fallback
             timing.end_inference()
             logger.info(
-                f"Stream closed normally | Δtotal={timing.inference_time:.2f}s")
+                f"Stream closed normally | total={timing.inference_time:.2f}s")
             yield "data: [DONE]\n\n"
 
         except Exception as e:

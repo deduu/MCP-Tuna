@@ -92,26 +92,6 @@ class MCPSettings:
             server_url=os.getenv("MCP_TUNA_GATEWAY_URL", "http://localhost:8002/mcp"),
             server_description="MCP Tuna pipeline tools (generate, clean, evaluate, finetune, host)",
         ),
-        MCPServerConfig(
-            server_label="database-tools",
-            server_url=os.getenv("DB_MCP_URL", "http://localhost:8002/mcp"),
-            server_description="Database tools (query, list tables, describe, insert)",
-        ),
-        MCPServerConfig(
-            server_label="email-tools",
-            server_url=os.getenv("EMAIL_MCP_URL", "http://localhost:8003/mcp"),
-            server_description="Email tools (send, send from template)",
-        ),
-        MCPServerConfig(
-            server_label="file-tools",
-            server_url=os.getenv("FILE_MCP_URL", "http://localhost:8004/mcp"),
-            server_description="File management tools (read, write, list, upload)",
-        ),
-        MCPServerConfig(
-            server_label="web-tools",
-            server_url=os.getenv("WEB_MCP_URL", "http://localhost:8005/mcp"),
-            server_description="Web tools (fetch URLs, search the web)",
-        ),
     ])
     auto_connect: bool = True
 
