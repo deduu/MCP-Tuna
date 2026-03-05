@@ -181,13 +181,27 @@ class DatasetService:
         seed: int = 42,
         format: str = "jsonl",
     ) -> Dict[str, Any]:
-        """Split a dataset into train/val/test files."""
+        """Split a dataset into train/val/test files.
+
+        For JSONL files, uses a memory-efficient streaming approach that
+        avoids loading the entire dataset into RAM.
+        """
         if not math.isclose(train_ratio + val_ratio + test_ratio, 1.0, abs_tol=1e-6):
             return {
                 "success": False,
                 "error": f"Ratios must sum to 1.0, got {train_ratio + val_ratio + test_ratio:.4f}",
             }
 
+        p = Path(file_path)
+        is_jsonl = p.suffix.lower() in (".jsonl",) and format == "jsonl"
+
+        if is_jsonl:
+            return await asyncio.to_thread(
+                self._split_jsonl_streaming,
+                p, output_dir, train_ratio, val_ratio, seed,
+            )
+
+        # Fallback: load full dataset for non-JSONL formats
         loaded = await self.load(file_path)
         if not loaded["success"]:
             return loaded
@@ -199,7 +213,6 @@ class DatasetService:
         n = len(data)
         n_train = round(n * train_ratio)
         n_val = round(n * val_ratio)
-        # test gets the remainder to guarantee exact total
         train_data = data[:n_train]
         val_data = data[n_train : n_train + n_val]
         test_data = data[n_train + n_val :]
@@ -210,9 +223,80 @@ class DatasetService:
 
         splits: Dict[str, Dict[str, Any]] = {}
         for name, subset in [("train", train_data), ("val", val_data), ("test", test_data)]:
-            p = out / f"{stem}_{name}.{format}"
-            await self.save(subset, str(p), format=format)
-            splits[name] = {"path": str(p.resolve()), "count": len(subset), "format": format}
+            sp = out / f"{stem}_{name}.{format}"
+            await self.save(subset, str(sp), format=format)
+            splits[name] = {"path": str(sp.resolve()), "count": len(subset), "format": format}
+
+        return {"success": True, "splits": splits}
+
+    @staticmethod
+    def _split_jsonl_streaming(
+        src: Path,
+        output_dir: str,
+        train_ratio: float,
+        val_ratio: float,
+        seed: int,
+    ) -> Dict[str, Any]:
+        """Stream JSONL split without loading entire dataset into RAM.
+
+        Pass 1: count lines and build a shuffled index mapping.
+        Pass 2: stream lines into the appropriate split file.
+        """
+        # Pass 1 — count rows
+        n = 0
+        with open(src, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    n += 1
+
+        if n == 0:
+            return {"success": False, "error": "Dataset is empty"}
+
+        # Build shuffled assignment: index → split name
+        rng = random.Random(seed)
+        indices = list(range(n))
+        rng.shuffle(indices)
+
+        n_train = round(n * train_ratio)
+        n_val = round(n * val_ratio)
+        assignment = ["test"] * n  # default
+        for i in indices[:n_train]:
+            assignment[i] = "train"
+        for i in indices[n_train : n_train + n_val]:
+            assignment[i] = "val"
+
+        # Pass 2 — stream into split files
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        stem = src.stem
+
+        counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
+        paths: Dict[str, Path] = {}
+        for name in ("train", "val", "test"):
+            paths[name] = out / f"{stem}_{name}.jsonl"
+
+        handles = {name: open(paths[name], "w", encoding="utf-8") for name in paths}
+        try:
+            row_idx = 0
+            with open(src, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    split_name = assignment[row_idx]
+                    handles[split_name].write(line if line.endswith("\n") else line + "\n")
+                    counts[split_name] += 1
+                    row_idx += 1
+        finally:
+            for h in handles.values():
+                h.close()
+
+        splits: Dict[str, Dict[str, Any]] = {}
+        for name in ("train", "val", "test"):
+            splits[name] = {
+                "path": str(paths[name].resolve()),
+                "count": counts[name],
+                "format": "jsonl",
+            }
 
         return {"success": True, "splits": splits}
 
@@ -227,10 +311,25 @@ class DatasetService:
         deduplicate: bool = False,
         dedup_key: str = "instruction",
     ) -> Dict[str, Any]:
-        """Merge multiple dataset files into one."""
+        """Merge multiple dataset files into one.
+
+        For JSONL→JSONL merges, streams rows to avoid loading everything into RAM.
+        """
         if not file_paths:
             return {"success": False, "error": "No file paths provided"}
 
+        out_fmt = Path(output_path).suffix.lstrip(".") or "jsonl"
+        all_jsonl = out_fmt == "jsonl" and all(
+            Path(fp).suffix.lower() == ".jsonl" for fp in file_paths
+        )
+
+        if all_jsonl:
+            return await asyncio.to_thread(
+                self._merge_jsonl_streaming, file_paths, output_path,
+                deduplicate, dedup_key,
+            )
+
+        # Fallback: load everything for non-JSONL formats
         all_points: List[Dict[str, Any]] = []
         per_file: Dict[str, int] = {}
 
@@ -252,8 +351,7 @@ class DatasetService:
                     unique.append(dp)
             all_points = unique
 
-        fmt = Path(output_path).suffix.lstrip(".") or "jsonl"
-        save_result = await self.save(all_points, output_path, format=fmt)
+        save_result = await self.save(all_points, output_path, format=out_fmt)
         if not save_result["success"]:
             return save_result
 
@@ -334,6 +432,48 @@ class DatasetService:
         df = pd.read_csv(path)
         return df.to_dict(orient="records")
 
+    # ---- streaming helpers ----
+
+    @staticmethod
+    def _merge_jsonl_streaming(
+        file_paths: List[str],
+        output_path: str,
+        deduplicate: bool = False,
+        dedup_key: str = "instruction",
+    ) -> Dict[str, Any]:
+        """Stream-merge JSONL files without loading all into RAM."""
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        seen: set[str] = set()
+        total = 0
+        per_file: Dict[str, int] = {}
+
+        with open(out, "w", encoding="utf-8") as fout:
+            for fp in file_paths:
+                count = 0
+                with open(fp, "r", encoding="utf-8") as fin:
+                    for line in fin:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if deduplicate:
+                            row = json.loads(line)
+                            key_val = str(row.get(dedup_key, ""))
+                            if key_val in seen:
+                                continue
+                            seen.add(key_val)
+                        fout.write(line + "\n")
+                        count += 1
+                        total += 1
+                per_file[fp] = count
+
+        return {
+            "success": True,
+            "file_path": str(out.resolve()),
+            "total_rows": total,
+            "per_file_counts": per_file,
+        }
+
     # ---- efficient inspection ----
 
     @staticmethod
@@ -365,3 +505,63 @@ class DatasetService:
                 if count == 1:
                     columns = list(json.loads(line).keys())
         return count, columns
+
+    async def sample_text_stats(
+        self,
+        file_path: str,
+        sample_size: int = 50,
+    ) -> Dict[str, Any]:
+        """Sample rows to compute text length statistics without full load.
+
+        Reads up to *sample_size* rows and measures character lengths of the
+        primary text fields (instruction/prompt + input/output/response).
+        Returns avg_length, max_length, and p95_length.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            return {"success": False, "error": f"File not found: {file_path}"}
+
+        _TEXT_FIELDS = ("instruction", "prompt", "input", "output", "response",
+                        "chosen", "rejected", "completion", "text")
+
+        def _read_sample() -> List[int]:
+            lengths: List[int] = []
+            with open(path, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if i >= sample_size:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    total = sum(
+                        len(str(row.get(k, "")))
+                        for k in _TEXT_FIELDS
+                        if k in row
+                    )
+                    if total > 0:
+                        lengths.append(total)
+            return lengths
+
+        lengths = await asyncio.to_thread(_read_sample)
+        if not lengths:
+            return {
+                "success": True,
+                "avg_length": 0,
+                "max_length": 0,
+                "p95_length": 0,
+                "sampled_rows": 0,
+            }
+
+        lengths.sort()
+        p95_idx = min(len(lengths) - 1, int(len(lengths) * 0.95))
+        return {
+            "success": True,
+            "avg_length": round(sum(lengths) / len(lengths)),
+            "max_length": max(lengths),
+            "p95_length": lengths[p95_idx],
+            "sampled_rows": len(lengths),
+        }
