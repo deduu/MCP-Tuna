@@ -1,15 +1,38 @@
+from __future__ import annotations
+
 import json
+import logging
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 import spacy
 from transformers import AutoTokenizer
 
 from .base import BaseMetric
+
+log = logging.getLogger(__name__)
+
+# Module-level caches to avoid reloading heavy models on every metric instance
+_SPACY_CACHE: Dict[str, Any] = {}
+_TOKENIZER_CACHE: Dict[str, Any] = {}
+
+
+def _get_spacy(model_name: str) -> Any:
+    if model_name not in _SPACY_CACHE:
+        log.info("Loading spaCy model '%s' (cached for reuse)", model_name)
+        _SPACY_CACHE[model_name] = spacy.load(model_name)
+    return _SPACY_CACHE[model_name]
+
+
+def _get_tokenizer(name: str) -> Any:
+    if name not in _TOKENIZER_CACHE:
+        log.info("Loading tokenizer '%s' (cached for reuse)", name)
+        _TOKENIZER_CACHE[name] = AutoTokenizer.from_pretrained(name)
+    return _TOKENIZER_CACHE[name]
 
 # --- Data Structure for Language Config ---
 
@@ -228,14 +251,13 @@ class ComplexityMetric(BaseMetric):
         """
         self.language_config = load_language_config(language_code)
         try:
-            self.nlp = spacy.load(self.language_config.spacy_model)
+            self.nlp = _get_spacy(self.language_config.spacy_model)
         except OSError:
             raise OSError(
                 f"Spacy model '{self.language_config.spacy_model}' not found. "
                 f"Please install it using: python -m spacy download {self.language_config.spacy_model}"
             )
-        # We still use a fast tokenizer for length normalization
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.tokenizer = _get_tokenizer(tokenizer_name)
 
     def compute(self, dp) -> float:
         # Token-level length (using multilingual tokenizer)
