@@ -191,6 +191,487 @@ class ResourceService:
             "warnings": warnings,
         }
 
+    def prescribe(
+        self,
+        model_name: str,
+        dataset_row_count: int,
+        dataset_avg_text_length: int,
+        technique: str = "sft",
+    ) -> Dict[str, Any]:
+        """Recommend optimal training configuration from resources + dataset.
+
+        Inverts :meth:`preflight_check`: instead of *validating* a config,
+        this method *generates* one that fits the user's hardware.
+        """
+        warnings: List[str] = []
+        rationale: List[str] = []
+
+        # -- Resolve model params -------------------------------------------
+        params_b = self._get_model_params(model_name)
+        if params_b is None:
+            params_b = self._infer_params_from_name(model_name)
+            if params_b is not None:
+                warnings.append(
+                    f"Model '{model_name}' not in known list. "
+                    f"Estimated {params_b:.1f}B params from name pattern."
+                )
+            else:
+                params_b = 7.0
+                warnings.append(
+                    f"Model '{model_name}' not in known list. "
+                    f"Defaulting to {params_b}B params."
+                )
+
+        # -- Snapshot resources ---------------------------------------------
+        gpu_info = self._get_gpu_info()
+        ram_info = self._get_ram_info()
+        disk_info = self._get_disk_info()
+
+        resource_snapshot = {
+            "gpu_name": gpu_info.get("name", "unknown"),
+            "vram_total_gb": gpu_info.get("vram_total_gb", 0.0),
+            "vram_free_gb": gpu_info.get("vram_free_gb", 0.0),
+            "ram_free_gb": ram_info.get("free_gb", 0.0),
+            "disk_free_gb": disk_info.get("free_gb", 0.0),
+        }
+
+        if not gpu_info.get("available", False):
+            return {
+                "can_run": False,
+                "config": {},
+                "dataset_plan": {
+                    "total_rows": dataset_row_count,
+                    "recommended_rows": dataset_row_count,
+                    "sampling_needed": False,
+                    "reason": None,
+                },
+                "resource_snapshot": resource_snapshot,
+                "vram_estimate": {},
+                "warnings": warnings + ["No CUDA GPU detected. Training requires a GPU."],
+                "rationale": [],
+            }
+
+        available_vram = resource_snapshot["vram_free_gb"]
+
+        # -- Step 1: Determine quantization ---------------------------------
+        # Try quantization levels best-to-worst quality: fp16 → 8bit → 4bit
+        # Pick the highest quality that fits with conservative settings.
+        quantization = None
+        for q_candidate in ("none", "8bit", "4bit"):
+            min_est = sum(self._estimate_vram(
+                params_b, q_candidate, 1, 128, True, 8, True,
+            ).values())
+            if min_est <= available_vram:
+                quantization = q_candidate
+                break
+
+        if quantization is None:
+            min_4bit = sum(self._estimate_vram(
+                params_b, "4bit", 1, 128, True, 8, True,
+            ).values())
+            return {
+                "can_run": False,
+                "config": {},
+                "dataset_plan": {
+                    "total_rows": dataset_row_count,
+                    "recommended_rows": dataset_row_count,
+                    "sampling_needed": False,
+                    "reason": None,
+                },
+                "resource_snapshot": resource_snapshot,
+                "vram_estimate": {"estimated_gb": round(min_4bit, 2)},
+                "warnings": warnings + [
+                    f"Model requires ~{min_4bit:.1f} GB even at 4-bit with minimal settings. "
+                    f"Only {available_vram:.1f} GB available."
+                ],
+                "rationale": ["Model too large for available VRAM."],
+            }
+
+        q_label = {"none": "fp16 (no quantization)", "8bit": "8-bit", "4bit": "4-bit"}
+        rationale.append(
+            f"{q_label[quantization]}: "
+            f"{'best quality — VRAM is abundant' if quantization == 'none' else 'fits ' + str(params_b) + 'B model in ' + str(available_vram) + ' GB VRAM'}"
+        )
+
+        # -- Step 2: Find max sequence length (sweep) -----------------------
+        target_headroom = 0.15  # reserve 15% of available VRAM
+        vram_budget = available_vram * (1 - target_headroom)
+
+        best_seq = 128
+        for seq in range(128, 4097, 128):
+            est = sum(self._estimate_vram(
+                params_b, quantization, 1, seq, True, 8, True,
+            ).values())
+            if est <= vram_budget:
+                best_seq = seq
+            else:
+                break
+
+        # Cap by dataset text — don't waste VRAM on padding
+        data_cap = max(128, int(dataset_avg_text_length * 1.5))
+        # Round data_cap up to nearest 128
+        data_cap = ((data_cap + 127) // 128) * 128
+        max_seq_length = min(best_seq, data_cap)
+        rationale.append(
+            f"max_seq_length={max_seq_length}: "
+            f"VRAM allows up to {best_seq}, data avg is ~{dataset_avg_text_length} chars"
+        )
+
+        # -- Step 3: Find batch size ----------------------------------------
+        batch_size = 1
+        for bs in [1, 2, 4, 8, 16, 32]:
+            est = sum(self._estimate_vram(
+                params_b, quantization, bs, max_seq_length, True, 8, True,
+            ).values())
+            if est <= vram_budget:
+                batch_size = bs
+            else:
+                break
+
+        # -- Step 4: Gradient accumulation ----------------------------------
+        # Target effective batch size scales with dataset: larger data benefits
+        # from larger effective batch; small data doesn't need it.
+        if dataset_row_count < 100:
+            target_effective = 8
+        elif dataset_row_count < 1000:
+            target_effective = 16
+        else:
+            target_effective = 32
+        grad_accum = max(1, target_effective // batch_size)
+        if batch_size >= target_effective:
+            grad_accum = 1
+            rationale.append(
+                f"batch_size={batch_size}: large enough — no gradient accumulation needed"
+            )
+
+        # -- Step 5: Gradient checkpointing ---------------------------------
+        est_no_gc = sum(self._estimate_vram(
+            params_b, quantization, batch_size, max_seq_length, True, 8, False,
+        ).values())
+        headroom_pct = (available_vram - est_no_gc) / available_vram if available_vram > 0 else 0
+        gradient_checkpointing = headroom_pct < 0.20
+        if gradient_checkpointing:
+            rationale.append("gradient_checkpointing=True: VRAM headroom < 20%")
+        else:
+            rationale.append(
+                f"gradient_checkpointing=False: {headroom_pct:.0%} headroom — "
+                "not needed, faster training"
+            )
+
+        # -- Step 6: LoRA rank + full fine-tune consideration ---------------
+        final_est = sum(self._estimate_vram(
+            params_b, quantization, batch_size, max_seq_length,
+            True, 8, gradient_checkpointing,
+        ).values())
+        headroom_gb = available_vram - final_est
+
+        # Check if full fine-tuning (no LoRA) fits — better quality for small
+        # models when VRAM is abundant
+        full_ft_est = sum(self._estimate_vram(
+            params_b, quantization, batch_size, max_seq_length,
+            False, 0, gradient_checkpointing,
+        ).values())
+        use_lora = True
+        if full_ft_est <= vram_budget and params_b <= 3.0:
+            use_lora = False
+            lora_r = 0
+            lora_alpha = 0
+            headroom_gb = available_vram - full_ft_est
+            rationale.append(
+                f"Full fine-tuning (no LoRA): model is small ({params_b}B) and "
+                f"VRAM is sufficient ({full_ft_est:.1f}/{available_vram:.1f} GB)"
+            )
+        else:
+            # Scale LoRA rank with available headroom
+            if headroom_gb < 1.0:
+                lora_r = 8
+            elif headroom_gb < 3.0:
+                lora_r = 16
+            elif headroom_gb < 8.0:
+                lora_r = 32
+            else:
+                lora_r = 64
+            lora_alpha = lora_r * 2
+            rationale.append(f"lora_r={lora_r}: {headroom_gb:.1f} GB headroom")
+
+        # -- Step 7: Learning rate ------------------------------------------
+        base_lr = 2e-4 if use_lora else 5e-5  # full FT needs lower LR
+        if dataset_row_count < 50:
+            learning_rate = base_lr * 0.5
+            rationale.append(
+                f"learning_rate={learning_rate:.1e}: halved for small dataset "
+                f"({dataset_row_count} rows)"
+            )
+        elif dataset_row_count > 5000:
+            learning_rate = base_lr * 1.5
+            rationale.append(
+                f"learning_rate={learning_rate:.1e}: increased for large dataset"
+            )
+        else:
+            learning_rate = base_lr
+
+        # -- Step 8: Epochs -------------------------------------------------
+        num_epochs = min(5, max(1, 1000 // max(dataset_row_count, 1)))
+        rationale.append(
+            f"{num_epochs} epoch(s): {'small' if dataset_row_count < 100 else 'standard'} "
+            f"dataset ({dataset_row_count} rows)"
+        )
+
+        # -- Step 9: Dataset sampling ---------------------------------------
+        free_ram_bytes = ram_info.get("free_gb", 0.0) * 1024**3
+        est_dataset_bytes = dataset_row_count * dataset_avg_text_length * 4  # rough: 4 bytes/char with overhead
+        sampling_needed = est_dataset_bytes > free_ram_bytes * 0.5
+        if sampling_needed:
+            recommended_rows = max(
+                100,
+                int(free_ram_bytes * 0.5 / max(dataset_avg_text_length * 4, 1)),
+            )
+            rationale.append(
+                f"Dataset sampling: {dataset_row_count} rows → {recommended_rows} "
+                f"(RAM limited to {ram_info.get('free_gb', 0):.1f} GB free)"
+            )
+        else:
+            recommended_rows = dataset_row_count
+
+        # -- Step 10: Warmup ratio ------------------------------------------
+        warmup_ratio = 0.05 if dataset_row_count > 100 else 0.1
+
+        # -- Step 11: Optimizer ---------------------------------------------
+        optim = "paged_adamw_8bit" if headroom_gb < 1.5 else "adamw_torch"
+
+        # -- Step 12: Disk warning ------------------------------------------
+        free_disk = disk_info.get("free_gb", 0.0)
+        if free_disk < 5.0:
+            warnings.append(
+                f"Low disk space ({free_disk:.1f} GB). "
+                f"Free at least 15 GB for stable training with checkpoints."
+            )
+
+        # -- Compute final VRAM estimate ------------------------------------
+        final_breakdown = self._estimate_vram(
+            params_b, quantization, batch_size, max_seq_length,
+            use_lora, lora_r if use_lora else 0, gradient_checkpointing,
+        )
+        final_total = round(sum(final_breakdown.values()), 2)
+
+        config: Dict[str, Any] = {
+            "quantization": quantization,
+            "max_seq_length": max_seq_length,
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": grad_accum,
+            "gradient_checkpointing": gradient_checkpointing,
+            "use_lora": use_lora,
+            "lora_r": lora_r,
+            "lora_alpha": lora_alpha,
+            "learning_rate": learning_rate,
+            "num_epochs": num_epochs,
+            "warmup_ratio": warmup_ratio,
+            "lr_scheduler_type": "cosine",
+            "weight_decay": 0.01,
+            "optim": optim,
+        }
+
+        return {
+            "can_run": True,
+            "config": config,
+            "dataset_plan": {
+                "total_rows": dataset_row_count,
+                "recommended_rows": recommended_rows,
+                "sampling_needed": sampling_needed,
+                "reason": (
+                    f"Dataset too large for available RAM ({ram_info.get('free_gb', 0):.1f} GB free)"
+                    if sampling_needed else None
+                ),
+            },
+            "resource_snapshot": resource_snapshot,
+            "vram_estimate": {
+                "estimated_gb": final_total,
+                "headroom_gb": round(available_vram - final_total, 2),
+                "breakdown": final_breakdown,
+            },
+            "warnings": warnings,
+            "rationale": rationale,
+        }
+
+    def disk_preflight(
+        self,
+        output_dir: str = "",
+        estimated_size_gb: float = 5.0,
+    ) -> Dict[str, Any]:
+        """Check if sufficient disk space is available for an operation.
+
+        Args:
+            output_dir: Directory where output will be written.
+            estimated_size_gb: Estimated disk space needed (GB).
+
+        Returns:
+            Dict with ``can_run``, ``free_gb``, ``required_gb``, and warnings.
+        """
+        target = output_dir or self._output_dir
+        try:
+            usage = shutil.disk_usage(os.path.abspath(target))
+            free_gb = usage.free / 1024 ** 3
+        except OSError:
+            return {
+                "can_run": False,
+                "error": f"Cannot access directory: {target}",
+            }
+
+        buffer = estimated_size_gb * 1.2  # 20% safety margin
+        can_run = free_gb >= buffer
+        warnings: List[str] = []
+        if not can_run:
+            warnings.append(
+                f"Need ~{estimated_size_gb:.1f} GB but only {free_gb:.1f} GB free "
+                f"in {target}. Free disk space before proceeding."
+            )
+        elif free_gb < 10:
+            warnings.append(
+                f"Low disk space ({free_gb:.1f} GB free). "
+                "Consider freeing space to avoid interruptions."
+            )
+
+        return {
+            "can_run": can_run,
+            "free_gb": round(free_gb, 2),
+            "required_gb": estimated_size_gb,
+            "directory": target,
+            "warnings": warnings,
+        }
+
+    def prescribe_pipeline(
+        self,
+        model_name: str,
+        dataset_row_count: int,
+        dataset_avg_text_length: int,
+        stages: Optional[List[str]] = None,
+        technique: str = "sft",
+    ) -> Dict[str, Any]:
+        """End-to-end resource recommendations across pipeline stages.
+
+        Analyzes feasibility for evaluate → train → deploy stages and returns
+        per-stage recommendations with a combined feasibility assessment.
+
+        Args:
+            model_name: HuggingFace model ID or local path.
+            dataset_row_count: Number of rows in the dataset.
+            dataset_avg_text_length: Average text length in characters.
+            stages: Pipeline stages to analyze (default: all).
+            technique: Training technique (sft, dpo, grpo, kto).
+        """
+        all_stages = ["evaluate", "train", "deploy"]
+        requested = stages or all_stages
+        requested = [s for s in requested if s in all_stages]
+
+        ram_info = self._get_ram_info()
+        gpu_info = self._get_gpu_info()
+        disk_info = self._get_disk_info()
+
+        ram_free_gb = ram_info.get("free_gb", 0)
+        gpu_available = gpu_info.get("available", False)
+        vram_free_gb = gpu_info.get("vram_free_gb", 0) if gpu_available else 0
+
+        results: Dict[str, Any] = {}
+        all_feasible = True
+        all_warnings: List[str] = []
+
+        # ---- Evaluate stage ----
+        if "evaluate" in requested:
+            # spaCy + BERT tokenizer ≈ 500 MB RAM
+            # Dataset in memory ≈ row_count * avg_text_length * 4 bytes
+            eval_model_ram_gb = 0.5
+            dataset_ram_gb = (dataset_row_count * dataset_avg_text_length * 4) / (1024 ** 3)
+            eval_total_ram_gb = eval_model_ram_gb + dataset_ram_gb
+            eval_feasible = ram_free_gb > eval_total_ram_gb * 1.2
+
+            eval_warnings: List[str] = []
+            eval_recommendations: List[str] = []
+
+            if not eval_feasible:
+                sample_rows = int((ram_free_gb * 0.5 * (1024 ** 3)) / (dataset_avg_text_length * 4))
+                eval_warnings.append(
+                    f"Dataset ({dataset_row_count} rows) may exceed RAM. "
+                    f"Consider sampling to ~{sample_rows} rows for evaluation."
+                )
+                eval_recommendations.append(f"Sample dataset to {sample_rows} rows before evaluating")
+            else:
+                eval_recommendations.append("Dataset fits in RAM for evaluation")
+
+            results["evaluate"] = {
+                "feasible": eval_feasible,
+                "estimated_ram_gb": round(eval_total_ram_gb, 2),
+                "available_ram_gb": round(ram_free_gb, 2),
+                "warnings": eval_warnings,
+                "recommendations": eval_recommendations,
+            }
+            if not eval_feasible:
+                all_feasible = False
+                all_warnings.extend(eval_warnings)
+
+        # ---- Train stage ----
+        if "train" in requested:
+            train_result = self.prescribe(
+                model_name=model_name,
+                dataset_row_count=dataset_row_count,
+                dataset_avg_text_length=dataset_avg_text_length,
+                technique=technique,
+            )
+            results["train"] = {
+                "feasible": train_result.get("can_run", False),
+                "config": train_result.get("config"),
+                "vram_estimate": train_result.get("vram_estimate"),
+                "dataset_plan": train_result.get("dataset_plan"),
+                "warnings": train_result.get("warnings", []),
+                "rationale": train_result.get("rationale", []),
+            }
+            if not train_result.get("can_run", False):
+                all_feasible = False
+                all_warnings.extend(train_result.get("warnings", []))
+
+            # Disk check for training checkpoints
+            disk_check = self.disk_preflight(estimated_size_gb=5.0)
+            if not disk_check.get("can_run", True):
+                all_feasible = False
+                all_warnings.extend(disk_check.get("warnings", []))
+
+        # ---- Deploy stage ----
+        if "deploy" in requested:
+            params_b = self._get_model_params(model_name)
+            # 4-bit deployment VRAM = params * 0.55 bytes
+            deploy_vram_gb = (params_b * 1e9 * 0.55) / (1024 ** 3)
+            deploy_feasible = gpu_available and vram_free_gb > deploy_vram_gb * 1.2
+
+            deploy_warnings: List[str] = []
+            if not gpu_available:
+                deploy_warnings.append("No GPU available for model deployment")
+            elif not deploy_feasible:
+                deploy_warnings.append(
+                    f"Model needs ~{deploy_vram_gb:.1f} GB VRAM for 4-bit deployment, "
+                    f"but only {vram_free_gb:.1f} GB free"
+                )
+
+            results["deploy"] = {
+                "feasible": deploy_feasible,
+                "estimated_vram_gb": round(deploy_vram_gb, 2),
+                "available_vram_gb": round(vram_free_gb, 2),
+                "quantization": "4bit",
+                "warnings": deploy_warnings,
+            }
+            if not deploy_feasible:
+                all_feasible = False
+                all_warnings.extend(deploy_warnings)
+
+        return {
+            "all_feasible": all_feasible,
+            "stages": results,
+            "resource_snapshot": {
+                "gpu": gpu_info,
+                "ram": ram_info,
+                "disk": disk_info,
+            },
+            "warnings": all_warnings,
+        }
+
     # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #

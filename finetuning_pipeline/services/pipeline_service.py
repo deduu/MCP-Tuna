@@ -35,8 +35,7 @@ class FineTuningService:
     def _ensure_training(self):
         if self._training is None:
             from .training_service import TrainingService
-            # TrainingService does not need GPU initialization for dataset prep/load.
-            self._training = TrainingService(config=self.config, gpu=None)
+            self._training = TrainingService(config=self.config, gpu=self._ensure_gpu())
         return self._training
 
     def _ensure_inference(self):
@@ -69,6 +68,15 @@ class FineTuningService:
 
     def preflight_check(self, *a, **kw) -> Dict[str, Any]:
         return self._ensure_resources().preflight_check(*a, **kw)
+
+    def prescribe(self, *a, **kw) -> Dict[str, Any]:
+        return self._ensure_resources().prescribe(*a, **kw)
+
+    def disk_preflight(self, *a, **kw) -> Dict[str, Any]:
+        return self._ensure_resources().disk_preflight(*a, **kw)
+
+    def prescribe_pipeline(self, *a, **kw) -> Dict[str, Any]:
+        return self._ensure_resources().prescribe_pipeline(*a, **kw)
 
     # ---- GPU ----
     def clear_gpu_memory(self) -> Dict[str, Any]:
