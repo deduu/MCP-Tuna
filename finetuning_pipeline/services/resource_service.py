@@ -672,6 +672,126 @@ class ResourceService:
             "warnings": all_warnings,
         }
 
+    def auto_prescribe(
+        self,
+        dataset_row_count: int,
+        dataset_avg_text_length: int,
+        technique: str = "sft",
+        use_case: str = "general",
+        max_candidates: int = 5,
+    ) -> Dict[str, Any]:
+        """Recommend the best model AND training config for available hardware.
+
+        Unlike :meth:`prescribe` (which requires a model name), this method
+        detects GPU VRAM, filters ``MODEL_PARAMS`` to models that fit, ranks
+        by *use_case*, and runs ``prescribe()`` for the top candidates.
+        """
+        gpu_info = self._get_gpu_info()
+        if not gpu_info.get("available", False):
+            return {
+                "success": False,
+                "error": "No GPU detected. A CUDA GPU is required for training.",
+                "candidates": [],
+            }
+
+        vram_free_gb = gpu_info.get("vram_free_gb", 0.0)
+
+        # -- Filter models that fit in available VRAM at 4-bit minimum ------
+        fitting: List[Dict[str, Any]] = []
+        for model_id, params_b in self.MODEL_PARAMS.items():
+            breakdown = self._estimate_vram(
+                params_b=params_b,
+                quantization="4bit",
+                batch_size=1,
+                max_seq_length=128,
+                use_lora=True,
+                lora_r=8,
+                gradient_checkpointing=True,
+            )
+            min_vram = sum(breakdown.values())
+            if min_vram <= vram_free_gb:
+                fitting.append({
+                    "model_id": model_id,
+                    "params_b": params_b,
+                    "min_vram_gb": round(min_vram, 2),
+                })
+
+        if not fitting:
+            return {
+                "success": False,
+                "error": (
+                    f"No known models fit in {vram_free_gb:.1f} GB free VRAM "
+                    f"(even at 4-bit quantization)."
+                ),
+                "candidates": [],
+                "available_vram_gb": vram_free_gb,
+            }
+
+        # -- Rank by use_case -----------------------------------------------
+        def _score(entry: Dict[str, Any]) -> float:
+            p = entry["params_b"]
+            mid = entry["model_id"]
+            instruct_bonus = 2.0 if "instruct" in mid.lower() else 0.0
+
+            if use_case in ("speed", "low_memory"):
+                return -p + instruct_bonus  # smaller is better
+            elif use_case == "quality":
+                return p + instruct_bonus  # larger is better
+            else:  # general, multilingual, indonesian
+                # prefer 2-8B range
+                distance_from_ideal = abs(p - 4.0)
+                return -distance_from_ideal + instruct_bonus
+
+        fitting.sort(key=_score, reverse=True)
+
+        # Deduplicate by params_b (keep instruct variant over base)
+        seen_params: Dict[float, bool] = {}
+        deduped: List[Dict[str, Any]] = []
+        for entry in fitting:
+            if entry["params_b"] not in seen_params:
+                seen_params[entry["params_b"]] = True
+                deduped.append(entry)
+        fitting = deduped[:max_candidates]
+
+        # -- Run prescribe() for each candidate -----------------------------
+        candidates = []
+        for i, entry in enumerate(fitting, 1):
+            config = self.prescribe(
+                model_name=entry["model_id"],
+                dataset_row_count=dataset_row_count,
+                dataset_avg_text_length=dataset_avg_text_length,
+                technique=technique,
+            )
+
+            size_label = f"{entry['params_b']:.1f}B"
+            if use_case in ("speed", "low_memory"):
+                reason = f"{size_label} params — small and efficient for {use_case}"
+            elif use_case == "quality":
+                reason = f"{size_label} params — larger model for higher quality"
+            else:
+                reason = f"{size_label} params — good balance of quality and speed"
+
+            candidates.append({
+                "rank": i,
+                "model_id": entry["model_id"],
+                "params_b": entry["params_b"],
+                "min_vram_gb": entry["min_vram_gb"],
+                "why_recommended": reason,
+                "prescribe_config": config,
+            })
+
+        return {
+            "success": True,
+            "candidates": candidates,
+            "filters_applied": {
+                "available_vram_gb": round(vram_free_gb, 2),
+                "technique": technique,
+                "use_case": use_case,
+                "models_evaluated": len(self.MODEL_PARAMS),
+                "models_fit": len(candidates),
+            },
+        }
+
     # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #

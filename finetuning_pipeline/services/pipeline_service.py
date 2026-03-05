@@ -78,6 +78,9 @@ class FineTuningService:
     def prescribe_pipeline(self, *a, **kw) -> Dict[str, Any]:
         return self._ensure_resources().prescribe_pipeline(*a, **kw)
 
+    def auto_prescribe(self, *a, **kw) -> Dict[str, Any]:
+        return self._ensure_resources().auto_prescribe(*a, **kw)
+
     # ---- GPU ----
     def clear_gpu_memory(self) -> Dict[str, Any]:
         try:

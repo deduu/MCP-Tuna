@@ -25,6 +25,15 @@ class DatasetService:
     def __init__(self, config: Optional[DatasetConfig] = None) -> None:
         self.config = config or DatasetConfig()
 
+    @staticmethod
+    def _resolve_dir(dir_path: Path) -> Optional[Path]:
+        """Pick the first dataset file from a directory, or None."""
+        supported = (".jsonl", ".json", ".csv", ".parquet")
+        for f in sorted(dir_path.iterdir()):
+            if f.is_file() and f.suffix.lower() in supported:
+                return f
+        return None
+
     # ------------------------------------------------------------------
     # save
     # ------------------------------------------------------------------
@@ -77,6 +86,11 @@ class DatasetService:
         path = Path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
+
+        if path.is_dir():
+            path = self._resolve_dir(path)
+            if path is None:
+                return {"success": False, "error": f"No dataset files in {file_path}"}
 
         ext = path.suffix.lower()
         if ext not in self._SUPPORTED_LOAD_EXTENSIONS:
@@ -138,10 +152,15 @@ class DatasetService:
     # ------------------------------------------------------------------
 
     async def info(self, file_path: str) -> Dict[str, Any]:
-        """Return metadata about a dataset file."""
+        """Return metadata about a dataset file (or first dataset in a dir)."""
         path = Path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
+
+        if path.is_dir():
+            path = self._resolve_dir(path)
+            if path is None:
+                return {"success": False, "error": f"No dataset files in {file_path}"}
 
         ext = path.suffix.lower()
         fmt = ext.lstrip(".")
@@ -520,6 +539,11 @@ class DatasetService:
         path = Path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
+
+        if path.is_dir():
+            path = self._resolve_dir(path)
+            if path is None:
+                return {"success": False, "error": f"No dataset files in {file_path}"}
 
         _TEXT_FIELDS = ("instruction", "prompt", "input", "output", "response",
                         "chosen", "rejected", "completion", "text")

@@ -465,6 +465,38 @@ class TunaGateway:
             }, indent=2)
 
         @self.mcp.tool(
+            name="system.set_hf_token",
+            description=(
+                "Set the HuggingFace Hub token at runtime for gated model access. "
+                "Validates the token and returns the associated username. "
+                "Note: token is in-memory only and resets on gateway restart."
+            ),
+        )
+        async def set_hf_token(token: str) -> str:
+            import os as _os
+            _os.environ["HF_TOKEN"] = token
+            _os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=token)
+                user = api.whoami()
+                return json.dumps({
+                    "success": True,
+                    "username": user.get("name", "unknown"),
+                    "message": "HF token set and validated successfully",
+                }, indent=2)
+            except ImportError:
+                return json.dumps({
+                    "success": True,
+                    "message": "HF token set (could not validate — huggingface_hub not installed)",
+                }, indent=2)
+            except Exception as e:
+                return json.dumps({
+                    "success": True,
+                    "warning": f"Token set but validation failed: {e!s}",
+                }, indent=2)
+
+        @self.mcp.tool(
             name="system.health",
             description=(
                 "Unified health dashboard: GPU/RAM/disk status, active training jobs, "
@@ -624,6 +656,95 @@ class TunaGateway:
                 "row_count": row_count,
                 "avg_text_length": avg_text_length,
             }
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="system.auto_prescribe",
+            description=(
+                "Automatically recommend the best model AND training configuration "
+                "for your hardware. Unlike system.prescribe (which requires a model_name), "
+                "this tool detects GPU VRAM, filters known models by what fits, ranks by "
+                "use_case, and generates ready-to-use training configs for top candidates. "
+                "Pass either dataset_path OR (dataset_row_count + dataset_avg_text_length)."
+            ),
+        )
+        async def auto_prescribe(
+            dataset_row_count: int = 0,
+            dataset_avg_text_length: int = 0,
+            dataset_path: Optional[str] = None,
+            technique: str = "sft",
+            use_case: str = "general",
+        ) -> str:
+            import os
+            from pathlib import Path as _Path
+
+            technique_warning = None
+            if dataset_path:
+                dp = _Path(dataset_path)
+                # If a directory, find a dataset file — prefer one matching technique
+                if dp.is_dir():
+                    supported = (".jsonl", ".json", ".csv", ".parquet")
+                    candidates = [
+                        f for f in sorted(dp.iterdir())
+                        if f.is_file() and f.suffix.lower() in supported
+                    ]
+                    if not candidates:
+                        return json.dumps({
+                            "success": False,
+                            "error": (
+                                f"No dataset files found in {dataset_path}. "
+                                f"Supported formats: {', '.join(supported)}"
+                            ),
+                        }, indent=2)
+                    best = candidates[0]
+                    for c in candidates:
+                        c_meta = await self.dataset_service.info(str(c))
+                        if (
+                            c_meta.get("success")
+                            and c_meta["metadata"].get("technique") == technique
+                        ):
+                            best = c
+                            break
+                    dataset_path = str(best)
+
+                meta = await self.dataset_service.info(dataset_path)
+                if not meta.get("success"):
+                    return json.dumps(meta, indent=2)
+
+                detected = meta["metadata"].get("technique")
+                technique_warning = None
+                if detected and detected != technique:
+                    technique_warning = (
+                        f"Dataset appears to be '{detected}' format but "
+                        f"'{technique}' was requested. "
+                        f"Columns: {meta['metadata'].get('columns', [])}"
+                    )
+
+                dataset_row_count = meta["metadata"]["row_count"]
+                stats = await self.dataset_service.sample_text_stats(dataset_path)
+                dataset_avg_text_length = (
+                    stats.get("avg_length", 200) if stats.get("success") else 200
+                )
+
+            if dataset_row_count <= 0:
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        "Provide dataset_path or dataset_row_count + "
+                        "dataset_avg_text_length"
+                    ),
+                }, indent=2)
+
+            result = self.finetuner.auto_prescribe(
+                dataset_row_count=dataset_row_count,
+                dataset_avg_text_length=dataset_avg_text_length,
+                technique=technique,
+                use_case=use_case,
+            )
+            if dataset_path:
+                result["resolved_dataset"] = dataset_path
+            if dataset_path and technique_warning:
+                result["technique_warning"] = technique_warning
             return json.dumps(result, indent=2)
 
     # -- Extract --
@@ -1666,6 +1787,43 @@ class TunaGateway:
                 "message": "Cancellation requested. Job will stop after current step.",
             }, indent=2)
 
+        # Aliases expected by the frontend UI
+        @self.mcp.tool(
+            name="finetune.get_status",
+            description=(
+                "Get training job status. Without job_id returns all jobs; "
+                "with job_id returns a single job's details."
+            ),
+        )
+        async def get_status(job_id: Optional[str] = None) -> str:
+            if job_id:
+                job = self.job_manager.get_job(job_id)
+                if job is None:
+                    return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
+                return json.dumps({"success": True, **job.model_dump()}, indent=2)
+            jobs = self.job_manager.list_jobs(limit=50)
+            return json.dumps({
+                "success": True,
+                "jobs": [j.model_dump() for j in jobs],
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.cancel",
+            description="Cancel a running training job by job_id.",
+        )
+        async def cancel(job_id: str) -> str:
+            success = self.job_manager.cancel_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or not running: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Cancellation requested.",
+            }, indent=2)
+
     # -- Test --
     def _register_test_tools(self):
         @self.mcp.tool(name="test.inference",
@@ -1707,6 +1865,104 @@ class TunaGateway:
                        description="List locally cached HuggingFace models")
         async def list_models(query: str = "") -> str:
             result = await self.finetuner.list_available_base_models(query=query)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="validate.search_models",
+            description=(
+                "Search HuggingFace Hub for models by query, task, and sort order. "
+                "Returns model id, author, downloads, likes, tags, and library info."
+            ),
+        )
+        async def search_models(
+            query: str = "",
+            task: str = "text-generation",
+            sort: str = "downloads",
+            limit: int = 20,
+        ) -> str:
+            result = await self.finetuner.search_huggingface_models(
+                query=query, task=task, sort=sort, limit=limit,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="validate.recommend_models",
+            description=(
+                "Get curated model recommendations for a use case. "
+                "Available use cases: general, low_memory, speed, quality, "
+                "multilingual, indonesian."
+            ),
+        )
+        async def recommend_models(use_case: str = "general") -> str:
+            result = self.finetuner.get_recommended_models(use_case=use_case)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="validate.schema",
+            description=(
+                "Validate that a dataset file has the correct columns for a "
+                "training technique (sft, dpo, grpo, kto). Returns success, "
+                "detected technique, expected columns, and any mismatches."
+            ),
+        )
+        async def validate_schema(
+            dataset_path: str,
+            technique: str = "sft",
+        ) -> str:
+            meta = await self.dataset_service.info(dataset_path)
+            if not meta.get("success"):
+                return json.dumps(meta, indent=2)
+
+            detected = meta["metadata"].get("technique")
+            columns = meta["metadata"].get("columns", [])
+
+            expected = {
+                "sft": {"instruction", "output"},
+                "dpo": {"prompt", "chosen", "rejected"},
+                "grpo": {"prompt", "responses", "rewards"},
+                "kto": {"prompt", "completion", "label"},
+            }
+            required = expected.get(technique, set())
+            col_set = set(columns)
+            missing = required - col_set
+
+            return json.dumps({
+                "success": len(missing) == 0,
+                "technique_requested": technique,
+                "technique_detected": detected,
+                "columns": columns,
+                "missing_columns": sorted(missing) if missing else [],
+                "row_count": meta["metadata"].get("row_count", 0),
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="validate.data_quality",
+            description=(
+                "Quick data quality check on a dataset file. Returns row count, "
+                "column stats, empty field counts, and average text lengths."
+            ),
+        )
+        async def validate_data_quality(
+            dataset_path: str,
+        ) -> str:
+            meta = await self.dataset_service.info(dataset_path)
+            if not meta.get("success"):
+                return json.dumps(meta, indent=2)
+
+            stats = await self.dataset_service.sample_text_stats(dataset_path)
+            row_count = meta["metadata"].get("row_count", 0)
+
+            result = {
+                "success": True,
+                "row_count": row_count,
+                "columns": meta["metadata"].get("columns", []),
+                "technique": meta["metadata"].get("technique"),
+            }
+            if stats.get("success"):
+                result["avg_text_length"] = stats.get("avg_length", 0)
+                result["p95_text_length"] = stats.get("p95_length", 0)
+                result["empty_count"] = stats.get("empty_count", 0)
+
             return json.dumps(result, indent=2)
 
     # -- Host --
@@ -2375,6 +2631,39 @@ class TunaGateway:
                 ),
                 indent=2,
             )
+
+        @self.mcp.tool(
+            name="dataset.list",
+            description=(
+                "List all dataset files in the data directory. Returns metadata "
+                "(id, path, format, row_count, columns, technique) for each file."
+            ),
+        )
+        async def dataset_list(
+            data_dir: str = "data",
+        ) -> str:
+            import os
+            from pathlib import Path as _Path
+
+            root = _Path(data_dir)
+            if not root.exists():
+                root = _Path(os.getcwd()) / data_dir
+            if not root.exists():
+                return json.dumps({"success": True, "datasets": []}, indent=2)
+
+            supported = (".jsonl", ".json", ".csv", ".parquet")
+            datasets = []
+            for f in sorted(root.rglob("*")):
+                if f.is_file() and f.suffix.lower() in supported:
+                    meta = await self.dataset_service.info(str(f))
+                    if meta.get("success"):
+                        datasets.append(meta["metadata"])
+
+            return json.dumps({
+                "success": True,
+                "datasets": datasets,
+                "count": len(datasets),
+            }, indent=2)
 
     # ------------------------------------------------------------------ #
     # Diagnostics

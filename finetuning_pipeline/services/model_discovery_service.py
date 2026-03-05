@@ -22,13 +22,19 @@ class ModelDiscoveryService:
             from huggingface_hub import HfApi
 
             api = HfApi()
-            models = api.list_models(
-                search=query, task=task, sort=sort, limit=limit, tags=filter_tags,
-            )
+            kwargs: Dict[str, Any] = {
+                "search": query,
+                "pipeline_tag": task,
+                "sort": sort,
+                "limit": limit,
+            }
+            if filter_tags:
+                kwargs["filter"] = filter_tags
+            models = api.list_models(**kwargs)
 
             results = []
             for model in models:
-                model_info = {
+                results.append({
                     "id": model.id,
                     "author": model.author,
                     "downloads": model.downloads,
@@ -36,13 +42,7 @@ class ModelDiscoveryService:
                     "tags": model.tags,
                     "library": getattr(model, "library_name", None),
                     "created_at": str(model.created_at) if hasattr(model, "created_at") else None,
-                }
-                try:
-                    card = api.model_info(model.id)
-                    model_info["card_data"] = card.card_data.to_dict() if card.card_data else {}
-                except Exception:
-                    pass
-                results.append(model_info)
+                })
 
             return {
                 "success": True,
