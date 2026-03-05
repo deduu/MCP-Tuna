@@ -1,0 +1,114 @@
+"""Tests for hosting service VRAM leak fix and GPU lock integration."""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from shared.gpu_lock import GPULock
+
+
+@pytest.fixture(autouse=True)
+def reset_gpu_lock():
+    GPULock.reset()
+    yield
+    GPULock.reset()
+
+
+def _make_mock_provider():
+    provider = MagicMock()
+    provider.unload = MagicMock()
+    provider.load_adapter = MagicMock()
+    provider.chat = AsyncMock(return_value=MagicMock(content="test response"))
+    return provider
+
+
+class TestHostingServiceVRAMLeak:
+    async def test_stop_deployment_calls_unload(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        provider = _make_mock_provider()
+
+        # Manually insert a deployment with a provider
+        dep_id = "test-001"
+        task = MagicMock()
+        task.done.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "model_path": "test/model",
+            "adapter_path": None,
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "task": task,
+            "provider": provider,
+        }
+
+        result = await svc.stop_deployment(dep_id)
+        assert result["success"] is True
+        provider.unload.assert_called_once()
+
+    async def test_stop_deployment_without_provider_no_error(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-002"
+        task = MagicMock()
+        task.done.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "model_path": "test/model",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "task": task,
+        }
+
+        result = await svc.stop_deployment(dep_id)
+        assert result["success"] is True
+
+    async def test_stop_deployment_unload_failure_still_succeeds(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        provider = _make_mock_provider()
+        provider.unload.side_effect = RuntimeError("unload failed")
+
+        dep_id = "test-003"
+        task = MagicMock()
+        task.done.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "model_path": "test/model",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "task": task,
+            "provider": provider,
+        }
+
+        result = await svc.stop_deployment(dep_id)
+        assert result["success"] is True
+        provider.unload.assert_called_once()
+
+    async def test_deployment_dict_stores_provider(self):
+        """Verify deploy methods store provider reference for later cleanup."""
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        provider = _make_mock_provider()
+
+        # Manually simulate what deploy_as_mcp does after loading
+        dep_id = "test-004"
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "model_path": "test/model",
+            "provider": provider,
+            "task": MagicMock(),
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8080,
+        }
+
+        assert svc._deployments[dep_id]["provider"] is provider

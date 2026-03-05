@@ -1,10 +1,14 @@
 """Hosting service — deploy fine-tuned models as MCP tool servers or REST APIs."""
 
 import asyncio
+import logging
 import uuid
 from typing import Any, Dict
 
 from shared.config import HostingConfig
+from shared.gpu_lock import GPULock
+
+log = logging.getLogger(__name__)
 
 
 class HostingService:
@@ -19,9 +23,14 @@ class HostingService:
             from agentsoul.server import MCPServer, HTTPTransport, StdioTransport
             from agentsoul.providers.hf import HuggingFaceProvider
 
-            provider = HuggingFaceProvider(model_path=config.model_path)
-            if config.adapter_path:
-                provider.load_adapter(config.adapter_path)
+            gpu_lock = GPULock.get()
+            await gpu_lock.acquire("deploy_mcp")
+            try:
+                provider = HuggingFaceProvider(model_path=config.model_path)
+                if config.adapter_path:
+                    provider.load_adapter(config.adapter_path)
+            finally:
+                gpu_lock.release()
 
             mcp = MCPServer(f"hosted-model-{config.port}", "1.0.0")
 
@@ -53,6 +62,7 @@ class HostingService:
                 "port": config.port,
                 "task": task,
                 "mcp": mcp,
+                "provider": provider,
             }
 
             return {
@@ -72,9 +82,14 @@ class HostingService:
             import uvicorn
             from agentsoul.providers.hf import HuggingFaceProvider
 
-            provider = HuggingFaceProvider(model_path=config.model_path)
-            if config.adapter_path:
-                provider.load_adapter(config.adapter_path)
+            gpu_lock = GPULock.get()
+            await gpu_lock.acquire("deploy_api")
+            try:
+                provider = HuggingFaceProvider(model_path=config.model_path)
+                if config.adapter_path:
+                    provider.load_adapter(config.adapter_path)
+            finally:
+                gpu_lock.release()
 
             app = FastAPI(title=f"MCP Tuna Model: {config.model_path}")
 
@@ -106,6 +121,7 @@ class HostingService:
                 "port": config.port,
                 "task": task,
                 "server": server,
+                "provider": provider,
             }
 
             return {
@@ -132,7 +148,7 @@ class HostingService:
         return {"success": True, "deployments": deployments, "count": len(deployments)}
 
     async def stop_deployment(self, deployment_id: str) -> Dict[str, Any]:
-        """Stop a running deployment."""
+        """Stop a running deployment and free GPU memory."""
         if deployment_id not in self._deployments:
             return {"success": False, "error": f"Deployment {deployment_id} not found"}
 
@@ -144,6 +160,18 @@ class HostingService:
         server = dep.get("server")
         if server:
             server.should_exit = True
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
+
+        provider = dep.get("provider")
+        if provider and hasattr(provider, "unload"):
+            try:
+                provider.unload()
+                log.info("Unloaded provider for deployment %s", deployment_id)
+            except Exception:
+                log.warning("Failed to unload provider for %s", deployment_id, exc_info=True)
 
         return {"success": True, "deployment_id": deployment_id, "status": "stopped"}
 
