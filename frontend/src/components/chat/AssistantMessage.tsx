@@ -4,6 +4,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { ReflectionBlock } from './ReflectionBlock'
 import { TurnMetricsBadge } from './TurnMetricsBadge'
+import { MarkdownContent } from './MarkdownContent'
 
 interface AssistantMessageProps {
   message: ChatMessage
@@ -49,8 +50,8 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
 
         {/* Response content */}
         {(content || isStreaming) && (
-          <div className="text-sm leading-relaxed whitespace-pre-wrap">
-            {content}
+          <div>
+            {content && <MarkdownContent content={content} />}
             {isStreaming && !content && !hasActivity && (
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             )}
