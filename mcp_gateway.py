@@ -345,6 +345,52 @@ class TunaGateway:
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
+            name="system.prescribe",
+            description=(
+                "Recommend optimal training configuration based on your hardware and dataset. "
+                "Analyzes GPU VRAM, RAM, disk space, dataset size, and text length to prescribe "
+                "hyperparameters (batch_size, learning_rate, epochs, lora_r, seq_length, etc.) "
+                "and dataset sampling if resources are limited. "
+                "Call this BEFORE finetune.train* to get a ready-to-use config. "
+                "Pass the returned config values directly to finetune.train_async."
+            ),
+        )
+        async def prescribe(
+            dataset_path: str,
+            model_name: Optional[str] = None,
+            technique: str = "sft",
+        ) -> str:
+            resolved_model = model_name or self.finetuner.config.base_model
+
+            # Get dataset metadata + text length stats
+            meta = await self.dataset_service.info(dataset_path)
+            if not meta.get("success"):
+                return json.dumps(meta, indent=2)
+
+            row_count = meta["metadata"]["row_count"]
+
+            stats = await self.dataset_service.sample_text_stats(dataset_path)
+            avg_text_length = stats.get("avg_length", 200) if stats.get("success") else 200
+
+            result = self.finetuner.prescribe(
+                model_name=resolved_model,
+                dataset_row_count=row_count,
+                dataset_avg_text_length=avg_text_length,
+                technique=technique,
+            )
+
+            # Enrich with dataset info
+            result["dataset_info"] = {
+                "file_path": dataset_path,
+                "row_count": row_count,
+                "columns": meta["metadata"].get("columns", []),
+                "technique": meta["metadata"].get("technique"),
+                "avg_text_length": avg_text_length,
+                "p95_text_length": stats.get("p95_length", 0) if stats.get("success") else 0,
+            }
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
             name="system.setup_check",
             description=(
                 "Validate all prerequisites for using MCP Tuna: API keys, GPU, "
@@ -417,6 +463,168 @@ class TunaGateway:
                     "HF_TOKEN": "***" if os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") else None,
                 },
             }, indent=2)
+
+        @self.mcp.tool(
+            name="system.health",
+            description=(
+                "Unified health dashboard: GPU/RAM/disk status, active training jobs, "
+                "active deployments, and an overall health score (green/yellow/red). "
+                "Call this to get a quick overview of system state."
+            ),
+        )
+        async def system_health() -> str:
+            resources = self.finetuner.check_resources()
+
+            # Active training jobs
+            job_manager = self._job_manager
+            jobs = job_manager.list_jobs() if job_manager else []
+            running_jobs = [j for j in jobs if j.get("status") == "running"]
+
+            # Active deployments
+            deployments_info: dict = {"deployments": [], "count": 0}
+            if self._hosting_svc is not None:
+                deployments_info = await self._hosting_svc.list_deployments()
+
+            # Health scoring
+            warnings: list = []
+            gpu = resources.get("gpu", {})
+            ram = resources.get("ram", {})
+            disk = resources.get("disk", {})
+
+            status = "green"
+            if gpu.get("available"):
+                vram_used_pct = 0.0
+                total = gpu.get("vram_total_gb", 1)
+                free = gpu.get("vram_free_gb", total)
+                if total > 0:
+                    vram_used_pct = (1 - free / total) * 100
+                if vram_used_pct > 80:
+                    status = "red"
+                    warnings.append(f"GPU VRAM {vram_used_pct:.0f}% used")
+                elif vram_used_pct > 60:
+                    status = "yellow"
+                    warnings.append(f"GPU VRAM {vram_used_pct:.0f}% used")
+
+            ram_pct = ram.get("percent_used", 0)
+            if ram_pct > 90:
+                status = "red"
+                warnings.append(f"RAM {ram_pct:.0f}% used")
+            elif ram_pct > 75:
+                if status != "red":
+                    status = "yellow"
+                warnings.append(f"RAM {ram_pct:.0f}% used")
+
+            disk_free = disk.get("free_gb", 100)
+            if disk_free < 5:
+                status = "red"
+                warnings.append(f"Disk critically low: {disk_free:.1f} GB free")
+            elif disk_free < 15:
+                if status != "red":
+                    status = "yellow"
+                warnings.append(f"Disk low: {disk_free:.1f} GB free")
+
+            return json.dumps({
+                "success": True,
+                "status": status,
+                "resources": resources,
+                "active_training_jobs": len(running_jobs),
+                "active_deployments": deployments_info.get("count", 0),
+                "warnings": warnings,
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="system.clear_all",
+            description=(
+                "Emergency recovery: stop ALL deployments and clear GPU memory. "
+                "Use this when the system is in a bad state (OOM, stuck deployments). "
+                "Returns a summary of what was cleaned up."
+            ),
+        )
+        async def clear_all() -> str:
+            results: dict = {"deployments_stopped": 0, "gpu_cleared": False}
+
+            # Stop all deployments
+            if self._hosting_svc is not None:
+                dep_ids = list(self._hosting_svc._deployments.keys())
+                for dep_id in dep_ids:
+                    try:
+                        await self._hosting_svc.stop_deployment(dep_id)
+                    except Exception:
+                        pass
+                results["deployments_stopped"] = len(dep_ids)
+
+            # Clear GPU
+            try:
+                gpu_result = self.finetuner.clear_gpu_memory()
+                results["gpu_cleared"] = gpu_result.get("success", False)
+                results["gpu_stats"] = gpu_result.get("memory_stats", {})
+            except Exception as e:
+                results["gpu_cleared"] = False
+                results["gpu_error"] = str(e)
+
+            results["success"] = True
+            return json.dumps(results, indent=2)
+
+        @self.mcp.tool(
+            name="system.disk_preflight",
+            description=(
+                "Check if there is enough free disk space for an operation. "
+                "Pass estimated_size_gb to validate before training (checkpoints) "
+                "or model downloads."
+            ),
+        )
+        async def disk_preflight(
+            output_dir: str = "",
+            estimated_size_gb: float = 5.0,
+        ) -> str:
+            result = self.finetuner.disk_preflight(
+                output_dir=output_dir,
+                estimated_size_gb=estimated_size_gb,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="system.prescribe_pipeline",
+            description=(
+                "End-to-end resource recommendations across the full pipeline. "
+                "Analyzes feasibility for evaluate, train, and deploy stages based on "
+                "your hardware (GPU, RAM, disk) and dataset. Returns per-stage "
+                "feasibility, recommended configs, and warnings. "
+                "Call this BEFORE starting a full pipeline run."
+            ),
+        )
+        async def prescribe_pipeline(
+            dataset_path: str,
+            model_name: Optional[str] = None,
+            technique: str = "sft",
+            stages: Optional[str] = None,
+        ) -> str:
+            resolved_model = model_name or self.finetuner.config.base_model
+
+            meta = await self.dataset_service.info(dataset_path)
+            if not meta.get("success"):
+                return json.dumps(meta, indent=2)
+
+            row_count = meta["metadata"]["row_count"]
+            stats = await self.dataset_service.sample_text_stats(dataset_path)
+            avg_text_length = stats.get("avg_length", 200) if stats.get("success") else 200
+
+            stage_list = stages.split(",") if stages else None
+
+            result = self.finetuner.prescribe_pipeline(
+                model_name=resolved_model,
+                dataset_row_count=row_count,
+                dataset_avg_text_length=avg_text_length,
+                stages=stage_list,
+                technique=technique,
+            )
+
+            result["dataset_info"] = {
+                "file_path": dataset_path,
+                "row_count": row_count,
+                "avg_text_length": avg_text_length,
+            }
+            return json.dumps(result, indent=2)
 
     # -- Extract --
     def _register_extract_tools(self):
