@@ -94,5 +94,6 @@ This project was renamed twice: **AgentY → Transcendence → MCP Tuna** (`mcp-
 ## Meta
 If this file exceeds 100 lines, split into per-directory CLAUDE.md files.
 Per-directory CLAUDE.md files exist in: `src/agentsoul/`, `app/`, `shared/`,
-`data_generator_pipeline/`, `data_evaluator_pipeline/`, `finetuning_pipeline/`,
-`orchestration/`, `tests/`, `logs/`
+`data_generator_pipeline/`, `data_evaluator_pipeline/`, `data_cleaning_pipeline/`,
+`data_normalization_pipeline/`, `finetuning_pipeline/`, `hosting_pipeline/`,
+`orchestration/`, `model_evaluator_pipeline/`, `frontend/`, `tests/`, `logs/`
