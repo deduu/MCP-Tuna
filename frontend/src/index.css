@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: #0a0a0b;
+  --color-foreground: #fafafa;
+  --color-card: #111113;
+  --color-card-foreground: #fafafa;
+  --color-popover: #111113;
+  --color-popover-foreground: #fafafa;
+  --color-primary: #3b82f6;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #1e1e22;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #18181b;
+  --color-muted-foreground: #a1a1aa;
+  --color-accent: #1e1e22;
+  --color-accent-foreground: #fafafa;
+  --color-destructive: #ef4444;
+  --color-border: #27272a;
+  --color-input: #27272a;
+  --color-ring: #3b82f6;
+  --radius: 0.5rem;
+
+  --color-ns-system: #64748b;
+  --color-ns-extract: #f59e0b;
+  --color-ns-generate: #10b981;
+  --color-ns-clean: #0ea5e9;
+  --color-ns-normalize: #8b5cf6;
+  --color-ns-evaluate: #f97316;
+  --color-ns-dataset: #3b82f6;
+  --color-ns-finetune: #f43f5e;
+  --color-ns-test: #14b8a6;
+  --color-ns-validate: #6366f1;
+  --color-ns-host: #22c55e;
+  --color-ns-workflow: #a855f7;
+  --color-ns-orchestration: #06b6d4;
+  --color-ns-judge: #eab308;
+  --color-ns-ft-eval: #ec4899;
+  --color-ns-evaluate-model: #84cc16;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+}
