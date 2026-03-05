@@ -1,0 +1,121 @@
+import { useState } from 'react'
+import { ChevronDown, Square, RotateCcw } from 'lucide-react'
+import type { TrainingJob } from '@/api/types'
+import { Card, CardContent } from '@/components/ui/card'
+import { Badge, type BadgeProps } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
+import { cn, formatDuration } from '@/lib/utils'
+import { TrainingJobDetail } from './TrainingJobDetail'
+
+interface TrainingJobCardProps {
+  job: TrainingJob
+  onCancel: (id: string) => void
+  onRerun?: (job: TrainingJob) => void
+}
+
+const TECHNIQUE_STYLE: Record<string, { variant: BadgeProps['variant']; label: string }> = {
+  sft: { variant: 'success', label: 'SFT' },
+  dpo: { variant: 'default', label: 'DPO' },
+  grpo: { variant: 'secondary', label: 'GRPO' },
+  kto: { variant: 'warning', label: 'KTO' },
+}
+
+const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
+  running: 'default',
+  completed: 'success',
+  failed: 'error',
+  pending: 'secondary',
+  cancelled: 'outline',
+}
+
+export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps) {
+  const [expanded, setExpanded] = useState(false)
+
+  const technique = TECHNIQUE_STYLE[job.technique] ?? {
+    variant: 'secondary' as const,
+    label: job.technique.toUpperCase(),
+  }
+  const statusVariant = STATUS_VARIANT[job.status] ?? 'secondary'
+  const isActive = job.status === 'running' || job.status === 'pending'
+  const pct = job.progress?.percent_complete ?? 0
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        {/* Header row */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-sm text-muted-foreground">
+            {job.job_id.slice(0, 8)}
+          </span>
+          <Badge variant={technique.variant}>{technique.label}</Badge>
+          <Badge variant={statusVariant}>{job.status}</Badge>
+          <span className="text-sm text-muted-foreground ml-auto hidden sm:inline truncate max-w-48">
+            {job.base_model}
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div className="flex items-center gap-3">
+          <Progress value={pct} className="flex-1" />
+          <span className="text-xs font-mono text-muted-foreground w-10 text-right">
+            {Math.round(pct)}%
+          </span>
+        </div>
+
+        {/* Running info row */}
+        {job.status === 'running' && job.progress && (
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            {job.progress.eta_seconds != null && (
+              <span>ETA: {formatDuration(job.progress.eta_seconds)}</span>
+            )}
+            <span>Loss: {job.progress.loss.toFixed(4)}</span>
+          </div>
+        )}
+
+        {/* Actions row */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setExpanded((e) => !e)}
+            className="gap-1 text-xs"
+          >
+            <ChevronDown
+              className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+            />
+            {expanded ? 'Collapse' : 'Details'}
+          </Button>
+
+          <div className="ml-auto flex gap-1">
+            {onRerun && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onRerun(job)}
+                className="gap-1 text-xs"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Re-run
+              </Button>
+            )}
+            {isActive && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onCancel(job.job_id)}
+                className="gap-1 text-xs text-destructive hover:text-destructive"
+              >
+                <Square className="h-3.5 w-3.5" />
+                Cancel
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Expanded detail */}
+        {expanded && <TrainingJobDetail job={job} />}
+      </CardContent>
+    </Card>
+  )
+}

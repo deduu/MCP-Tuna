@@ -1,0 +1,90 @@
+import type { Deployment } from '@/api/types'
+import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { Square, Trash2, Clipboard } from 'lucide-react'
+import { toast } from 'sonner'
+
+interface DeploymentCardProps {
+  deployment: Deployment
+  isSelected: boolean
+  onSelect: () => void
+  onStop: () => void
+  onUndeploy: () => void
+}
+
+export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUndeploy }: DeploymentCardProps) {
+  const modelName = deployment.model_path.split('/').pop() ?? deployment.model_path
+  const shortId = deployment.deployment_id.slice(0, 8)
+
+  const copyEndpoint = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(deployment.endpoint)
+    toast.success('Endpoint copied to clipboard')
+  }
+
+  const handleStop = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onStop()
+  }
+
+  const handleUndeploy = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (window.confirm('Are you sure you want to undeploy this model? This action cannot be undone.')) {
+      onUndeploy()
+    }
+  }
+
+  return (
+    <Card
+      className={cn(
+        'cursor-pointer transition-colors hover:border-primary/50',
+        isSelected && 'border-primary',
+      )}
+      onClick={onSelect}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-col gap-1.5 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-muted-foreground">{shortId}</span>
+              <Badge
+                className={cn(
+                  deployment.type === 'mcp'
+                    ? 'bg-[var(--color-ns-host)]/20 text-[var(--color-ns-host)] border-transparent'
+                    : 'bg-primary/20 text-primary border-transparent',
+                )}
+              >
+                {deployment.type === 'mcp' ? 'MCP' : 'API'}
+              </Badge>
+              <Badge variant={deployment.status === 'running' ? 'success' : 'secondary'}>
+                {deployment.status}
+              </Badge>
+            </div>
+            <p className="text-sm font-medium truncate">{modelName}</p>
+            <div className="flex items-center gap-1">
+              <code className="text-xs text-muted-foreground truncate">{deployment.endpoint}</code>
+              <button
+                onClick={copyEndpoint}
+                className="shrink-0 p-0.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              >
+                <Clipboard className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {deployment.status === 'running' && (
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={handleStop}>
+                <Square className="h-3 w-3" />
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={handleUndeploy}>
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

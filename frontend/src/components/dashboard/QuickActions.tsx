@@ -1,27 +1,27 @@
 import { useNavigate } from 'react-router'
 import { Card, CardContent } from '@/components/ui/card'
-import { Sparkles, FlaskConical, Rocket, GitBranch, MessageSquare, Bot } from 'lucide-react'
+import { Sparkles, FlaskConical, Rocket, GitBranch, MessageSquare, BarChart3 } from 'lucide-react'
 
 const ACTIONS = [
   {
     label: 'Generate Data',
     description: 'Create SFT/DPO/GRPO datasets from documents',
     icon: Sparkles,
-    path: '/tools/generate',
+    path: '/datasets',
     color: 'var(--color-ns-generate)',
   },
   {
     label: 'Train Model',
     description: 'Fine-tune with LoRA/QLoRA',
     icon: FlaskConical,
-    path: '/tools/finetune',
+    path: '/training',
     color: 'var(--color-ns-finetune)',
   },
   {
     label: 'Deploy Model',
     description: 'Host as MCP server or REST API',
     icon: Rocket,
-    path: '/tools/host',
+    path: '/deployments',
     color: 'var(--color-ns-host)',
   },
   {
@@ -39,11 +39,11 @@ const ACTIONS = [
     color: 'var(--color-primary)',
   },
   {
-    label: 'Orchestrate',
-    description: 'Generate training data from agent trajectories',
-    icon: Bot,
-    path: '/tools/orchestration',
-    color: 'var(--color-ns-orchestration)',
+    label: 'Evaluate',
+    description: 'LLM judge, fine-tune eval & benchmarks',
+    icon: BarChart3,
+    path: '/evaluation',
+    color: 'var(--color-ns-evaluate)',
   },
 ]
 
