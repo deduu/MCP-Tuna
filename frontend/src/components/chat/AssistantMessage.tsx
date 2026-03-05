@@ -1,17 +1,21 @@
 import { Fish, Loader2 } from 'lucide-react'
 import type { ChatMessage } from '@/stores/chat'
+import { useChatStore } from '@/stores/chat'
+import { sendChatMessage } from '@/api/chat-client'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { ReflectionBlock } from './ReflectionBlock'
 import { TurnMetricsBadge } from './TurnMetricsBadge'
 import { MarkdownContent } from './MarkdownContent'
+import { ConfirmationCard } from './ConfirmationCard'
 
 interface AssistantMessageProps {
   message: ChatMessage
 }
 
 export function AssistantMessage({ message }: AssistantMessageProps) {
-  const { content, thinking, toolCalls, reflections, metrics, isStreaming } = message
+  const { content, thinking, toolCalls, reflections, metrics, isStreaming, confirmation } = message
+  const chatIsStreaming = useChatStore((s) => s.isStreaming)
 
   // Determine which tool is currently running (started but no duration yet)
   const runningTools = new Set(
@@ -46,6 +50,26 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
               <ReflectionBlock key={i} reflection={r} />
             ))}
           </div>
+        )}
+
+        {/* Confirmation card */}
+        {confirmation && (
+          <ConfirmationCard
+            confirmation={confirmation}
+            onProceed={() => {
+              useChatStore.getState().resolveConfirmation(message.id)
+              sendChatMessage(`Confirmed: proceed with ${confirmation.tool}`)
+            }}
+            onCancel={() => {
+              useChatStore.getState().resolveConfirmation(message.id)
+              sendChatMessage(`Cancel: do not execute ${confirmation.tool}`)
+            }}
+            onModify={() => {
+              useChatStore.getState().resolveConfirmation(message.id)
+              // Focus is handled by the chat input component
+            }}
+            disabled={chatIsStreaming}
+          />
         )}
 
         {/* Response content */}

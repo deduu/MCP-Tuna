@@ -19,8 +19,14 @@ export interface TurnMetrics {
   usage?: { prompt_tokens: number; completion_tokens: number } | null
 }
 
+export interface ConfirmationRequest {
+  tool: string
+  arguments: Record<string, unknown>
+  message: string
+}
+
 export interface AgentEvent {
-  type: 'thinking' | 'tool_start' | 'tool_end' | 'reflection' | 'phase' | 'metrics'
+  type: 'thinking' | 'tool_start' | 'tool_end' | 'reflection' | 'phase' | 'metrics' | 'confirmation_needed'
   timestamp: number
   data: unknown
 }
@@ -35,6 +41,7 @@ export interface ChatMessage {
   metrics: TurnMetrics[]
   thinking: string[]
   isStreaming?: boolean
+  confirmation?: ConfirmationRequest
 }
 
 interface ChatStore {
@@ -51,6 +58,8 @@ interface ChatStore {
   addReflection: (id: string, isReady: boolean, explanation: string) => void
   addMetrics: (id: string, metrics: TurnMetrics) => void
   addPhase: (id: string, phase: string, action: string) => void
+  addConfirmation: (id: string, confirmation: ConfirmationRequest) => void
+  resolveConfirmation: (id: string) => void
   finishAssistantMessage: (id: string, history?: unknown[]) => void
   setStreaming: (streaming: boolean, controller?: AbortController | null) => void
   clearMessages: () => void
@@ -222,6 +231,33 @@ export const useChatStore = create<ChatStore>((set) => ({
               ],
             }
           : m,
+      ),
+    })),
+
+  addConfirmation: (id, confirmation) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              confirmation,
+              events: [
+                ...m.events,
+                {
+                  type: 'confirmation_needed' as const,
+                  timestamp: Date.now(),
+                  data: confirmation,
+                },
+              ],
+            }
+          : m,
+      ),
+    })),
+
+  resolveConfirmation: (id) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, confirmation: undefined } : m,
       ),
     })),
 

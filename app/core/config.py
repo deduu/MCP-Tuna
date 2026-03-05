@@ -80,7 +80,9 @@ class MCPServerConfig:
     server_label: str
     server_url: str
     server_description: str = ""
-    require_approval: str = "never"
+    require_approval: str = field(
+        default_factory=lambda: os.getenv("MCP_TUNA_REQUIRE_APPROVAL", "critical")
+    )
 
 
 @dataclass

@@ -179,6 +179,14 @@ function dispatchAgentEvent(
       })
       break
 
+    case 'confirmation_needed':
+      store.addConfirmation(msgId, {
+        tool: data.tool as string,
+        arguments: (data.arguments as Record<string, unknown>) ?? {},
+        message: (data.message as string) ?? '',
+      })
+      break
+
     case 'complete':
       store.finishAssistantMessage(
         msgId,

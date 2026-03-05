@@ -5,6 +5,7 @@ from typing import Optional, List, Dict
 from agentsoul.core.agent import AgentSoul
 from app.generation.registry import get_registry
 from app.core.config import settings
+from app.core.confirmation_gate import build_confirmation_gate
 
 TUNA_SYSTEM_PROMPT = """\
 You are a helpful AI assistant with access to the MCP Tuna fine-tuning platform.
@@ -24,6 +25,13 @@ Key chaining rules:
 - DPO requires prompt/chosen/rejected data; GRPO requires prompt/responses/rewards data
 - Use generate.from_document(technique="dpo"/"grpo") to create technique-specific datasets
 - workflow.run_pipeline executes multiple tools in one call — pass steps as JSON array with $prev.key refs to chain results (e.g., $prev.model_path)
+
+CLARIFICATION RULES:
+- If the user's request is ambiguous about which model to train, which dataset to use, or which technique to apply, ASK a clarification question before proceeding.
+- Do NOT guess parameters for destructive operations (training, deployment, deletion) — always confirm with the user first.
+- When multiple approaches are possible (e.g., SFT vs DPO, 1B vs 7B model), briefly present the trade-offs and ask the user to choose.
+- After receiving clarification, proceed with the confirmed parameters.
+- If the user does not specify a model, use system.auto_prescribe to recommend one based on their hardware and dataset.
 """
 
 
@@ -55,12 +63,17 @@ async def create_agent(
         if any("mcp-tuna" in label or "tuna" in label for label in labels):
             system_prompt = TUNA_SYSTEM_PROMPT
 
+    # Build confirmation gate from require_approval config
+    approval_mode = _get_approval_mode(mcp_servers)
+    gate = build_confirmation_gate(approval_mode)
+
     if tools:
         agent = await AgentSoul.create(
             llm_provider=llm_provider,
             tools=tools,
             system_prompt=system_prompt,
             max_turns=max_turns,
+            tool_pre_execute=gate,
         )
     else:
         agent = AgentSoul(
@@ -102,3 +115,20 @@ def _build_tool_configs(
             })
 
     return tools if tools else None
+
+
+def _get_approval_mode(mcp_servers: Optional[List[Dict]] = None) -> str:
+    """Extract the most restrictive require_approval value from MCP server configs."""
+    priority = {"always": 3, "critical": 2, "never": 1}
+
+    if mcp_servers:
+        configs = mcp_servers
+    elif settings.mcp.auto_connect:
+        configs = [
+            {"require_approval": s.require_approval} for s in settings.mcp.servers
+        ]
+    else:
+        return "never"
+
+    modes = [c.get("require_approval", "never") for c in configs]
+    return max(modes, key=lambda m: priority.get(m, 0), default="never")

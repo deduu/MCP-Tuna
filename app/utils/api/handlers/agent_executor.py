@@ -219,6 +219,14 @@ class StreamHandler:
                         },
                     )
 
+                # --- Confirmation needed (pre-execution gate) ---
+                elif event_type == "confirmation_needed":
+                    yield self._make_agent_event("confirmation_needed", {
+                        "tool": event.get("tool", ""),
+                        "arguments": event.get("arguments", {}),
+                        "message": event.get("message", ""),
+                    })
+
                 # --- Completion ---
                 elif event_type == "complete":
                     timing.end_inference()
@@ -229,6 +237,7 @@ class StreamHandler:
                         "turn_count": len(history),
                         "history": history,
                         "usage": event.get("usage", {}),
+                        "interrupted": event.get("interrupted", False),
                     })
 
                     await emit_agent_event(
