@@ -1,12 +1,17 @@
 """Inference and model comparison operations."""
+from __future__ import annotations
 
+import logging
 import time
 import torch
 from typing import Any, Dict, List, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
+from shared.gpu_lock import GPULock
 from .gpu_service import GPUService
+
+log = logging.getLogger(__name__)
 
 
 class InferenceService:
@@ -26,6 +31,10 @@ class InferenceService:
         do_sample: bool = True,
     ) -> Dict[str, Any]:
         """Run inference on a list of prompts."""
+        model = None
+        tokenizer = None
+        gpu_lock = GPULock.get()
+        await gpu_lock.acquire("inference")
         try:
             tokenizer = AutoTokenizer.from_pretrained(model_path)
             model = AutoModelForCausalLM.from_pretrained(
@@ -75,9 +84,6 @@ class InferenceService:
                     "tokens_per_second": tps,
                 })
 
-            del model, tokenizer
-            self.gpu.clear_gpu_memory()
-
             return {
                 "success": True,
                 "results": results,
@@ -86,8 +92,11 @@ class InferenceService:
                 "num_prompts": len(prompts),
             }
         except Exception as e:
-            self.gpu.clear_gpu_memory()
             return {"success": False, "error": str(e), "model_path": model_path}
+        finally:
+            del model, tokenizer
+            self.gpu.clear_gpu_memory()
+            gpu_lock.release()
 
     async def compare_models(
         self,

@@ -1,4 +1,5 @@
 """GPU memory management for fine-tuning operations."""
+from __future__ import annotations
 
 import gc
 import torch
@@ -16,7 +17,16 @@ class GPUService:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
-        self.max_memory = {0: "3.5GiB", "cpu": "30GiB"}
+        self.max_memory = self._detect_max_memory()
+
+    @staticmethod
+    def _detect_max_memory() -> Dict:
+        """Set GPU memory limit to 85% of total VRAM (15% headroom)."""
+        if torch.cuda.is_available():
+            total = torch.cuda.get_device_properties(0).total_memory
+            usable_gib = (total * 0.85) / (1024 ** 3)
+            return {0: f"{usable_gib:.1f}GiB", "cpu": "30GiB"}
+        return {"cpu": "30GiB"}
 
     def clear_gpu_memory(self) -> Dict[str, Any]:
         """Clear GPU memory cache and return current stats."""

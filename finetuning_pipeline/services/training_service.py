@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from shared.config import FinetuningConfig
+from shared.exceptions import OOMError
 
 
 class TrainingService:
@@ -553,6 +554,14 @@ class TrainingService:
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        self._cleanup(trainer, model)
+                        raise OOMError(
+                            "CUDA OOM during training. Reduce batch_size, "
+                            "max_seq_length, or use 4-bit quantization."
+                        ) from exc
+                    raise
                 return _interrupted
 
             interrupted = await asyncio.to_thread(_train_sync)
@@ -721,6 +730,14 @@ class TrainingService:
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        self._cleanup(trainer, model)
+                        raise OOMError(
+                            "CUDA OOM during training. Reduce batch_size, "
+                            "max_seq_length, or use 4-bit quantization."
+                        ) from exc
+                    raise
                 return _interrupted
 
             interrupted = await asyncio.to_thread(_train_sync)
@@ -887,6 +904,14 @@ class TrainingService:
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        self._cleanup(trainer, model)
+                        raise OOMError(
+                            "CUDA OOM during training. Reduce batch_size, "
+                            "max_seq_length, or use 4-bit quantization."
+                        ) from exc
+                    raise
                 return _interrupted
 
             interrupted = await asyncio.to_thread(_train_sync)
@@ -1038,6 +1063,14 @@ class TrainingService:
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        self._cleanup(trainer, model)
+                        raise OOMError(
+                            "CUDA OOM during training. Reduce batch_size, "
+                            "max_seq_length, or use 4-bit quantization."
+                        ) from exc
+                    raise
                 return _interrupted
 
             interrupted = await asyncio.to_thread(_train_sync)
