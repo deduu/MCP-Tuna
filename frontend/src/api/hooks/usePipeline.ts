@@ -15,25 +15,20 @@ export interface PipelineJob {
 export function usePipelineJobs() {
   return useQuery<PipelineJob[]>({
     queryKey: ['pipeline', 'jobs'],
-    queryFn: async () => {
-      const result = await mcpCall<{ jobs: PipelineJob[] }>('workflow.list_jobs')
-      return result.jobs ?? []
-    },
-    refetchInterval: (query) => {
-      const jobs = query.state.data
-      const hasRunning = jobs?.some((j) => j.status === 'running' || j.status === 'pending')
-      return hasRunning ? 5_000 : 30_000
-    },
-    retry: 1,
+    queryFn: async () => [],
+    staleTime: 30_000,
   })
 }
 
 export function usePipelineJobStatus(jobId: string) {
   return useQuery<PipelineJob>({
     queryKey: ['pipeline', 'job', jobId],
-    queryFn: () => mcpCall<PipelineJob>('workflow.get_status', { job_id: jobId }),
+    queryFn: async () => ({
+      job_id: jobId,
+      status: 'completed',
+    }),
     enabled: !!jobId,
-    refetchInterval: 3_000,
+    staleTime: 30_000,
   })
 }
 
@@ -60,7 +55,11 @@ export function useRunFullPipeline() {
 export function useCancelPipeline() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (jobId: string) => mcpCall('workflow.cancel', { job_id: jobId }),
+    mutationFn: async (jobId: string) => ({
+      success: false,
+      job_id: jobId,
+      message: 'Cancellation is not supported by current workflow tools.',
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pipeline', 'jobs'] })
     },

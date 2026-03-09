@@ -235,6 +235,27 @@ async def test_info_unknown_columns_returns_none_technique(svc: DatasetService, 
 
 
 # ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+
+async def test_delete_removes_dataset_file(svc: DatasetService, sft_data: list, tmp_path: Path):
+    out = tmp_path / "delete_me.jsonl"
+    await svc.save(sft_data, str(out))
+
+    result = await svc.delete(str(out))
+
+    assert result["success"] is True
+    assert result["deleted"] is True
+    assert out.exists() is False
+
+
+async def test_delete_missing_file_returns_error(svc: DatasetService, tmp_path: Path):
+    result = await svc.delete(str(tmp_path / "missing.jsonl"))
+    assert result["success"] is False
+    assert "not found" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
 # split
 # ---------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { useStartTraining, useAutoSuggestModel } from '@/api/hooks/useTraining'
 import { useDatasets } from '@/api/hooks/useDatasets'

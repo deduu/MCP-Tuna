@@ -24,11 +24,50 @@ export function DatasetCard({ dataset }: DatasetCardProps) {
   const [showSplit, setShowSplit] = useState(false)
 
   const fileName = dataset.file_path.split(/[\\/]/).pop() ?? dataset.file_path
+  const fileBaseName = fileName.includes('.') ? fileName.slice(0, fileName.lastIndexOf('.')) : fileName
+
+  function downloadText(content: string, downloadName: string, mimeType: string) {
+    const blob = new Blob([content], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = downloadName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
 
   async function handleExport() {
     try {
-      await executeTool({ toolName: 'dataset.export', args: { file_path: dataset.file_path } })
-      toast.success(`Exported ${fileName}`)
+      const loaded = await executeTool({
+        toolName: 'dataset.load',
+        args: { file_path: dataset.file_path },
+      })
+      const payload = loaded as Record<string, unknown>
+      const points = Array.isArray(payload.data_points)
+        ? (payload.data_points as Array<Record<string, unknown>>)
+        : []
+      if (points.length === 0) {
+        throw new Error('Dataset has no rows to export')
+      }
+
+      const fmt = dataset.format.toLowerCase()
+      if (fmt === 'json') {
+        const outName = fileName.endsWith('.json') ? fileName : `${fileBaseName}.json`
+        downloadText(JSON.stringify(points, null, 2), outName, 'application/json;charset=utf-8')
+        toast.success(`Exported ${outName}`)
+        return
+      }
+
+      const outName = fileName.endsWith('.jsonl') ? fileName : `${fileBaseName}.jsonl`
+      const content = points.map((row) => JSON.stringify(row)).join('\n')
+      downloadText(content, outName, 'application/x-ndjson;charset=utf-8')
+      if (fmt !== 'jsonl') {
+        toast.success(`Exported ${outName} (converted from ${dataset.format})`)
+      } else {
+        toast.success(`Exported ${outName}`)
+      }
     } catch (err) {
       toast.error(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
@@ -36,10 +75,13 @@ export function DatasetCard({ dataset }: DatasetCardProps) {
 
   async function handleDelete() {
     try {
-      await executeTool({ toolName: 'dataset.delete', args: { file_path: dataset.file_path } })
-      queryClient.invalidateQueries({ queryKey: ['datasets'] })
-      toast.success(`Deleted ${fileName}`)
+      await executeTool({
+        toolName: 'dataset.delete',
+        args: { file_path: dataset.file_path },
+      })
+      await queryClient.invalidateQueries({ queryKey: ['datasets'] })
       setShowDeleteConfirm(false)
+      toast.success(`Deleted ${fileName}`)
     } catch (err) {
       toast.error(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
@@ -106,6 +148,7 @@ export function DatasetCard({ dataset }: DatasetCardProps) {
               className="ml-auto text-destructive hover:text-destructive"
               onClick={() => setShowDeleteConfirm(true)}
               disabled={isPending}
+              title={`Delete ${fileName}`}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>

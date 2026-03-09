@@ -6,6 +6,7 @@ import json
 from typing import Dict, List, Optional
 
 from agentsoul.server import MCPServer
+from shared.async_utils import call_maybe_async
 from shared.config import AdvancedJudgeConfig, FTEvaluatorConfig, ModelEvaluationConfig
 
 
@@ -104,7 +105,8 @@ class ModelEvalMCPServer:
             description="Compute aggregate statistics for evaluation results.",
         )
         async def eval_summary(results: List[Dict]) -> str:
-            return json.dumps(self.eval_svc.compute_summary(results), indent=2)
+            result = await call_maybe_async(self.eval_svc.compute_summary, results)
+            return json.dumps(result, indent=2)
 
     # ------------------------------------------------------------------ #
     # judge.*
@@ -186,7 +188,8 @@ class ModelEvalMCPServer:
 
         @self.mcp.tool(name="judge.list_types", description="List available judge types.")
         async def judge_list_types() -> str:
-            return json.dumps(self.judge_svc.list_judge_types(), indent=2)
+            result = await call_maybe_async(self.judge_svc.list_judge_types)
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="judge.export", description="Export judge results as JSONL or JSON.")
         async def judge_export(
@@ -251,7 +254,7 @@ class ModelEvalMCPServer:
             for r in results:
                 from model_evaluator_pipeline.models.ft_eval_models import FTEvalResult
                 parsed.append(FTEvalResult(**r) if isinstance(r, dict) else r)
-            summary = self.ft_svc.compute_summary(parsed)
+            summary = await call_maybe_async(self.ft_svc.compute_summary, parsed)
             return json.dumps(summary.model_dump() if hasattr(summary, "model_dump") else summary, indent=2)
 
         @self.mcp.tool(

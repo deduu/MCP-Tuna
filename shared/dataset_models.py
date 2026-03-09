@@ -26,6 +26,7 @@ class DatasetMetadata(BaseModel):
     columns: List[str]
     technique: Optional[str] = None  # sft | dpo | grpo | kto | None
     size_bytes: int = 0
+    modified_at: Optional[str] = None
 
 
 class SplitResult(BaseModel):

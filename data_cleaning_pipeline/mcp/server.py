@@ -20,7 +20,7 @@ class CleaningMCPServer:
         svc = self.service
 
         @self.mcp.tool(name="clean.dataset",
-                       description="Run all cleaning steps (deduplicate, validate, filter short entries)")
+                       description="Run all cleaning steps (remove empty fields, deduplicate, filter short entries)")
         async def clean_dataset(
             data_points: List[Dict],
             remove_duplicates: bool = True,

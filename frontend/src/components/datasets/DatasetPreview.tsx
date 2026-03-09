@@ -8,6 +8,8 @@ interface DatasetPreviewProps {
 }
 
 interface PreviewData {
+  success?: boolean
+  error?: string
   rows: Record<string, unknown>[]
   total_rows?: number
 }
@@ -26,11 +28,19 @@ export function DatasetPreview({ filePath }: DatasetPreviewProps) {
       setError(null)
       try {
         const result = await executeTool({
-          toolName: 'dataset.load',
-          args: { file_path: filePath, limit: 50 },
+          toolName: 'dataset.preview',
+          args: { file_path: filePath, n: 50 },
         })
+        const payload = result as Record<string, unknown>
+        if (payload.success === false) {
+          const message =
+            typeof payload.error === 'string' && payload.error.trim()
+              ? payload.error
+              : 'Failed to load preview'
+          throw new Error(message)
+        }
         if (!cancelled) {
-          setData(result as unknown as PreviewData)
+          setData(payload as unknown as PreviewData)
         }
       } catch (err) {
         if (!cancelled) {

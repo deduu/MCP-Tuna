@@ -20,7 +20,7 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
   const deployment = deployments.find((d) => d.deployment_id === deploymentId)
 
   const refreshStatus = () => {
-    statusMutation.mutate({ toolName: 'host.get_status', args: { deployment_id: deploymentId } })
+    statusMutation.mutate({ toolName: 'host.health', args: { deployment_id: deploymentId } })
   }
 
   if (!deployment) {
@@ -110,7 +110,7 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
       </Card>
 
       {/* Inference test */}
-      <InferenceTest deploymentId={deploymentId} modelPath={deployment.model_path} />
+      <InferenceTest modelPath={deployment.model_path} />
     </div>
   )
 }

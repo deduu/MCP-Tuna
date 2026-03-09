@@ -112,6 +112,7 @@ export interface DatasetInfo {
   columns: string[]
   technique?: string
   size_bytes: number
+  modified_at?: string
 }
 
 // -- HuggingFace Hub search --

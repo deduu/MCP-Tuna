@@ -43,11 +43,17 @@ class TestToolRegistration:
     def test_dataset_info_registered(self, tool_names):
         assert "dataset.info" in tool_names
 
+    def test_dataset_delete_registered(self, tool_names):
+        assert "dataset.delete" in tool_names
+
     def test_dataset_split_registered(self, tool_names):
         assert "dataset.split" in tool_names
 
     def test_dataset_merge_registered(self, tool_names):
         assert "dataset.merge" in tool_names
+
+    def test_file_upload_registered(self, tool_names):
+        assert "file.upload" in tool_names
 
     # Generate tools
     def test_generate_from_text_registered(self, tool_names):

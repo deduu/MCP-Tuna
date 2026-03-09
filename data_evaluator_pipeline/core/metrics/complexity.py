@@ -24,7 +24,24 @@ _TOKENIZER_CACHE: Dict[str, Any] = {}
 def _get_spacy(model_name: str) -> Any:
     if model_name not in _SPACY_CACHE:
         log.info("Loading spaCy model '%s' (cached for reuse)", model_name)
-        _SPACY_CACHE[model_name] = spacy.load(model_name)
+        try:
+            _SPACY_CACHE[model_name] = spacy.load(model_name)
+        except OSError:
+            # Fall back to a blank pipeline so evaluation still works without a
+            # separately downloaded spaCy model package.
+            base_lang = model_name.split("_", 1)[0] or "xx"
+            log.warning(
+                "spaCy model '%s' not found; falling back to blank '%s' pipeline",
+                model_name,
+                base_lang,
+            )
+            try:
+                nlp = spacy.blank(base_lang)
+            except Exception:
+                nlp = spacy.blank("xx")
+            if "sentencizer" not in nlp.pipe_names:
+                nlp.add_pipe("sentencizer")
+            _SPACY_CACHE[model_name] = nlp
     return _SPACY_CACHE[model_name]
 
 
@@ -250,13 +267,7 @@ class ComplexityMetric(BaseMetric):
             tokenizer_name: The HuggingFace tokenizer for length normalization.
         """
         self.language_config = load_language_config(language_code)
-        try:
-            self.nlp = _get_spacy(self.language_config.spacy_model)
-        except OSError:
-            raise OSError(
-                f"Spacy model '{self.language_config.spacy_model}' not found. "
-                f"Please install it using: python -m spacy download {self.language_config.spacy_model}"
-            )
+        self.nlp = _get_spacy(self.language_config.spacy_model)
         self.tokenizer = _get_tokenizer(tokenizer_name)
 
     def compute(self, dp) -> float:

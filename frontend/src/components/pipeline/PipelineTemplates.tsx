@@ -15,6 +15,7 @@ export function PipelineTemplates() {
   const [docPath, setDocPath] = useState('')
   const [technique, setTechnique] = useState<string>('sft')
   const [modelPath, setModelPath] = useState('')
+  const [lastResult, setLastResult] = useState<Record<string, unknown> | null>(null)
   const fullPipeline = useRunFullPipeline()
 
   // Custom pipeline
@@ -22,10 +23,21 @@ export function PipelineTemplates() {
   const customPipeline = useRunPipeline()
 
   function handleRunFull() {
+    if (!docPath.trim()) {
+      toast.error('Document path is required')
+      return
+    }
     fullPipeline.mutate(
-      { document_path: docPath, technique, model_path: modelPath },
       {
-        onSuccess: () => toast.success('Full pipeline started'),
+        file_path: docPath,
+        technique,
+        ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+      },
+      {
+        onSuccess: (data) => {
+          setLastResult(data as Record<string, unknown>)
+          toast.success('Full pipeline completed')
+        },
         onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
       },
     )
@@ -33,7 +45,10 @@ export function PipelineTemplates() {
 
   function handleRunCustom(args: Record<string, unknown>) {
     customPipeline.mutate(args, {
-      onSuccess: () => toast.success('Custom pipeline started'),
+      onSuccess: (data) => {
+        setLastResult(data as Record<string, unknown>)
+        toast.success('Custom pipeline completed')
+      },
       onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
     })
   }
@@ -115,6 +130,19 @@ export function PipelineTemplates() {
           </CardContent>
         )}
       </Card>
+
+      {lastResult && (
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Latest Pipeline Result</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="max-h-80 overflow-auto rounded-md bg-secondary/40 p-3 text-xs font-mono">
+              {JSON.stringify(lastResult, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

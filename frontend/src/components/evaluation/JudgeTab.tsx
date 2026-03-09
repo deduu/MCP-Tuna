@@ -34,7 +34,12 @@ export function JudgeTab() {
       return
     }
     try {
-      await executeTool({ toolName: 'judge.batch_judge', args: { dataset_path: batchPath } })
+      const loaded = await executeTool({ toolName: 'dataset.load', args: { file_path: batchPath } })
+      const payload = loaded as Record<string, unknown>
+      const testData = Array.isArray(payload.data_points)
+        ? (payload.data_points as Array<Record<string, unknown>>)
+        : []
+      await executeTool({ toolName: 'judge.evaluate_batch', args: { test_data: testData } })
       toast.success('Batch evaluation complete')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Batch evaluation failed')

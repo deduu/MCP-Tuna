@@ -5,10 +5,10 @@ MCP Tuna Unified Gateway
 Single entry point exposing all pipeline operations as MCP tools.
 Uses agentsoul's MCPServer (production-grade HTTP+stdio transport).
 
-84 tools across 16 namespaces:
-  system, extract, generate, clean, normalize, evaluate, evaluate_model,
-  dataset, finetune, test, validate, host, workflow, orchestration,
-  judge, ft_eval
+85 tools across 17 namespaces:
+  system, file, extract, generate, clean, normalize, evaluate,
+  evaluate_model, dataset, finetune, test, validate, host, workflow,
+  orchestration, judge, ft_eval
 """
 from __future__ import annotations
 
@@ -16,10 +16,13 @@ import inspect
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from agentsoul.server import MCPServer
+from app.core.config import settings
 from dotenv import load_dotenv
+from shared.async_utils import call_maybe_async
 from shared.config import (
     AdvancedJudgeConfig,
     ChatConfig,
@@ -56,6 +59,7 @@ class TunaGateway:
         self._ft_evaluator_svc = None
         self._job_manager_instance = None
         self._dataset_svc = None
+        self._file_svc = None
         self._chat_sessions: Dict[str, Any] = {}
 
         self._config = config
@@ -102,9 +106,10 @@ class TunaGateway:
         if self._evaluator_svc is None:
             try:
                 from data_evaluator_pipeline.services.pipeline_service import EvaluatorService
-            except ImportError:
+            except ImportError as e:
                 raise ImportError(
-                    "Evaluation tools require: pip install mcp-tuna[eval]"
+                    "Evaluation tools unavailable: "
+                    f"{e}. Install with `uv sync --extra eval` or `uv sync --extra all`."
                 ) from None
             eval_config = EvaluatorConfig(**self._config.get("evaluator", {}))
             self._evaluator_svc = EvaluatorService(eval_config)
@@ -237,6 +242,17 @@ class TunaGateway:
             self._dataset_svc = DatasetService()
         return self._dataset_svc
 
+    @property
+    def file_service(self):
+        if self._file_svc is None:
+            from app.services.files.service import FileService
+            self._file_svc = FileService(str(settings.files.upload_root))
+        return self._file_svc
+
+    async def _invoke_dependency(self, func, /, *args, **kwargs):
+        """Gateway boundary: await async services and offload sync services."""
+        return await call_maybe_async(func, *args, **kwargs)
+
     # ------------------------------------------------------------------ #
     # Auto-deploy helper
     # ------------------------------------------------------------------ #
@@ -279,6 +295,7 @@ class TunaGateway:
     # ------------------------------------------------------------------ #
     def _register_all_tools(self):
         self._register_system_tools()
+        self._register_file_tools()
         self._register_extract_tools()
         self._register_generate_tools()
         self._register_clean_tools()
@@ -308,7 +325,7 @@ class TunaGateway:
             ),
         )
         async def check_resources() -> str:
-            result = self.finetuner.check_resources()
+            result = await self._invoke_dependency(self.finetuner.check_resources)
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
@@ -332,7 +349,8 @@ class TunaGateway:
             lora_r: int = 8,
             gradient_checkpointing: bool = False,
         ) -> str:
-            result = self.finetuner.preflight_check(
+            result = await self._invoke_dependency(
+                self.finetuner.preflight_check,
                 model_name=model_name,
                 quantization=quantization,
                 batch_size=batch_size,
@@ -372,7 +390,8 @@ class TunaGateway:
             stats = await self.dataset_service.sample_text_stats(dataset_path)
             avg_text_length = stats.get("avg_length", 200) if stats.get("success") else 200
 
-            result = self.finetuner.prescribe(
+            result = await self._invoke_dependency(
+                self.finetuner.prescribe,
                 model_name=resolved_model,
                 dataset_row_count=row_count,
                 dataset_avg_text_length=avg_text_length,
@@ -399,54 +418,54 @@ class TunaGateway:
             ),
         )
         async def setup_check() -> str:
-            import os
-            import shutil
-            checks = []
+            def _setup_check_sync() -> Dict[str, Any]:
+                import os
+                import shutil
 
-            # OpenAI API key
-            has_key = bool(os.getenv("OPENAI_API_KEY"))
-            checks.append({
-                "name": "OPENAI_API_KEY", "status": "pass" if has_key else "warn",
-                "detail": "Set" if has_key else "Not set — generation/evaluation tools require this",
-            })
+                checks = []
 
-            # HuggingFace token
-            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
-            checks.append({
-                "name": "HF_TOKEN", "status": "pass" if hf_token else "warn",
-                "detail": "Set" if hf_token else "Not set — required for gated models and push_to_hub",
-            })
-
-            # GPU
-            try:
-                import torch
-                gpu_ok = torch.cuda.is_available()
-                gpu_name = torch.cuda.get_device_name(0) if gpu_ok else None
+                has_key = bool(os.getenv("OPENAI_API_KEY"))
                 checks.append({
-                    "name": "GPU", "status": "pass" if gpu_ok else "warn",
-                    "detail": gpu_name or "No GPU detected — training will be slow",
+                    "name": "OPENAI_API_KEY", "status": "pass" if has_key else "warn",
+                    "detail": "Set" if has_key else "Not set — generation/evaluation tools require this",
                 })
-            except ImportError:
-                checks.append({"name": "GPU", "status": "fail", "detail": "torch not installed"})
 
-            # Disk space
-            disk = shutil.disk_usage(".")
-            free_gb = round(disk.free / (1024 ** 3), 1)
-            checks.append({
-                "name": "Disk Space", "status": "pass" if free_gb > 10 else "warn",
-                "detail": f"{free_gb} GB free",
-            })
+                hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+                checks.append({
+                    "name": "HF_TOKEN", "status": "pass" if hf_token else "warn",
+                    "detail": "Set" if hf_token else "Not set — required for gated models and push_to_hub",
+                })
 
-            # Key packages
-            for pkg in ["torch", "transformers", "peft", "trl", "datasets"]:
                 try:
-                    __import__(pkg)
-                    checks.append({"name": f"Package: {pkg}", "status": "pass", "detail": "Installed"})
+                    import torch
+                    gpu_ok = torch.cuda.is_available()
+                    gpu_name = torch.cuda.get_device_name(0) if gpu_ok else None
+                    checks.append({
+                        "name": "GPU", "status": "pass" if gpu_ok else "warn",
+                        "detail": gpu_name or "No GPU detected — training will be slow",
+                    })
                 except ImportError:
-                    checks.append({"name": f"Package: {pkg}", "status": "fail", "detail": "Not installed"})
+                    checks.append({"name": "GPU", "status": "fail", "detail": "torch not installed"})
 
-            all_passed = all(c["status"] != "fail" for c in checks)
-            return json.dumps({"success": True, "checks": checks, "all_passed": all_passed}, indent=2)
+                disk = shutil.disk_usage(".")
+                free_gb = round(disk.free / (1024 ** 3), 1)
+                checks.append({
+                    "name": "Disk Space", "status": "pass" if free_gb > 10 else "warn",
+                    "detail": f"{free_gb} GB free",
+                })
+
+                for pkg in ["torch", "transformers", "peft", "trl", "datasets"]:
+                    try:
+                        __import__(pkg)
+                        checks.append({"name": f"Package: {pkg}", "status": "pass", "detail": "Installed"})
+                    except ImportError:
+                        checks.append({"name": f"Package: {pkg}", "status": "fail", "detail": "Not installed"})
+
+                all_passed = all(c["status"] != "fail" for c in checks)
+                return {"success": True, "checks": checks, "all_passed": all_passed}
+
+            result = await self._invoke_dependency(_setup_check_sync)
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(
             name="system.config",
@@ -473,28 +492,33 @@ class TunaGateway:
             ),
         )
         async def set_hf_token(token: str) -> str:
-            import os as _os
-            _os.environ["HF_TOKEN"] = token
-            _os.environ["HUGGING_FACE_HUB_TOKEN"] = token
-            try:
-                from huggingface_hub import HfApi
-                api = HfApi(token=token)
-                user = api.whoami()
-                return json.dumps({
-                    "success": True,
-                    "username": user.get("name", "unknown"),
-                    "message": "HF token set and validated successfully",
-                }, indent=2)
-            except ImportError:
-                return json.dumps({
-                    "success": True,
-                    "message": "HF token set (could not validate — huggingface_hub not installed)",
-                }, indent=2)
-            except Exception as e:
-                return json.dumps({
-                    "success": True,
-                    "warning": f"Token set but validation failed: {e!s}",
-                }, indent=2)
+            def _set_hf_token_sync() -> Dict[str, Any]:
+                import os as _os
+
+                _os.environ["HF_TOKEN"] = token
+                _os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+                try:
+                    from huggingface_hub import HfApi
+                    api = HfApi(token=token)
+                    user = api.whoami()
+                    return {
+                        "success": True,
+                        "username": user.get("name", "unknown"),
+                        "message": "HF token set and validated successfully",
+                    }
+                except ImportError:
+                    return {
+                        "success": True,
+                        "message": "HF token set (could not validate — huggingface_hub not installed)",
+                    }
+                except Exception as e:
+                    return {
+                        "success": True,
+                        "warning": f"Token set but validation failed: {e!s}",
+                    }
+
+            result = await self._invoke_dependency(_set_hf_token_sync)
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(
             name="system.health",
@@ -505,7 +529,7 @@ class TunaGateway:
             ),
         )
         async def system_health() -> str:
-            resources = self.finetuner.check_resources()
+            resources = await self._invoke_dependency(self.finetuner.check_resources)
 
             # Active training jobs
             job_manager = self._job_manager
@@ -587,7 +611,7 @@ class TunaGateway:
 
             # Clear GPU
             try:
-                gpu_result = self.finetuner.clear_gpu_memory()
+                gpu_result = await self._invoke_dependency(self.finetuner.clear_gpu_memory)
                 results["gpu_cleared"] = gpu_result.get("success", False)
                 results["gpu_stats"] = gpu_result.get("memory_stats", {})
             except Exception as e:
@@ -609,7 +633,8 @@ class TunaGateway:
             output_dir: str = "",
             estimated_size_gb: float = 5.0,
         ) -> str:
-            result = self.finetuner.disk_preflight(
+            result = await self._invoke_dependency(
+                self.finetuner.disk_preflight,
                 output_dir=output_dir,
                 estimated_size_gb=estimated_size_gb,
             )
@@ -643,7 +668,8 @@ class TunaGateway:
 
             stage_list = stages.split(",") if stages else None
 
-            result = self.finetuner.prescribe_pipeline(
+            result = await self._invoke_dependency(
+                self.finetuner.prescribe_pipeline,
                 model_name=resolved_model,
                 dataset_row_count=row_count,
                 dataset_avg_text_length=avg_text_length,
@@ -735,7 +761,8 @@ class TunaGateway:
                     ),
                 }, indent=2)
 
-            result = self.finetuner.auto_prescribe(
+            result = await self._invoke_dependency(
+                self.finetuner.auto_prescribe,
                 dataset_row_count=dataset_row_count,
                 dataset_avg_text_length=dataset_avg_text_length,
                 technique=technique,
@@ -745,6 +772,20 @@ class TunaGateway:
                 result["resolved_dataset"] = dataset_path
             if dataset_path and technique_warning:
                 result["technique_warning"] = technique_warning
+            return json.dumps(result, indent=2)
+
+    def _register_file_tools(self):
+        @self.mcp.tool(
+            name="file.upload",
+            description=(
+                "Upload a browser-selected file into the server uploads directory. "
+                "Returns both relative path and absolute file_path for downstream "
+                "tools like extract.load_document and generate.from_document."
+            ),
+        )
+        async def file_upload(filename: str, content_base64: str) -> str:
+            relative_path = str(Path(filename))
+            result = await self.file_service.upload(relative_path, content_base64)
             return json.dumps(result, indent=2)
 
     # -- Extract --
@@ -757,7 +798,7 @@ class TunaGateway:
 
             try:
                 loader = get_loader(file_path)
-                file_name, pages = loader.load(file_path)
+                file_name, pages = await self._invoke_dependency(loader.load, file_path)
                 result = {
                     "success": True,
                     "file_name": file_name,
@@ -972,23 +1013,71 @@ class TunaGateway:
     def _register_evaluate_tools(self):
         @self.mcp.tool(name="evaluate.dataset",
                        description="Score dataset with complexity, IFD, and quality metrics")
-        async def evaluate_dataset(data_points: List[Dict]) -> str:
-            return json.dumps(await self.evaluator.evaluate_dataset(data_points), indent=2)
+        async def evaluate_dataset(
+            data_points: List[Dict],
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            return json.dumps(
+                await self.evaluator.evaluate_dataset(data_points, metrics=metrics),
+                indent=2,
+            )
 
         @self.mcp.tool(name="evaluate.filter_by_quality",
                        description="Return entries above quality threshold")
-        async def filter_quality(data_points: List[Dict], threshold: float = 0.7) -> str:
-            return json.dumps(await self.evaluator.filter_by_quality(data_points, threshold), indent=2)
+        async def filter_quality(
+            data_points: List[Dict],
+            threshold: float = 0.7,
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            return json.dumps(
+                await self.evaluator.filter_by_quality(
+                    data_points, threshold, metrics=metrics,
+                ),
+                indent=2,
+            )
 
         @self.mcp.tool(name="evaluate.statistics",
                        description="Return per-metric statistics (min/max/mean/stdev)")
-        async def statistics(data_points: List[Dict]) -> str:
-            return json.dumps(await self.evaluator.analyze_statistics(data_points), indent=2)
+        async def statistics(
+            data_points: List[Dict],
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            return json.dumps(
+                await self.evaluator.analyze_statistics(data_points, metrics=metrics),
+                indent=2,
+            )
 
         @self.mcp.tool(name="evaluate.list_metrics",
                        description="List all registered evaluation metrics")
         async def list_metrics() -> str:
-            return json.dumps(self.evaluator.list_metrics(), indent=2)
+            result = await self._invoke_dependency(self.evaluator.list_metrics)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="evaluate.get_config",
+            description="Show the current evaluator config (weights, threshold, language)",
+        )
+        async def get_evaluate_config() -> str:
+            result = await self._invoke_dependency(self.evaluator.get_config)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="evaluate.update_config",
+            description="Update evaluator config for this gateway session",
+        )
+        async def update_evaluate_config(
+            weights: Optional[Dict[str, float]] = None,
+            threshold: Optional[float] = None,
+            language: Optional[str] = None,
+        ) -> str:
+            return json.dumps(
+                await self.evaluator.update_config(
+                    weights=weights,
+                    threshold=threshold,
+                    language=language,
+                ),
+                indent=2,
+            )
 
     # -- Model Evaluate --
     def _register_model_eval_tools(self):
@@ -1053,7 +1142,9 @@ class TunaGateway:
             description="Compute aggregate statistics (min/max/mean/stdev) for evaluation results",
         )
         async def eval_model_summary(results: List[Dict]) -> str:
-            summary = self.model_evaluator.compute_summary(results)
+            summary = await self._invoke_dependency(
+                self.model_evaluator.compute_summary, results,
+            )
             return json.dumps({"success": True, "summary": summary}, indent=2)
 
     # -- Finetune --
@@ -1859,7 +1950,8 @@ class TunaGateway:
         @self.mcp.tool(name="validate.model_info",
                        description="Get info about a local model or adapter")
         async def model_info(model_path: str) -> str:
-            return json.dumps(self.finetuner.get_model_info(model_path), indent=2)
+            result = await self._invoke_dependency(self.finetuner.get_model_info, model_path)
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="validate.list_models",
                        description="List locally cached HuggingFace models")
@@ -1894,7 +1986,9 @@ class TunaGateway:
             ),
         )
         async def recommend_models(use_case: str = "general") -> str:
-            result = self.finetuner.get_recommended_models(use_case=use_case)
+            result = await self._invoke_dependency(
+                self.finetuner.get_recommended_models, use_case=use_case,
+            )
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
@@ -2428,7 +2522,8 @@ class TunaGateway:
             description="List available judge evaluation types (pointwise, pairwise, reference_free, rubric)",
         )
         async def judge_list_types() -> str:
-            return json.dumps(self.advanced_judge.list_judge_types(), indent=2)
+            result = await self._invoke_dependency(self.advanced_judge.list_judge_types)
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(
             name="judge.export",
@@ -2509,7 +2604,7 @@ class TunaGateway:
         async def ft_eval_summary(results: List[Dict]) -> str:
             from model_evaluator_pipeline.models.ft_evaluator import FTEvalResult
             parsed = [FTEvalResult(**r) for r in results]
-            summary = self.ft_evaluator.compute_summary(parsed)
+            summary = await self._invoke_dependency(self.ft_evaluator.compute_summary, parsed)
             return json.dumps({"success": True, "summary": summary.model_dump()}, indent=2)
 
         @self.mcp.tool(
@@ -2585,6 +2680,15 @@ class TunaGateway:
         async def dataset_info(file_path: str) -> str:
             return json.dumps(
                 await self.dataset_service.info(file_path), indent=2,
+            )
+
+        @self.mcp.tool(
+            name="dataset.delete",
+            description="Delete a dataset file from disk.",
+        )
+        async def dataset_delete(file_path: str) -> str:
+            return json.dumps(
+                await self.dataset_service.delete(file_path), indent=2,
             )
 
         @self.mcp.tool(

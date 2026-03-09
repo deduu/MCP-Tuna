@@ -612,7 +612,7 @@ class MCPServer:
                 if inspect.iscoroutinefunction(func):
                     result = await func(**arguments)
                 else:
-                    result = func(**arguments)
+                    result = await asyncio.to_thread(func, **arguments)
 
                 if isinstance(result, str):
                     output = result

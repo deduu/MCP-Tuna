@@ -6,16 +6,17 @@ import { Input } from '@/components/ui/input'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { toast } from 'sonner'
 import { MetricsTable } from './MetricsTable'
-import { ExportButton } from './ExportButton'
 
 export function BenchmarkTab() {
   const [modelPaths, setModelPaths] = useState<string[]>([''])
   const [datasetPath, setDatasetPath] = useState('')
   const [benchmarkResult, setBenchmarkResult] = useState<Record<string, unknown> | null>(null)
   const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null)
+  const [exportPath, setExportPath] = useState('output/eval_results.jsonl')
   const { mutateAsync: executeTool } = useToolExecution()
   const [runningBenchmark, setRunningBenchmark] = useState(false)
   const [runningCompare, setRunningCompare] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   function addModel() {
     setModelPaths((prev) => [...prev, ''])
@@ -33,6 +34,17 @@ export function BenchmarkTab() {
     return modelPaths.filter((p) => p.trim())
   }
 
+  async function loadTestData(path: string) {
+    const loaded = await executeTool({
+      toolName: 'dataset.load',
+      args: { file_path: path },
+    })
+    const payload = loaded as Record<string, unknown>
+    return Array.isArray(payload.data_points)
+      ? (payload.data_points as Array<Record<string, unknown>>)
+      : []
+  }
+
   async function handleBenchmark() {
     const paths = getValidPaths()
     if (paths.length === 0 || !datasetPath.trim()) {
@@ -41,11 +53,20 @@ export function BenchmarkTab() {
     }
     setRunningBenchmark(true)
     try {
-      const res = await executeTool({
-        toolName: 'evaluate_model.batch',
-        args: { model_paths: paths, dataset_path: datasetPath },
+      const testData = await loadTestData(datasetPath)
+      const runs: Array<Record<string, unknown>> = []
+      for (const modelPath of paths) {
+        const res = await executeTool({
+          toolName: 'evaluate_model.batch',
+          args: { test_data: testData, model_path: modelPath },
+        })
+        runs.push({ model_path: modelPath, ...(res as Record<string, unknown>) })
+      }
+      setBenchmarkResult({
+        success: true,
+        count: runs.length,
+        runs,
       })
-      setBenchmarkResult(res as Record<string, unknown>)
       toast.success('Benchmark complete')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Benchmark failed')
@@ -55,23 +76,42 @@ export function BenchmarkTab() {
   }
 
   async function handleCompare() {
-    const paths = getValidPaths()
-    if (paths.length < 2) {
-      toast.error('At least two model paths are required for comparison')
+    const runs = (benchmarkResult?.runs as Array<Record<string, unknown>> | undefined) ?? []
+    if (runs.length < 2) {
+      toast.error('Run benchmark on at least two models first')
       return
     }
     setRunningCompare(true)
     try {
-      const res = await executeTool({
-        toolName: 'evaluate_model.compare_models',
-        args: { model_paths: paths },
-      })
-      setCompareResult(res as Record<string, unknown>)
-      toast.success('Comparison complete')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Comparison failed')
+      const compare = runs.slice(0, 2).map((r) => ({
+        model_path: r.model_path,
+        summary: r.summary ?? {},
+      }))
+      setCompareResult({ success: true, compared: compare })
+      toast.success('Comparison prepared')
     } finally {
       setRunningCompare(false)
+    }
+  }
+
+  async function handleExport() {
+    const runs = (benchmarkResult?.runs as Array<Record<string, unknown>> | undefined) ?? []
+    const first = runs[0]
+    if (!first || !Array.isArray(first.results)) {
+      toast.error('No benchmark results available to export')
+      return
+    }
+    setExporting(true)
+    try {
+      await executeTool({
+        toolName: 'evaluate_model.export',
+        args: { results: first.results, output_path: exportPath, format: 'jsonl' },
+      })
+      toast.success(`Exported to ${exportPath}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -106,11 +146,20 @@ export function BenchmarkTab() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm font-medium">Dataset / Benchmark Path</label>
+            <label className="text-sm font-medium">Dataset Path</label>
             <Input
               placeholder="/path/to/benchmark-dataset.jsonl"
               value={datasetPath}
               onChange={(e) => setDatasetPath(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Export Path</label>
+            <Input
+              placeholder="output/eval_results.jsonl"
+              value={exportPath}
+              onChange={(e) => setExportPath(e.target.value)}
             />
           </div>
 
@@ -121,9 +170,16 @@ export function BenchmarkTab() {
             <Button
               variant="outline"
               onClick={handleCompare}
-              disabled={runningCompare}
+              disabled={runningCompare || !benchmarkResult}
             >
               {runningCompare ? 'Comparing...' : 'Compare Models'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleExport}
+              disabled={exporting || !benchmarkResult}
+            >
+              {exporting ? 'Exporting...' : 'Export First Run'}
             </Button>
           </div>
         </CardContent>
@@ -132,13 +188,7 @@ export function BenchmarkTab() {
       {benchmarkResult && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              Benchmark Results
-              <ExportButton
-                toolName="evaluate_model.export_results"
-                args={{ model_paths: getValidPaths(), dataset_path: datasetPath }}
-              />
-            </CardTitle>
+            <CardTitle>Benchmark Results</CardTitle>
           </CardHeader>
           <CardContent>
             <MetricsTable data={benchmarkResult} />

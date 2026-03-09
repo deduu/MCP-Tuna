@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from shared.async_utils import run_sync
+
 
 class AdapterService:
     """Merge LoRA adapters into base models and export to GGUF format."""
@@ -23,6 +25,21 @@ class AdapterService:
         Produces a standalone model directory at *output_path*.
         Optionally pushes the merged model to HuggingFace Hub.
         """
+        return await run_sync(
+            self._merge_adapter_sync,
+            base_model,
+            adapter_path,
+            output_path,
+            push_to_hub,
+        )
+
+    def _merge_adapter_sync(
+        self,
+        base_model: str,
+        adapter_path: str,
+        output_path: str,
+        push_to_hub: Optional[str] = None,
+    ) -> Dict[str, Any]:
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
             from peft import PeftModel
@@ -66,6 +83,16 @@ class AdapterService:
 
         Requires ``llama-cpp-python`` (install via ``pip install mcp-tuna[export]``).
         """
+        return await run_sync(
+            self._export_gguf_sync, model_path, output_path, quantization,
+        )
+
+    def _export_gguf_sync(
+        self,
+        model_path: str,
+        output_path: str,
+        quantization: str = "q4_k_m",
+    ) -> Dict[str, Any]:
         if quantization not in self._SUPPORTED_QUANTIZATIONS:
             return {
                 "success": False,

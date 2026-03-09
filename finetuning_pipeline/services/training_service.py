@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from shared.async_utils import run_sync
 from shared.config import FinetuningConfig
 from shared.exceptions import OOMError
 
@@ -277,6 +278,21 @@ class TrainingService:
         response_column: str = "response",
         rename_prompt_to: str = "prompt",
     ) -> Dict[str, Any]:
+        return await run_sync(
+            self._prepare_dataset_sync,
+            data,
+            prompt_column,
+            response_column,
+            rename_prompt_to,
+        )
+
+    def _prepare_dataset_sync(
+        self,
+        data: List[Dict[str, str]],
+        prompt_column: str = "instruction",
+        response_column: str = "response",
+        rename_prompt_to: str = "prompt",
+    ) -> Dict[str, Any]:
         """Prepare a HF Dataset from raw dicts."""
         try:
             from datasets import Dataset
@@ -306,7 +322,14 @@ class TrainingService:
         file_path: str,
         format: str = "json",
     ) -> Dict[str, Any]:
-        """Load dataset from file, merge instruction+input → prompt."""
+        return await run_sync(self._load_dataset_from_file_sync, file_path, format)
+
+    def _load_dataset_from_file_sync(
+        self,
+        file_path: str,
+        format: str = "json",
+    ) -> Dict[str, Any]:
+        """Load dataset from file, merge instruction+input into prompt."""
         try:
             from datasets import Dataset
 

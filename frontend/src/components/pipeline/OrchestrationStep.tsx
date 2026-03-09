@@ -12,30 +12,21 @@ interface OrchestrationStepProps {
 }
 
 const STEP_CONFIGS = [
-  {
-    title: 'Generate Problems',
-    tool: 'orchestration.generate_problems',
-    fields: ['domain', 'num_problems', 'difficulty'],
-  },
-  {
-    title: 'Collect Trajectories',
-    tool: 'orchestration.collect_trajectories',
-    fields: ['problem_set_path', 'agent_config'],
-  },
-  {
-    title: 'Score Trajectories',
-    tool: 'orchestration.score_trajectories',
-    fields: ['trajectory_path', 'weights'],
-  },
-  {
-    title: 'Format Dataset',
-    tool: 'orchestration.format_dataset',
-    fields: ['scored_path', 'output_format'],
-  },
+  { title: 'Generate Problems', tool: 'orchestration.generate_problems' },
+  { title: 'Collect Trajectories', tool: 'orchestration.collect_trajectories' },
+  { title: 'Build Training Data', tool: 'orchestration.build_training_data' },
+  { title: 'Train Orchestrator', tool: 'orchestration.train_orchestrator' },
 ] as const
 
-const DIFFICULTIES = ['easy', 'medium', 'hard'] as const
 const OUTPUT_FORMATS = ['sft', 'dpo', 'grpo'] as const
+
+function asList(input: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(input)) return input as Array<Record<string, unknown>>
+  if (input && typeof input === 'object' && Array.isArray((input as Record<string, unknown>).data)) {
+    return (input as Record<string, unknown>).data as Array<Record<string, unknown>>
+  }
+  return []
+}
 
 export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepProps) {
   const { stepResults } = useOrchestrationStore()
@@ -44,50 +35,41 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
   const config = STEP_CONFIGS[stepIndex]
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
 
-  // Step 0 - Generate Problems
-  const [domain, setDomain] = useState('')
+  const [domainDescription, setDomainDescription] = useState('general assistant workflows')
   const [numProblems, setNumProblems] = useState(10)
-  const [difficulty, setDifficulty] = useState<string>('medium')
-
-  // Step 1 - Collect Trajectories
-  const prevProblemPath = (stepResults[0]?.problem_set_path as string) ?? ''
-  const [problemSetPath, setProblemSetPath] = useState(prevProblemPath)
-  const [agentConfig, setAgentConfig] = useState('')
-
-  // Step 2 - Score Trajectories
-  const prevTrajectoryPath = (stepResults[1]?.trajectory_path as string) ?? ''
-  const [trajectoryPath, setTrajectoryPath] = useState(prevTrajectoryPath)
-  const [accuracy, setAccuracy] = useState(0.5)
-  const [cost, setCost] = useState(0.3)
-  const [latency, setLatency] = useState(0.2)
-
-  // Step 3 - Format Dataset
-  const prevScoredPath = (stepResults[2]?.scored_path as string) ?? ''
-  const [scoredPath, setScoredPath] = useState(prevScoredPath)
+  const [nPerProblem, setNPerProblem] = useState(3)
   const [outputFormat, setOutputFormat] = useState<string>('sft')
+  const [costBudget, setCostBudget] = useState(1)
+  const [timeBudget, setTimeBudget] = useState(60)
+  const [outputDir, setOutputDir] = useState('./output/orchestrator')
+  const [baseModel, setBaseModel] = useState('')
 
   function buildArgs(): Record<string, unknown> {
     switch (stepIndex) {
       case 0:
-        return { domain, num_problems: numProblems, difficulty }
+        return { domain_description: domainDescription, num_problems: numProblems }
       case 1: {
-        const args: Record<string, unknown> = { problem_set_path: problemSetPath }
-        if (agentConfig.trim()) {
-          try {
-            args.agent_config = JSON.parse(agentConfig)
-          } catch {
-            args.agent_config = agentConfig
-          }
-        }
-        return args
+        const problems = asList(stepResults[0]?.problems ?? stepResults[0])
+        return { problems, n_per_problem: nPerProblem }
       }
-      case 2:
+      case 2: {
+        const collected = asList(stepResults[1]?.collected ?? stepResults[1])
         return {
-          trajectory_path: trajectoryPath,
-          weights: { accuracy, cost, latency },
+          collected,
+          format: outputFormat,
+          cost_budget: costBudget,
+          time_budget: timeBudget,
         }
+      }
       case 3:
-        return { scored_path: scoredPath, output_format: outputFormat }
+        return {
+          domain_description: domainDescription,
+          num_problems: numProblems,
+          n_per_problem: nPerProblem,
+          output_dir: outputDir,
+          output_format: outputFormat,
+          ...(baseModel.trim() ? { base_model: baseModel.trim() } : {}),
+        }
       default:
         return {}
     }
@@ -98,8 +80,11 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
       { toolName: config.tool, args: buildArgs() },
       {
         onSuccess: (data) => {
-          const res = data as unknown as Record<string, unknown>
-          setResult(res)
+          const payload = data as unknown
+          const normalized = Array.isArray(payload)
+            ? ({ success: true, data: payload } as Record<string, unknown>)
+            : (payload as Record<string, unknown>)
+          setResult(normalized)
           toast.success(`${config.title} completed`)
         },
         onError: (err) => toast.error(`${config.title} failed: ${err.message}`),
@@ -115,12 +100,15 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
     <div className="space-y-4">
       <h3 className="text-base font-semibold">{config.title}</h3>
 
-      {/* Step 0: Generate Problems */}
       {stepIndex === 0 && (
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="text-sm font-medium mb-1 block">Domain</label>
-            <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="mathematics" />
+            <label className="text-sm font-medium mb-1 block">Domain Description</label>
+            <Input
+              value={domainDescription}
+              onChange={(e) => setDomainDescription(e.target.value)}
+              placeholder="customer support automation"
+            />
           </div>
           <div>
             <label className="text-sm font-medium mb-1 block">Number of Problems</label>
@@ -131,108 +119,28 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
               min={1}
             />
           </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Difficulty</label>
-            <select
-              value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {DIFFICULTIES.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          </div>
         </div>
       )}
 
-      {/* Step 1: Collect Trajectories */}
       {stepIndex === 1 && (
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium mb-1 block">Problem Set Path</label>
+            <label className="text-sm font-medium mb-1 block">Trajectories per Problem</label>
             <Input
-              value={problemSetPath}
-              onChange={(e) => setProblemSetPath(e.target.value)}
-              placeholder="/path/to/problem_set"
+              type="number"
+              value={nPerProblem}
+              onChange={(e) => setNPerProblem(Number(e.target.value))}
+              min={1}
             />
           </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Agent Config (JSON)</label>
-            <textarea
-              value={agentConfig}
-              onChange={(e) => setAgentConfig(e.target.value)}
-              placeholder='{"model": "gpt-4", "temperature": 0.7}'
-              rows={3}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Uses problem list from Step 1 output.
+          </p>
         </div>
       )}
 
-      {/* Step 2: Score Trajectories */}
       {stepIndex === 2 && (
-        <div className="space-y-3">
-          <div>
-            <label className="text-sm font-medium mb-1 block">Trajectory Path</label>
-            <Input
-              value={trajectoryPath}
-              onChange={(e) => setTrajectoryPath(e.target.value)}
-              placeholder="/path/to/trajectories"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Weights</label>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Accuracy</label>
-                <Input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  max={1}
-                  value={accuracy}
-                  onChange={(e) => setAccuracy(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Cost</label>
-                <Input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  max={1}
-                  value={cost}
-                  onChange={(e) => setCost(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Latency</label>
-                <Input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  max={1}
-                  value={latency}
-                  onChange={(e) => setLatency(Number(e.target.value))}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Format Dataset */}
-      {stepIndex === 3 && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-sm font-medium mb-1 block">Scored Path</label>
-            <Input
-              value={scoredPath}
-              onChange={(e) => setScoredPath(e.target.value)}
-              placeholder="/path/to/scored"
-            />
-          </div>
+        <div className="grid gap-3 sm:grid-cols-3">
           <div>
             <label className="text-sm font-medium mb-1 block">Output Format</label>
             <select
@@ -245,10 +153,49 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
               ))}
             </select>
           </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Cost Budget</label>
+            <Input
+              type="number"
+              value={costBudget}
+              onChange={(e) => setCostBudget(Number(e.target.value))}
+              step={0.1}
+              min={0}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Time Budget (s)</label>
+            <Input
+              type="number"
+              value={timeBudget}
+              onChange={(e) => setTimeBudget(Number(e.target.value))}
+              min={1}
+            />
+          </div>
         </div>
       )}
 
-      {/* Execute */}
+      {stepIndex === 3 && (
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm font-medium mb-1 block">Output Directory</label>
+            <Input
+              value={outputDir}
+              onChange={(e) => setOutputDir(e.target.value)}
+              placeholder="./output/orchestrator"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Base Model (optional)</label>
+            <Input
+              value={baseModel}
+              onChange={(e) => setBaseModel(e.target.value)}
+              placeholder="meta-llama/Llama-3.2-3B-Instruct"
+            />
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <Button onClick={handleExecute} disabled={isPending}>
           {isPending ? 'Executing...' : 'Execute Step'}
@@ -260,7 +207,6 @@ export function OrchestrationStep({ stepIndex, onComplete }: OrchestrationStepPr
         )}
       </div>
 
-      {/* Result preview */}
       {result && (
         <Card>
           <CardContent className="p-3">

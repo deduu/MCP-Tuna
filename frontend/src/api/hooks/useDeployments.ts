@@ -17,7 +17,7 @@ export function useDeployments() {
 export function useDeploymentStatus(deploymentId: string) {
   return useQuery({
     queryKey: ['deployments', 'status', deploymentId],
-    queryFn: () => mcpCall<Record<string, unknown>>('host.get_status', { deployment_id: deploymentId }),
+    queryFn: () => mcpCall<Record<string, unknown>>('host.health', { deployment_id: deploymentId }),
     enabled: !!deploymentId,
     refetchInterval: 5_000,
   })
@@ -27,8 +27,8 @@ export function useDeploymentLogs(deploymentId: string, enabled: boolean) {
   return useQuery<string[]>({
     queryKey: ['deployments', 'logs', deploymentId],
     queryFn: async () => {
-      const result = await mcpCall<{ logs: string[] }>('host.get_logs', { deployment_id: deploymentId })
-      return result.logs ?? []
+      const result = await mcpCall<Record<string, unknown>>('host.health', { deployment_id: deploymentId })
+      return [JSON.stringify(result, null, 2)]
     },
     enabled: !!deploymentId && enabled,
     refetchInterval: 3_000,
@@ -66,7 +66,7 @@ export function useUndeployment() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (deploymentId: string) =>
-      mcpCall('host.undeploy', { deployment_id: deploymentId }),
+      mcpCall('host.stop', { deployment_id: deploymentId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deployments'] })
     },

@@ -14,21 +14,27 @@ interface CompareResult {
 }
 
 export function CompareForm() {
-  const [prompt, setPrompt] = useState('')
+  const [question, setQuestion] = useState('')
+  const [reference, setReference] = useState('')
   const [responseA, setResponseA] = useState('')
   const [responseB, setResponseB] = useState('')
   const [result, setResult] = useState<CompareResult | null>(null)
   const { mutateAsync: executeTool, isPending } = useToolExecution()
 
   async function handleCompare() {
-    if (!prompt.trim() || !responseA.trim() || !responseB.trim()) {
+    if (!question.trim() || !responseA.trim() || !responseB.trim()) {
       toast.error('Prompt and both responses are required')
       return
     }
     try {
       const res = await executeTool({
-        toolName: 'judge.compare_responses',
-        args: { prompt, response_a: responseA, response_b: responseB },
+        toolName: 'judge.compare_pair',
+        args: {
+          question: question.trim(),
+          generated_a: responseA,
+          generated_b: responseB,
+          ...(reference.trim() ? { reference: reference.trim() } : {}),
+        },
       })
       setResult(res as CompareResult)
     } catch (err) {
@@ -52,8 +58,17 @@ export function CompareForm() {
             <textarea
               placeholder="Shared context or prompt..."
               className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-20 resize-y"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Reference (optional)</label>
+            <textarea
+              placeholder="Reference answer..."
+              className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-20 resize-y"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
             />
           </div>
           <div className="grid grid-cols-2 gap-4">

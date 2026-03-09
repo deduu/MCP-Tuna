@@ -4,13 +4,16 @@ import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { buildDatasetOutputPath } from '@/lib/dataset-output'
 import { ChevronDown, ChevronRight, Sparkles, Eraser } from 'lucide-react'
 import { toast } from 'sonner'
 import { DatasetSelector } from './DatasetSelector'
 
 interface OperationResult {
+  tool_name?: string
   rows_before?: number
   rows_after?: number
+  output_path?: string
   [key: string]: unknown
 }
 
@@ -23,21 +26,190 @@ export function CleanNormalizeTab() {
   const [showNormControls, setShowNormControls] = useState(false)
   const [lastResult, setLastResult] = useState<OperationResult | null>(null)
 
+  function toNumber(value: unknown, fallback = 0): number {
+    const num = Number(value)
+    return Number.isFinite(num) ? num : fallback
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+  }
+
+  function buildInsights(result: OperationResult): string[] {
+    const toolName = typeof result.tool_name === 'string' ? result.tool_name : ''
+    const steps = asRecord(result.steps)
+    const insights: string[] = []
+
+    if (toolName === 'clean.dataset') {
+      const empty = asRecord(steps?.remove_empty_fields)
+      const dedupe = asRecord(steps?.deduplicate)
+      const short = asRecord(steps?.remove_short_entries)
+      const removed = toNumber(result.removed)
+
+      if (removed === 0) {
+        insights.push(
+          'No rows were removed. The dataset passed empty-field checks, deduplication, and short-entry filtering as-is.',
+        )
+      }
+      if (empty?.enabled !== false) {
+        insights.push(`Empty-field check removed ${toNumber(empty?.removed)} row(s).`)
+      }
+      if (dedupe?.enabled !== false) {
+        insights.push(`Deduplication removed ${toNumber(dedupe?.removed)} duplicate row(s).`)
+      }
+      if (short?.enabled !== false) {
+        insights.push(
+          `Short-entry filter removed ${toNumber(short?.removed)} row(s) using min instruction ${toNumber(short?.min_instruction)} and min output ${toNumber(short?.min_output)} characters.`,
+        )
+      }
+      return insights
+    }
+
+    if (toolName === 'clean.deduplicate') {
+      insights.push(`Deduplication removed ${toNumber(result.duplicates_removed)} duplicate row(s).`)
+      if (toNumber(result.duplicates_removed) === 0) {
+        insights.push('No duplicate instruction values were found.')
+      }
+      return insights
+    }
+
+    if (toolName === 'clean.validate_schema') {
+      const requiredFields = Array.isArray(result.required_fields)
+        ? result.required_fields.map(String).join(', ')
+        : 'instruction, output'
+      insights.push(`Required fields checked: ${requiredFields}.`)
+      insights.push(
+        `Valid rows: ${toNumber(result.valid_count)}. Invalid rows: ${toNumber(result.invalid_count)}.`,
+      )
+      return insights
+    }
+
+    if (toolName === 'clean.remove_short') {
+      insights.push(`Short-entry filter removed ${toNumber(result.removed)} row(s).`)
+      insights.push(
+        `Thresholds used: instruction >= ${toNumber(result.min_instruction ?? result.min_instruction_length, 10)}, output >= ${toNumber(result.min_output ?? result.min_output_length, 20)} characters.`,
+      )
+      return insights
+    }
+
+    if (toolName === 'normalize.dataset') {
+      const strip = asRecord(steps?.strip_text)
+      const merge = asRecord(steps?.merge_fields)
+      const standardize = asRecord(steps?.standardize_keys)
+      const changedRows = toNumber(result.changed_rows)
+
+      if (changedRows === 0) {
+        insights.push(
+          'No rows changed. Text cleanup found nothing to trim, no instruction/input pairs were merged, and no alternate keys needed renaming.',
+        )
+      } else {
+        insights.push(`Normalization changed ${changedRows} row(s) overall.`)
+      }
+      if (strip?.enabled !== false) {
+        insights.push(
+          `Text cleanup changed ${toNumber(strip?.changed_rows)} row(s) across ${toNumber(strip?.changed_fields)} field(s).`,
+        )
+      }
+      if (merge?.enabled !== false) {
+        insights.push(`Field merge combined instruction + input in ${toNumber(merge?.merged_rows)} row(s).`)
+      }
+      if (standardize?.enabled !== false) {
+        insights.push(
+          `Key standardization renamed ${toNumber(standardize?.renamed_fields)} field name(s) for ${String(standardize?.target_format ?? result.target_format ?? 'sft')} format.`,
+        )
+      }
+      return insights
+    }
+
+    if (toolName === 'normalize.merge_fields') {
+      insights.push(`Field merge combined instruction + input in ${toNumber(result.merged_rows)} row(s).`)
+      if (toNumber(result.merged_rows) === 0) {
+        insights.push('No non-empty input fields were available to merge.')
+      }
+      return insights
+    }
+
+    if (toolName === 'normalize.standardize_keys') {
+      insights.push(
+        `Key standardization renamed ${toNumber(result.renamed_fields)} field name(s) for ${String(result.target_format ?? 'sft')} format.`,
+      )
+      if (toNumber(result.renamed_fields) === 0) {
+        insights.push('The dataset already used the expected field names.')
+      }
+      return insights
+    }
+
+    if (toolName === 'normalize.strip_text') {
+      insights.push(
+        `Text cleanup changed ${toNumber(result.changed_rows)} row(s) across ${toNumber(result.changed_fields)} field(s).`,
+      )
+      if (toNumber(result.changed_rows) === 0) {
+        insights.push('No leading/trailing whitespace or unicode normalization fixes were needed.')
+      }
+      return insights
+    }
+
+    return insights
+  }
+
+  function buildOutputPath(filePath: string, toolName: string): string {
+    const shortTool = toolName.split('.').pop() ?? 'processed'
+    return buildDatasetOutputPath(filePath, shortTool)
+  }
+
   async function runTool(toolName: string) {
     if (!selectedDataset) return
     try {
+      const loaded = await executeTool({
+        toolName: 'dataset.load',
+        args: { file_path: selectedDataset },
+      })
+      const loadedObj = loaded as Record<string, unknown>
+      const dataPoints = Array.isArray(loadedObj.data_points)
+        ? (loadedObj.data_points as Array<Record<string, unknown>>)
+        : []
+      if (dataPoints.length === 0) {
+        toast.error('Dataset has no rows to process')
+        return
+      }
+
       const result = await executeTool({
         toolName,
-        args: { dataset_path: selectedDataset },
+        args: { data_points: dataPoints },
       })
-      const opResult = result as unknown as OperationResult
+      const resultObj = result as Record<string, unknown>
+      const processed = Array.isArray(resultObj.data_points)
+        ? (resultObj.data_points as Array<Record<string, unknown>>)
+        : []
+      const outputPath = buildOutputPath(selectedDataset, toolName)
+
+      if (processed.length > 0) {
+        await executeTool({
+          toolName: 'dataset.save',
+          args: { data_points: processed, output_path: outputPath, format: 'jsonl' },
+        })
+      }
+
+      const rowsBefore = Number(resultObj.original_count ?? dataPoints.length)
+      const rowsAfter = Number(
+        resultObj.cleaned_count ?? resultObj.count ?? resultObj.filtered_count ?? processed.length,
+      )
+      const opResult = {
+        ...resultObj,
+        rows_before: Number.isFinite(rowsBefore) ? rowsBefore : dataPoints.length,
+        rows_after: Number.isFinite(rowsAfter) ? rowsAfter : processed.length,
+        output_path: outputPath,
+        tool_name: toolName,
+      } as OperationResult
       setLastResult(opResult)
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
-      toast.success(`${toolName} completed`)
+      toast.success(`${toolName} completed and saved`)
     } catch (err) {
       toast.error(`${toolName} failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
   }
+
+  const insightLines = lastResult ? buildInsights(lastResult) : []
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -48,12 +220,29 @@ export function CleanNormalizeTab() {
       />
 
       {lastResult && (lastResult.rows_before != null || lastResult.rows_after != null) && (
-        <div className="flex items-center gap-3">
-          {lastResult.rows_before != null && (
-            <Badge variant="secondary">Before: {lastResult.rows_before} rows</Badge>
-          )}
-          {lastResult.rows_after != null && (
-            <Badge variant="success">After: {lastResult.rows_after} rows</Badge>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {lastResult.rows_before != null && (
+              <Badge variant="secondary">Before: {lastResult.rows_before} rows</Badge>
+            )}
+            {lastResult.rows_after != null && (
+              <Badge variant="success">After: {lastResult.rows_after} rows</Badge>
+            )}
+            {lastResult.output_path && (
+              <Badge variant="outline">Saved: {lastResult.output_path.split(/[\\/]/).pop()}</Badge>
+            )}
+          </div>
+          {insightLines.length > 0 && (
+            <div className="rounded-md border border-border/60 bg-secondary/20 p-3">
+              <p className="text-sm font-medium">What happened</p>
+              <div className="mt-2 space-y-1">
+                {insightLines.map((line) => (
+                  <p key={line} className="text-xs text-muted-foreground">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -66,7 +255,7 @@ export function CleanNormalizeTab() {
               <Eraser className="h-4 w-4" />
               Clean
             </CardTitle>
-            <CardDescription>Remove duplicates, validate schema, filter short entries</CardDescription>
+            <CardDescription>Remove empty fields, duplicates, and short entries</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <Button

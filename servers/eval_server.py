@@ -34,8 +34,11 @@ class EvalServer:
 
         @self.mcp.tool(name="evaluate.dataset",
                        description="Score all data points using complexity, IFD, and quality metrics")
-        async def evaluate_dataset(data_points: List[Dict]) -> str:
-            result = await self._evaluator.service.evaluate_dataset(data_points)
+        async def evaluate_dataset(
+            data_points: List[Dict],
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            result = await self._evaluator.service.evaluate_dataset(data_points, metrics=metrics)
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="evaluate.filter_by_quality",
@@ -43,14 +46,18 @@ class EvalServer:
         async def filter_by_quality(
             data_points: List[Dict],
             threshold: float = 0.7,
+            metrics: Optional[List[str]] = None,
         ) -> str:
-            result = await self._evaluator.service.filter_by_quality(data_points, threshold)
+            result = await self._evaluator.service.filter_by_quality(data_points, threshold, metrics=metrics)
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="evaluate.statistics",
                        description="Return per-metric min/max/mean/stdev statistics")
-        async def analyze_statistics(data_points: List[Dict]) -> str:
-            result = await self._evaluator.service.analyze_statistics(data_points)
+        async def analyze_statistics(
+            data_points: List[Dict],
+            metrics: Optional[List[str]] = None,
+        ) -> str:
+            result = await self._evaluator.service.analyze_statistics(data_points, metrics=metrics)
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="evaluate.list_metrics",

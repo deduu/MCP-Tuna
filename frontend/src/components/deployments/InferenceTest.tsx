@@ -5,27 +5,32 @@ import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { FlaskConical, GitCompare } from 'lucide-react'
 
 interface InferenceTestProps {
-  deploymentId: string
   modelPath: string
 }
 
-export function InferenceTest({ deploymentId, modelPath }: InferenceTestProps) {
+export function InferenceTest({ modelPath }: InferenceTestProps) {
   const [prompt, setPrompt] = useState('')
+  const [baseModelPath, setBaseModelPath] = useState('')
   const evaluateMutation = useToolExecution()
   const compareMutation = useToolExecution()
 
   const handleEvaluate = () => {
     if (!prompt.trim()) return
     evaluateMutation.mutate({
-      toolName: 'test.evaluate_output',
-      args: { model_path: modelPath, prompt: prompt.trim() },
+      toolName: 'test.inference',
+      args: { model_path: modelPath, prompts: [prompt.trim()] },
     })
   }
 
   const handleCompare = () => {
+    if (!baseModelPath.trim()) return
     compareMutation.mutate({
       toolName: 'test.compare_models',
-      args: { deployment_id: deploymentId, model_path: modelPath },
+      args: {
+        prompts: [prompt.trim() || 'Hello'],
+        base_model_path: baseModelPath.trim(),
+        finetuned_adapter_path: modelPath,
+      },
     })
   }
 
@@ -45,6 +50,12 @@ export function InferenceTest({ deploymentId, modelPath }: InferenceTestProps) {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
+          <input
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder="Base model path (for compare)"
+            value={baseModelPath}
+            onChange={(e) => setBaseModelPath(e.target.value)}
+          />
           <div className="flex items-center gap-2">
             <Button
               onClick={handleEvaluate}
@@ -57,7 +68,7 @@ export function InferenceTest({ deploymentId, modelPath }: InferenceTestProps) {
             <Button
               variant="outline"
               onClick={handleCompare}
-              disabled={isLoading}
+              disabled={isLoading || !baseModelPath.trim()}
               size="sm"
             >
               <GitCompare className="h-4 w-4" />

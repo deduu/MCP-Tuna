@@ -42,7 +42,30 @@ export async function mcpCall<T = Record<string, unknown>>(
     throw new APIError('Empty MCP response')
   }
 
-  return JSON.parse(text) as T
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new APIError(text)
+  }
+
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    'success' in parsed &&
+    (parsed as { success?: unknown }).success === false
+  ) {
+    const maybeError = (parsed as { error?: unknown }).error
+    throw new APIError(
+      typeof maybeError === 'string' && maybeError.trim()
+        ? maybeError
+        : 'Tool execution failed',
+      undefined,
+      parsed,
+    )
+  }
+
+  return parsed as T
 }
 
 export async function mcpListTools() {

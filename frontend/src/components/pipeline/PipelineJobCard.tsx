@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, Square, Eye } from 'lucide-react'
 import type { PipelineJob } from '@/api/hooks/usePipeline'
-import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,8 +23,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
 
 export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
   const [showResult, setShowResult] = useState(false)
-  const [result, setResult] = useState<Record<string, unknown> | null>(null)
-  const { mutate: execute, isPending: loadingResult } = useToolExecution()
+  const result = (job.result as Record<string, unknown> | undefined) ?? null
 
   const isActive = job.status === 'running' || job.status === 'pending'
   const statusVariant = STATUS_VARIANT[job.status] ?? 'secondary'
@@ -33,19 +31,7 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
   const currentStepIndex = job.steps?.indexOf(job.current_step ?? '') ?? -1
 
   function handleViewResult() {
-    if (result) {
-      setShowResult((v) => !v)
-      return
-    }
-    execute(
-      { toolName: 'workflow.get_result', args: { job_id: job.job_id } },
-      {
-        onSuccess: (data) => {
-          setResult(data as unknown as Record<string, unknown>)
-          setShowResult(true)
-        },
-      },
-    )
+    setShowResult((v) => !v)
   }
 
   return (
@@ -94,14 +80,14 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
               variant="ghost"
               size="sm"
               onClick={handleViewResult}
-              disabled={loadingResult}
+              disabled={!result}
               className="gap-1 text-xs"
             >
               <ChevronDown
                 className={cn('h-3.5 w-3.5 transition-transform', showResult && 'rotate-180')}
               />
               <Eye className="h-3.5 w-3.5" />
-              {loadingResult ? 'Loading...' : showResult ? 'Hide Result' : 'View Result'}
+              {showResult ? 'Hide Result' : 'View Result'}
             </Button>
           )}
 

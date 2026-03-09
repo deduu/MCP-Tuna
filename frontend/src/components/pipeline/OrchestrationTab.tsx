@@ -7,8 +7,8 @@ import { OrchestrationStep } from './OrchestrationStep'
 const ORCH_STEPS = [
   'Generate Problems',
   'Collect Trajectories',
-  'Score Trajectories',
-  'Format Dataset',
+  'Build Training Data',
+  'Train Orchestrator',
 ]
 
 export function OrchestrationTab() {
@@ -37,7 +37,7 @@ export function OrchestrationTab() {
             Orchestration Complete
           </p>
           <p className="text-sm text-muted-foreground mb-4">
-            All 4 steps finished. Your dataset is ready for training.
+            All 4 steps finished.
           </p>
           <Button variant="secondary" onClick={reset}>
             Start Over

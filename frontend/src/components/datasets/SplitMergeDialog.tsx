@@ -26,20 +26,33 @@ export function SplitMergeDialog({
   const { mutateAsync: executeTool, isPending } = useToolExecution()
 
   const [splitRatio, setSplitRatio] = useState(0.8)
+  const [outputDir, setOutputDir] = useState('data')
   const [outputName, setOutputName] = useState('')
 
   async function handleExecute() {
     try {
       if (mode === 'split' && datasetPath) {
+        const valRatio = Number(((1 - splitRatio) / 2).toFixed(2))
+        const testRatio = Number((1 - splitRatio - valRatio).toFixed(2))
         await executeTool({
           toolName: 'dataset.split',
-          args: { file_path: datasetPath, ratio: splitRatio },
+          args: {
+            file_path: datasetPath,
+            output_dir: outputDir,
+            train_ratio: splitRatio,
+            val_ratio: valRatio,
+            test_ratio: testRatio,
+          },
         })
         toast.success('Dataset split successfully')
       } else if (mode === 'merge' && datasetPaths?.length) {
+        const safeName = outputName.trim() || 'merged_dataset'
         await executeTool({
           toolName: 'dataset.merge',
-          args: { file_paths: datasetPaths, output_name: outputName },
+          args: {
+            file_paths: datasetPaths,
+            output_path: safeName.endsWith('.jsonl') ? safeName : `${safeName}.jsonl`,
+          },
         })
         toast.success('Datasets merged successfully')
       }
@@ -79,6 +92,14 @@ export function SplitMergeDialog({
                   <Badge variant="outline">Test: {Math.round((1 - splitRatio) * 100)}%</Badge>
                 </div>
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Output directory</label>
+              <Input
+                placeholder="data/splits"
+                value={outputDir}
+                onChange={(e) => setOutputDir(e.target.value)}
+              />
             </div>
           </>
         )}

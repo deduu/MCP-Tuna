@@ -39,19 +39,66 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
   }
 
   function handleSubmit() {
-    const args: Record<string, unknown> = {
-      steps: Array.from(selectedSteps),
-      document_path: documentPath,
-      model_path: modelPath,
-      technique,
-    }
+    const needsData = ['generate', 'clean', 'normalize', 'evaluate', 'train'].some((s) => selectedSteps.has(s))
+    if (needsData && !documentPath.trim()) return
+
+    let overrides: Record<string, Record<string, unknown>> = {}
     if (stepConfig.trim()) {
       try {
-        args.step_config = JSON.parse(stepConfig)
+        overrides = JSON.parse(stepConfig) as Record<string, Record<string, unknown>>
       } catch {
-        // keep as string if invalid JSON
-        args.step_config = stepConfig
+        overrides = {}
       }
+    }
+
+    const steps: Array<{ tool: string; params: Record<string, unknown> }> = []
+    const addStep = (tool: string, params: Record<string, unknown>) => {
+      const merged = { ...params, ...(overrides[tool] ?? {}) }
+      steps.push({ tool, params: merged })
+    }
+
+    if (selectedSteps.has('extract')) {
+      addStep('extract.load_document', { file_path: documentPath })
+    }
+
+    if (selectedSteps.has('generate')) {
+      addStep('generate.from_document', { technique, file_path: documentPath })
+    } else if (needsData) {
+      addStep('dataset.load', { file_path: documentPath })
+    }
+
+    if (selectedSteps.has('clean')) {
+      addStep('clean.dataset', { data_points: '$prev.data_points' })
+    }
+    if (selectedSteps.has('normalize')) {
+      addStep('normalize.dataset', { data_points: '$prev.data_points', target_format: technique })
+    }
+    if (selectedSteps.has('evaluate')) {
+      addStep('evaluate.dataset', { data_points: '$prev.data_points' })
+    }
+    if (selectedSteps.has('train')) {
+      addStep('dataset.save', {
+        data_points: '$prev.data_points',
+        output_path: 'data/custom_pipeline_dataset.jsonl',
+        format: 'jsonl',
+      })
+      addStep('finetune.train', {
+        dataset_path: '$prev.file_path',
+        output_dir: './output/custom_pipeline',
+        ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+      })
+    }
+    if (selectedSteps.has('deploy')) {
+      if (selectedSteps.has('train')) {
+        addStep('host.deploy_mcp', { model_path: '$prev.model_path' })
+      } else if (modelPath.trim()) {
+        addStep('host.deploy_mcp', { model_path: modelPath.trim() })
+      }
+    }
+
+    const args: Record<string, unknown> = {
+      steps: JSON.stringify(steps),
+      dry_run: false,
     }
     onSubmit(args)
   }
@@ -91,7 +138,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
           <Input
             value={documentPath}
             onChange={(e) => setDocumentPath(e.target.value)}
-            placeholder="/path/to/documents"
+            placeholder="/path/to/document-or-dataset"
           />
         </div>
         <div>

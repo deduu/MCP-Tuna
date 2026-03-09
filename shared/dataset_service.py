@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import random
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -66,6 +67,7 @@ class DatasetService:
             await asyncio.to_thread(self._write_parquet, path, data_points)
 
         columns = list(data_points[0].keys()) if data_points else []
+        stat = path.stat() if path.exists() else None
         meta = DatasetMetadata(
             dataset_id=path.stem,
             file_path=str(path.resolve()),
@@ -73,7 +75,12 @@ class DatasetService:
             row_count=len(data_points),
             columns=columns,
             technique=self._detect_technique(columns),
-            size_bytes=path.stat().st_size if path.exists() else 0,
+            size_bytes=stat.st_size if stat else 0,
+            modified_at=(
+                datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                if stat
+                else None
+            ),
         )
         return {"success": True, **meta.model_dump()}
 
@@ -183,8 +190,35 @@ class DatasetService:
             columns=columns,
             technique=self._detect_technique(columns),
             size_bytes=path.stat().st_size,
+            modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         )
         return {"success": True, "metadata": meta.model_dump()}
+
+    # ------------------------------------------------------------------
+    # delete
+    # ------------------------------------------------------------------
+
+    async def delete(self, file_path: str) -> Dict[str, Any]:
+        """Delete a dataset file from disk."""
+        path = Path(file_path)
+        if not path.exists():
+            return {"success": False, "error": f"File not found: {file_path}"}
+
+        if path.is_dir():
+            path = self._resolve_dir(path)
+            if path is None:
+                return {"success": False, "error": f"No dataset files in {file_path}"}
+
+        if not path.is_file():
+            return {"success": False, "error": f"Not a file: {file_path}"}
+
+        ext = path.suffix.lower()
+        if ext not in self._SUPPORTED_LOAD_EXTENSIONS:
+            return {"success": False, "error": f"Unsupported extension: {ext}"}
+
+        resolved = str(path.resolve())
+        await asyncio.to_thread(path.unlink)
+        return {"success": True, "file_path": resolved, "deleted": True}
 
     # ------------------------------------------------------------------
     # split

@@ -89,5 +89,6 @@ class FileService:
         return {
             "success": True,
             "path": filename,
+            "file_path": str(full_path),
             "size": len(data),
         }

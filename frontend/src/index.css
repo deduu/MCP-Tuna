@@ -70,3 +70,9 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-muted-foreground);
 }
+
+/* Native select menus can open with a light OS background on Windows. */
+select option {
+  color: #111113;
+  background-color: #ffffff;
+}

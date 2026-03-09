@@ -51,7 +51,7 @@ pip install mcp-tuna[training,hosting]
 
 | Server | Command | Tools | Required extra |
 |--------|---------|-------|----------------|
-| **Unified Gateway** | `mcp-tuna-gateway` | 84 | `all-servers` |
+| **Unified Gateway** | `mcp-tuna-gateway` | 85 | `all-servers` |
 | Data Prep | `mcp-tuna-data` | 22 | `data` |
 | Evaluation | `mcp-tuna-eval` | 4 | `eval` |
 | Model Eval | `mcp-tuna-model-eval` | 15 | `model-eval` |
@@ -292,7 +292,7 @@ uv run ruff check .
 uv run ruff format .
 
 # Start gateway locally
-python scripts/run_gateway.py http 8000
+python scripts/run_gateway.py http --port 8000
 ```
 
 ## Environment Variables
@@ -307,7 +307,7 @@ python scripts/run_gateway.py http 8000
 
 ```
 mcp-tuna/
-├── mcp_gateway.py              # Unified MCP gateway (84 tools)
+├── mcp_gateway.py              # Unified MCP gateway (85 tools)
 ├── scripts/                    # Entry points for all servers
 ├── servers/                    # Standalone split server implementations
 ├── shared/                     # Cross-pipeline models, config, utilities

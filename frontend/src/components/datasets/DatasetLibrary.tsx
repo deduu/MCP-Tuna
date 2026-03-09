@@ -34,7 +34,14 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
         return nameA.localeCompare(nameB)
       }
       if (sortBy === 'size') return b.size_bytes - a.size_bytes
-      return 0 // date: preserve original order
+      const timeA = Date.parse(a.modified_at ?? '')
+      const timeB = Date.parse(b.modified_at ?? '')
+      if (Number.isFinite(timeA) && Number.isFinite(timeB)) {
+        return timeB - timeA
+      }
+      if (Number.isFinite(timeA)) return -1
+      if (Number.isFinite(timeB)) return 1
+      return a.file_path.localeCompare(b.file_path)
     })
   }, [datasets, search, sortBy])
 
@@ -91,7 +98,7 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((dataset) => (
-            <DatasetCard key={dataset.dataset_id} dataset={dataset} />
+            <DatasetCard key={dataset.file_path} dataset={dataset} />
           ))}
         </div>
       )}

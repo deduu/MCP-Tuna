@@ -4,6 +4,7 @@ import { DiagnosticsSection } from './DiagnosticsSection'
 import { EnvironmentSection } from './EnvironmentSection'
 import { ApiKeysSection } from './ApiKeysSection'
 import { MaintenanceSection } from './MaintenanceSection'
+import { DatasetStorageSection } from './DatasetStorageSection'
 
 export function SettingsPage() {
   return (
@@ -21,6 +22,7 @@ export function SettingsPage() {
       <GatewayConnection />
       <DiagnosticsSection />
       <EnvironmentSection />
+      <DatasetStorageSection />
       <ApiKeysSection />
       <MaintenanceSection />
     </div>

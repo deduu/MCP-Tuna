@@ -32,7 +32,7 @@ export function PipelineJobTracker() {
 
       {!isLoading && (!jobs || jobs.length === 0) && (
         <p className="text-sm text-muted-foreground py-8 text-center">
-          No pipeline jobs yet
+          No async pipeline jobs available. Current workflow tools execute synchronously.
         </p>
       )}
 

@@ -229,6 +229,10 @@ class DataPrepServer:
         async def dataset_info(file_path: str) -> str:
             return json.dumps(await self.dataset_service.info(file_path), indent=2)
 
+        @self.mcp.tool(name="dataset.delete", description="Delete a dataset file")
+        async def dataset_delete(file_path: str) -> str:
+            return json.dumps(await self.dataset_service.delete(file_path), indent=2)
+
         @self.mcp.tool(name="dataset.split", description="Split into train/val/test files")
         async def dataset_split(
             file_path: str, output_dir: str,

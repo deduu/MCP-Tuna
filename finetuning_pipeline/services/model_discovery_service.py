@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from shared.async_utils import run_sync
+
 
 class ModelDiscoveryService:
     """Discovers models from HuggingFace Hub and local cache."""
@@ -18,6 +20,19 @@ class ModelDiscoveryService:
         filter_tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Search for models on HuggingFace Hub."""
+        return await run_sync(
+            self._search_huggingface_models_sync,
+            query, task, sort, limit, filter_tags,
+        )
+
+    def _search_huggingface_models_sync(
+        self,
+        query: str = "",
+        task: str = "text-generation",
+        sort: str = "downloads",
+        limit: int = 20,
+        filter_tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         try:
             from huggingface_hub import HfApi
 
@@ -58,6 +73,9 @@ class ModelDiscoveryService:
 
     async def get_huggingface_model_info(self, model_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific HuggingFace model."""
+        return await run_sync(self._get_huggingface_model_info_sync, model_id)
+
+    def _get_huggingface_model_info_sync(self, model_id: str) -> Dict[str, Any]:
         try:
             from huggingface_hub import model_info
 
@@ -106,6 +124,13 @@ class ModelDiscoveryService:
         hf_home: Optional[str] = None,
     ) -> Dict[str, Any]:
         """List locally available HuggingFace base models."""
+        return await run_sync(self._list_available_base_models_sync, query, hf_home)
+
+    def _list_available_base_models_sync(
+        self,
+        query: str = "",
+        hf_home: Optional[str] = None,
+    ) -> Dict[str, Any]:
         hf_home = hf_home or os.getenv(
             "HF_HOME", os.path.join(Path.home(), ".cache", "huggingface"),
         )
@@ -140,6 +165,18 @@ class ModelDiscoveryService:
         limit: int = 50,
     ) -> Dict[str, Any]:
         """Search locally cached HuggingFace models with file details."""
+        return await run_sync(
+            self._search_local_models_sync,
+            query, hf_home, file_extensions, limit,
+        )
+
+    def _search_local_models_sync(
+        self,
+        query: str = "",
+        hf_home: Optional[str] = None,
+        file_extensions: Optional[List[str]] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
         hf_home = hf_home or os.getenv(
             "HF_HOME", os.path.join(Path.home(), ".cache", "huggingface"),
         )

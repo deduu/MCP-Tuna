@@ -28,7 +28,7 @@ export function DatasetSelector({ value, onChange, label }: DatasetSelectorProps
           {datasets?.length ? 'Select a dataset...' : 'No datasets available'}
         </option>
         {datasets?.map((d) => (
-          <option key={d.dataset_id} value={d.file_path}>
+          <option key={d.file_path} value={d.file_path}>
             {getDisplayName(d.file_path, d.format, d.row_count)}
           </option>
         ))}

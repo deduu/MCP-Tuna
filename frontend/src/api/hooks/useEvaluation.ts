@@ -10,7 +10,7 @@ export interface JudgeCriterion {
 export function useJudgeConfig() {
   return useQuery<Record<string, unknown>>({
     queryKey: ['judge', 'config'],
-    queryFn: () => mcpCall<Record<string, unknown>>('judge.get_config'),
+    queryFn: () => mcpCall<Record<string, unknown>>('judge.list_types'),
     staleTime: 60_000,
     retry: 1,
   })
@@ -19,10 +19,7 @@ export function useJudgeConfig() {
 export function useJudgeCriteria() {
   return useQuery<JudgeCriterion[]>({
     queryKey: ['judge', 'criteria'],
-    queryFn: async () => {
-      const result = await mcpCall<{ criteria: JudgeCriterion[] }>('judge.list_criteria')
-      return result.criteria ?? []
-    },
+    queryFn: async () => [],
     staleTime: 60_000,
     retry: 1,
   })
