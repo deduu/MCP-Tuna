@@ -206,6 +206,7 @@ class SequentialTrainingService:
             "output_dir": output_dir,
             "base_model": base_model,
             "num_epochs": stage_config.get("num_epochs", 3),
+            "load_in_4bit": stage_config.get("load_in_4bit", True),
         }
 
         if technique == "sft":

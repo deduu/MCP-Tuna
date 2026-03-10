@@ -57,6 +57,23 @@ class TrainingService:
         except Exception:
             return False, False
 
+    @staticmethod
+    def _resolve_model_path(model_name: str) -> str:
+        """Resolve HF cache wrapper dirs to a concrete snapshot path when needed."""
+        path = Path(model_name)
+        if not path.is_dir():
+            return model_name
+
+        snapshots_dir = path / "snapshots"
+        if not snapshots_dir.is_dir() or (path / "config.json").exists():
+            return model_name
+
+        snapshot_dirs = [entry for entry in snapshots_dir.iterdir() if entry.is_dir()]
+        if not snapshot_dirs:
+            return model_name
+
+        return str(max(snapshot_dirs, key=lambda entry: entry.stat().st_mtime))
+
     def _pop_training_kwargs(
         self, kwargs: dict, cuda_available: bool, bf16_supported: bool
     ) -> dict:
@@ -181,6 +198,7 @@ class TrainingService:
 
         logger = logging.getLogger(__name__)
 
+        resolved_model_name = self._resolve_model_path(model_name)
         local_files_only = bool(kwargs.pop("local_files_only", False))
         load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
         cuda_available, bf16_supported = self._detect_precision()
@@ -190,9 +208,29 @@ class TrainingService:
             else (torch.float16 if cuda_available else torch.float32)
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name, use_fast=True, local_files_only=local_files_only
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                resolved_model_name, use_fast=True, local_files_only=local_files_only
+            )
+        except Exception as exc:
+            message = str(exc).lower()
+            fallback_markers = (
+                "backend tokenizer",
+                "convert a slow tokenizer to a fast one",
+                "sentencepiece",
+                "tiktoken",
+            )
+            if not any(marker in message for marker in fallback_markers):
+                raise
+
+            logger.warning(
+                "Fast tokenizer unavailable for %s; falling back to slow tokenizer: %s",
+                resolved_model_name,
+                exc,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                resolved_model_name, use_fast=False, local_files_only=local_files_only
+            )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
@@ -220,7 +258,7 @@ class TrainingService:
                     quantization_config = None
 
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            resolved_model_name,
             device_map="auto",
             dtype=model_dtype,
             quantization_config=quantization_config,
@@ -266,6 +304,17 @@ class TrainingService:
             tokenizer.save_pretrained(output_dir)
         except Exception:
             pass
+
+    @staticmethod
+    def _save_model_artifacts(trainer: Any, tokenizer: Any, output_dir: str) -> None:
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+
+    @staticmethod
+    def _push_to_hub(model: Any, tokenizer: Any, repo_id: str) -> str:
+        model.push_to_hub(repo_id)
+        tokenizer.push_to_hub(repo_id)
+        return f"https://huggingface.co/{repo_id}"
 
     # ----------------------------------------------------------------
     # Dataset operations
@@ -590,16 +639,17 @@ class TrainingService:
             interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
-                trainer.save_model(output_dir)
-                tokenizer.save_pretrained(output_dir)
+                await asyncio.to_thread(
+                    self._save_model_artifacts, trainer, tokenizer, output_dir
+                )
 
             # Push to HuggingFace Hub if requested
             hub_url = None
             if push_to_hub and not interrupted:
                 try:
-                    model.push_to_hub(push_to_hub)
-                    tokenizer.push_to_hub(push_to_hub)
-                    hub_url = f"https://huggingface.co/{push_to_hub}"
+                    hub_url = await asyncio.to_thread(
+                        self._push_to_hub, model, tokenizer, push_to_hub
+                    )
                 except Exception:
                     hub_url = None
 
@@ -610,7 +660,7 @@ class TrainingService:
                     with open(eval_path, "r", encoding="utf-8") as f:
                         eval_results = json.load(f)
 
-            self._cleanup(trainer, model)
+            await asyncio.to_thread(self._cleanup, trainer, model)
 
             result: Dict[str, Any] = {
                 "success": True,
@@ -766,10 +816,11 @@ class TrainingService:
             interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
-                trainer.save_model(output_dir)
-                tokenizer.save_pretrained(output_dir)
+                await asyncio.to_thread(
+                    self._save_model_artifacts, trainer, tokenizer, output_dir
+                )
 
-            self._cleanup(trainer, model)
+            await asyncio.to_thread(self._cleanup, trainer, model)
 
             return {
                 "success": True,
@@ -940,10 +991,11 @@ class TrainingService:
             interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
-                trainer.save_model(output_dir)
-                tokenizer.save_pretrained(output_dir)
+                await asyncio.to_thread(
+                    self._save_model_artifacts, trainer, tokenizer, output_dir
+                )
 
-            self._cleanup(trainer, model)
+            await asyncio.to_thread(self._cleanup, trainer, model)
 
             return {
                 "success": True,
@@ -1099,10 +1151,11 @@ class TrainingService:
             interrupted = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
-                trainer.save_model(output_dir)
-                tokenizer.save_pretrained(output_dir)
+                await asyncio.to_thread(
+                    self._save_model_artifacts, trainer, tokenizer, output_dir
+                )
 
-            self._cleanup(trainer, model)
+            await asyncio.to_thread(self._cleanup, trainer, model)
 
             return {
                 "success": True,

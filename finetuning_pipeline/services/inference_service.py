@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 import torch
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
@@ -19,6 +20,23 @@ class InferenceService:
 
     def __init__(self, gpu: GPUService = None):
         self.gpu = gpu or GPUService()
+
+    @staticmethod
+    def _resolve_model_path(model_path: str) -> str:
+        """Resolve HF cache wrapper dirs to a concrete snapshot path when needed."""
+        path = Path(model_path)
+        if not path.is_dir():
+            return model_path
+
+        snapshots_dir = path / "snapshots"
+        if not snapshots_dir.is_dir() or (path / "config.json").exists():
+            return model_path
+
+        snapshot_dirs = [entry for entry in snapshots_dir.iterdir() if entry.is_dir()]
+        if not snapshot_dirs:
+            return model_path
+
+        return str(max(snapshot_dirs, key=lambda entry: entry.stat().st_mtime))
 
     async def run_inference(
         self,
@@ -36,9 +54,28 @@ class InferenceService:
         gpu_lock = GPULock.get()
         await gpu_lock.acquire("inference")
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            resolved_model_path = self._resolve_model_path(model_path)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(resolved_model_path, use_fast=True)
+            except Exception as exc:
+                message = str(exc).lower()
+                fallback_markers = (
+                    "backend tokenizer",
+                    "convert a slow tokenizer to a fast one",
+                    "sentencepiece",
+                    "tiktoken",
+                )
+                if not any(marker in message for marker in fallback_markers):
+                    raise
+
+                log.warning(
+                    "Fast tokenizer unavailable for %s; falling back to slow tokenizer: %s",
+                    resolved_model_path,
+                    exc,
+                )
+                tokenizer = AutoTokenizer.from_pretrained(resolved_model_path, use_fast=False)
             model = AutoModelForCausalLM.from_pretrained(
-                model_path,
+                resolved_model_path,
                 device_map="auto",
                 quantization_config=self.gpu.bnb_config,
                 max_memory=self.gpu.max_memory,

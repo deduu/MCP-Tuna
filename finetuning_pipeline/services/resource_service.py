@@ -81,8 +81,11 @@ class ResourceService:
 
     def check_resources(self) -> Dict[str, Any]:
         """Return current GPU, RAM, and disk status."""
+        gpus = self._get_all_gpu_info()
         return {
-            "gpu": self._get_gpu_info(),
+            "gpu": gpus[0] if gpus else {"available": False},
+            "gpus": gpus,
+            "gpu_count": len(gpus),
             "ram": self._get_ram_info(),
             "disk": self._get_disk_info(),
         }
@@ -796,26 +799,42 @@ class ResourceService:
     # Private helpers
     # ------------------------------------------------------------------ #
 
+    def _get_all_gpu_info(self) -> List[Dict[str, Any]]:
+        """Get information for all visible CUDA devices."""
+        if torch is None or not torch.cuda.is_available():
+            return []
+
+        try:
+            device_count = int(torch.cuda.device_count())
+        except (TypeError, ValueError):
+            device_count = 1
+
+        if device_count < 1:
+            device_count = 1
+
+        devices: List[Dict[str, Any]] = []
+        for idx in range(device_count):
+            props = torch.cuda.get_device_properties(idx)
+            total = props.total_memory / 1024**3
+            allocated = torch.cuda.memory_allocated(idx) / 1024**3
+            reserved = torch.cuda.memory_reserved(idx) / 1024**3
+            devices.append({
+                "index": idx,
+                "available": True,
+                "name": torch.cuda.get_device_name(idx),
+                "vram_total_gb": round(total, 2),
+                "vram_free_gb": round(total - allocated, 2),
+                "vram_used_gb": round(allocated, 2),
+                "vram_reserved_gb": round(reserved, 2),
+                "compute_capability": f"{props.major}.{props.minor}",
+                "cuda_version": getattr(torch.version, "cuda", "unknown"),
+            })
+        return devices
+
     def _get_gpu_info(self) -> Dict[str, Any]:
         """Get GPU device information."""
-        if torch is None or not torch.cuda.is_available():
-            return {"available": False}
-
-        props = torch.cuda.get_device_properties(0)
-        total = props.total_memory / 1024**3
-        allocated = torch.cuda.memory_allocated(0) / 1024**3
-        reserved = torch.cuda.memory_reserved(0) / 1024**3
-
-        return {
-            "available": True,
-            "name": torch.cuda.get_device_name(0),
-            "vram_total_gb": round(total, 2),
-            "vram_free_gb": round(total - allocated, 2),
-            "vram_used_gb": round(allocated, 2),
-            "vram_reserved_gb": round(reserved, 2),
-            "compute_capability": f"{props.major}.{props.minor}",
-            "cuda_version": getattr(torch.version, "cuda", "unknown"),
-        }
+        devices = self._get_all_gpu_info()
+        return devices[0] if devices else {"available": False}
 
     @staticmethod
     def _get_ram_info() -> Dict[str, Any]:
