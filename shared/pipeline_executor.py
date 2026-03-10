@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from shared.async_utils import call_maybe_async
 
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = 20
+ToolRunner = Callable[..., Awaitable[Any] | Any]
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +80,9 @@ class PipelineExecutor:
         self,
         steps: List[PipelineStep],
         dry_run: bool = False,
+        step_callback: Optional[Callable[..., Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        tool_runner: Optional[ToolRunner] = None,
     ) -> PipelineResult:
         """Run *steps* sequentially.  Stop on first failure.
 
@@ -108,6 +114,25 @@ class PipelineExecutor:
         prev_result: Dict[str, Any] = {}
 
         for idx, step in enumerate(steps):
+            if cancel_event is not None and cancel_event.is_set():
+                return PipelineResult(
+                    success=False,
+                    steps_completed=idx,
+                    total_steps=total,
+                    error="Pipeline cancelled",
+                    results=results,
+                    final_result=prev_result or None,
+                )
+
+            if step_callback is not None:
+                await call_maybe_async(
+                    step_callback,
+                    phase="start",
+                    step_index=idx,
+                    total_steps=total,
+                    step=step,
+                )
+
             # Resolve $prev references
             try:
                 resolved_params = self._resolve_refs(step.params, prev_result, idx)
@@ -126,8 +151,25 @@ class PipelineExecutor:
 
             # Call the tool
             try:
-                raw = await self._tools[step.tool]["func"](**resolved_params)
-                parsed = json.loads(raw)
+                tool_func = self._tools[step.tool]["func"]
+                if tool_runner is None:
+                    raw = await tool_func(**resolved_params)
+                else:
+                    raw = await call_maybe_async(
+                        tool_runner,
+                        step=step,
+                        resolved_params=resolved_params,
+                        tool_func=tool_func,
+                    )
+                if isinstance(raw, dict):
+                    parsed = raw
+                elif isinstance(raw, str):
+                    parsed = json.loads(raw)
+                else:
+                    raise TypeError(
+                        f"Tool runner for '{step.tool}' returned unsupported type "
+                        f"{type(raw).__name__}"
+                    )
             except json.JSONDecodeError:
                 results.append(StepResult(
                     step=idx, tool=step.tool, success=False,
@@ -159,6 +201,15 @@ class PipelineExecutor:
             ))
 
             if not step_ok:
+                if step_callback is not None:
+                    await call_maybe_async(
+                        step_callback,
+                        phase="failed",
+                        step_index=idx,
+                        total_steps=total,
+                        step=step,
+                        result=parsed,
+                    )
                 return PipelineResult(
                     success=False,
                     steps_completed=idx,
@@ -168,6 +219,15 @@ class PipelineExecutor:
                 )
 
             prev_result = parsed
+            if step_callback is not None:
+                await call_maybe_async(
+                    step_callback,
+                    phase="complete",
+                    step_index=idx,
+                    total_steps=total,
+                    step=step,
+                    result=parsed,
+                )
             logger.info("Pipeline step %d/%d (%s) succeeded", idx + 1, total, step.tool)
 
         return PipelineResult(

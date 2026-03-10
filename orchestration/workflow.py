@@ -4,8 +4,13 @@ End-to-end pipeline orchestrator.
 Composes: Extract → Generate → Clean → Normalize → Evaluate → Filter → Train → Test → Host
 """
 
+import asyncio
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from shared.async_utils import call_maybe_async
 
 from shared.config import (
     CleaningConfig,
@@ -27,53 +32,353 @@ class PipelineOrchestrator:
         self.hoster = hoster
         self.orchestration_data_service = orchestration_data_service
 
-    async def generate_and_evaluate(
+    @staticmethod
+    def _resolve_file_paths(
+        file_path: Optional[str] = None,
+        file_paths: Optional[List[str]] = None,
+    ) -> List[str]:
+        resolved: List[str] = []
+        if file_path and file_path.strip():
+            resolved.append(file_path.strip())
+        if file_paths:
+            resolved.extend(
+                fp.strip() for fp in file_paths
+                if isinstance(fp, str) and fp.strip()
+            )
+
+        unique: List[str] = []
+        seen = set()
+        for fp in resolved:
+            if fp not in seen:
+                seen.add(fp)
+                unique.append(fp)
+
+        if not unique:
+            raise ValueError("Provide file_path or file_paths")
+        return unique
+
+    @staticmethod
+    def _cancelled_result() -> Dict[str, Any]:
+        return {"success": False, "error": "Pipeline cancelled"}
+
+    @staticmethod
+    def _is_cancelled(cancel_event: Optional[threading.Event]) -> bool:
+        return bool(cancel_event and cancel_event.is_set())
+
+    @staticmethod
+    def _training_output_path(train_result: Dict[str, Any]) -> Optional[str]:
+        return train_result.get("model_path") or train_result.get("final_model_path")
+
+    @classmethod
+    def _training_uses_adapter(cls, train_result: Dict[str, Any]) -> bool:
+        config = train_result.get("config")
+        if isinstance(config, dict):
+            use_lora = config.get("use_lora")
+            if isinstance(use_lora, bool):
+                return use_lora
+            if config.get("trainer") == "grpo":
+                return False
+
+        stage_results = train_result.get("stage_results")
+        if isinstance(stage_results, list) and stage_results:
+            last_stage = stage_results[-1]
+            if isinstance(last_stage, dict):
+                nested = last_stage.get("training_result")
+                if isinstance(nested, dict):
+                    return cls._training_uses_adapter(nested)
+
+        return True
+
+    @classmethod
+    def _deployment_model_args(
+        cls,
+        train_result: Dict[str, Any],
+        base_model: Optional[str],
+        default_base_model: str,
+    ) -> Dict[str, Optional[str]]:
+        trained_model_path = cls._training_output_path(train_result)
+        if not trained_model_path:
+            return {"model_path": None, "adapter_path": None}
+
+        if cls._training_uses_adapter(train_result):
+            return {
+                "model_path": base_model or default_base_model,
+                "adapter_path": trained_model_path,
+            }
+
+        return {
+            "model_path": trained_model_path,
+            "adapter_path": None,
+        }
+
+    async def _report_stage(
         self,
-        file_path: str,
-        technique: str = "sft",
-        quality_threshold: float = 0.7,
-        custom_template: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Extract → Generate → Clean → Normalize → Evaluate → Filter"""
-
-        # 1) Extract + Generate
-        gen_result = await self.generator.generate_from_document(
-            technique=technique,
-            file_path=file_path,
-            custom_template=custom_template,
+        progress_callback: Optional[Callable[..., Any]],
+        stage_name: str,
+        current_step: int,
+        total_steps: int,
+        status_message: Optional[str] = None,
+        stage_current: Optional[int] = None,
+        stage_total: Optional[int] = None,
+        stage_unit: Optional[str] = None,
+    ) -> None:
+        if progress_callback is None:
+            return
+        payload = dict(
+            current_stage=stage_name,
+            current_step=current_step,
+            max_steps=total_steps,
+            percent_complete=round(current_step / max(total_steps, 1) * 100, 1),
         )
-        if not gen_result.get("success"):
-            return gen_result
+        if status_message is not None:
+            payload["status_message"] = status_message
+        if stage_current is not None:
+            payload["stage_current"] = stage_current
+        if stage_total is not None:
+            payload["stage_total"] = stage_total
+        if stage_unit is not None:
+            payload["stage_unit"] = stage_unit
+        await call_maybe_async(
+            progress_callback,
+            **payload,
+        )
 
-        data_points = gen_result["data_points"]
+    async def _run_with_stage_heartbeat(
+        self,
+        coro: Any,
+        *,
+        progress_callback: Optional[Callable[..., Any]],
+        cancel_event: Optional[threading.Event],
+        stage_name: str,
+        current_step: int,
+        total_steps: int,
+        status_message: str,
+        stage_current: Optional[int] = None,
+        stage_total: Optional[int] = None,
+        stage_unit: Optional[str] = None,
+        heartbeat_interval: float = 2.0,
+    ) -> Any:
+        task = asyncio.create_task(coro)
+        started = time.monotonic()
 
-        # 2) Clean
-        clean_result = await self.cleaner.clean_dataset(data_points, CleaningConfig())
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
+            if task in done:
+                return await task
+
+            if self._is_cancelled(cancel_event):
+                task.cancel()
+                return self._cancelled_result()
+
+            elapsed = max(1, int(time.monotonic() - started))
+            await self._report_stage(
+                progress_callback,
+                stage_name,
+                current_step,
+                total_steps,
+                status_message=f"{status_message} ({elapsed}s elapsed)",
+                stage_current=stage_current,
+                stage_total=stage_total,
+                stage_unit=stage_unit,
+            )
+
+    async def _generate_and_filter(
+        self,
+        file_paths: List[str],
+        technique: str,
+        quality_threshold: float,
+        custom_template: Optional[str] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        stage_offset: int = 0,
+        total_stages: int = 5,
+    ) -> Dict[str, Any]:
+        await self._report_stage(
+            progress_callback,
+            "generate",
+            stage_offset + 1,
+            total_stages,
+            status_message=f"Preparing to generate from {len(file_paths)} file(s)",
+            stage_current=0,
+            stage_total=len(file_paths),
+            stage_unit="file",
+        )
+
+        all_data_points: List[Dict[str, Any]] = []
+        per_file_counts: Dict[str, int] = {}
+
+        for index, fp in enumerate(file_paths, start=1):
+            if self._is_cancelled(cancel_event):
+                return self._cancelled_result()
+
+            await self._report_stage(
+                progress_callback,
+                "generate",
+                stage_offset + 1,
+                total_stages,
+                status_message=f"Generating from file {index} of {len(file_paths)}: {Path(fp).name}",
+                stage_current=index,
+                stage_total=len(file_paths),
+                stage_unit="file",
+            )
+
+            gen_result = await self._run_with_stage_heartbeat(
+                self.generator.generate_from_document(
+                    technique=technique,
+                    file_path=fp,
+                    custom_template=custom_template,
+                ),
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+                stage_name="generate",
+                current_step=stage_offset + 1,
+                total_steps=total_stages,
+                status_message=f"Generating from file {index} of {len(file_paths)}: {Path(fp).name}",
+                stage_current=index,
+                stage_total=len(file_paths),
+                stage_unit="file",
+            )
+            if not gen_result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Generation failed for {fp}: {gen_result.get('error')}",
+                    "file_path": fp,
+                }
+
+            pts = gen_result.get("data_points", [])
+            all_data_points.extend(pts)
+            per_file_counts[fp] = len(pts)
+
+        total_generated = len(all_data_points)
+        if not all_data_points:
+            return {"success": False, "error": "No data points generated from provided files."}
+
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
+        await self._report_stage(
+            progress_callback,
+            "clean",
+            stage_offset + 2,
+            total_stages,
+            status_message=f"Cleaning {total_generated} generated record(s)",
+            stage_current=total_generated,
+            stage_total=total_generated,
+            stage_unit="record",
+        )
+        clean_result = await self._run_with_stage_heartbeat(
+            self.cleaner.clean_dataset(all_data_points, CleaningConfig()),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="clean",
+            current_step=stage_offset + 2,
+            total_steps=total_stages,
+            status_message=f"Cleaning {total_generated} generated record(s)",
+            stage_current=total_generated,
+            stage_total=total_generated,
+            stage_unit="record",
+        )
         data_points = clean_result["data_points"]
 
-        # 3) Normalize
-        norm_result = await self.normalizer.normalize_dataset(
-            data_points, NormalizationConfig(target_format=technique),
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
+        await self._report_stage(
+            progress_callback,
+            "normalize",
+            stage_offset + 3,
+            total_stages,
+            status_message=f"Normalizing {clean_result['cleaned_count']} record(s) to {technique}",
+            stage_current=clean_result["cleaned_count"],
+            stage_total=clean_result["cleaned_count"],
+            stage_unit="record",
+        )
+        norm_result = await self._run_with_stage_heartbeat(
+            self.normalizer.normalize_dataset(
+                data_points, NormalizationConfig(target_format=technique),
+            ),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="normalize",
+            current_step=stage_offset + 3,
+            total_steps=total_stages,
+            status_message=f"Normalizing {clean_result['cleaned_count']} record(s) to {technique}",
+            stage_current=clean_result["cleaned_count"],
+            stage_total=clean_result["cleaned_count"],
+            stage_unit="record",
         )
         data_points = norm_result["data_points"]
 
-        # 4) Evaluate
-        eval_result = await self.evaluator.evaluate_dataset(data_points)
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
+        await self._report_stage(
+            progress_callback,
+            "evaluate",
+            stage_offset + 4,
+            total_stages,
+            status_message=f"Evaluating {norm_result['count']} normalized record(s)",
+            stage_current=norm_result["count"],
+            stage_total=norm_result["count"],
+            stage_unit="record",
+        )
+        eval_result = await self._run_with_stage_heartbeat(
+            self.evaluator.evaluate_dataset(data_points),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="evaluate",
+            current_step=stage_offset + 4,
+            total_steps=total_stages,
+            status_message=f"Evaluating {norm_result['count']} normalized record(s)",
+            stage_current=norm_result["count"],
+            stage_total=norm_result["count"],
+            stage_unit="record",
+        )
+        if not eval_result.get("success"):
+            return eval_result
         data_points = eval_result["data_points"]
 
-        # 5) Filter
-        filter_result = await self.evaluator.filter_by_quality(data_points, quality_threshold)
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
+        await self._report_stage(
+            progress_callback,
+            "filter",
+            stage_offset + 5,
+            total_stages,
+            status_message=(
+                f"Filtering {eval_result['count']} evaluated record(s) at threshold {quality_threshold:.2f}"
+            ),
+            stage_current=eval_result["count"],
+            stage_total=eval_result["count"],
+            stage_unit="record",
+        )
+        filter_result = await self._run_with_stage_heartbeat(
+            self.evaluator.filter_by_quality(data_points, quality_threshold),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="filter",
+            current_step=stage_offset + 5,
+            total_steps=total_stages,
+            status_message=(
+                f"Filtering {eval_result['count']} evaluated record(s) at threshold {quality_threshold:.2f}"
+            ),
+            stage_current=eval_result["count"],
+            stage_total=eval_result["count"],
+            stage_unit="record",
+        )
+        if not filter_result.get("success"):
+            return filter_result
         data_points = filter_result["data_points"]
 
-        # 6) Statistics
         stats = await self.evaluator.analyze_statistics(data_points)
-
-        return {
+        result: Dict[str, Any] = {
             "success": True,
-            "file_path": file_path,
             "technique": technique,
+            "file_paths": file_paths,
+            "per_file_generated": per_file_counts,
             "pipeline_stages": {
-                "generated": gen_result.get("stats", {}).get("total_data_points", 0),
+                "generated": total_generated,
                 "after_cleaning": clean_result["cleaned_count"],
                 "after_normalization": norm_result["count"],
                 "after_evaluation": eval_result["count"],
@@ -83,44 +388,125 @@ class PipelineOrchestrator:
             "statistics": stats.get("statistics", {}),
             "data_points": data_points,
         }
+        if len(file_paths) == 1:
+            result["file_path"] = file_paths[0]
+        return result
+
+    async def generate_and_evaluate(
+        self,
+        file_path: Optional[str] = None,
+        file_paths: Optional[List[str]] = None,
+        technique: str = "sft",
+        quality_threshold: float = 0.7,
+        custom_template: Optional[str] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Extract → Generate → Clean → Normalize → Evaluate → Filter"""
+
+        resolved_paths = self._resolve_file_paths(file_path=file_path, file_paths=file_paths)
+        return await self._generate_and_filter(
+            file_paths=resolved_paths,
+            technique=technique,
+            quality_threshold=quality_threshold,
+            custom_template=custom_template,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
 
     async def full_pipeline(
         self,
-        file_path: str,
+        file_path: Optional[str] = None,
+        file_paths: Optional[List[str]] = None,
         technique: str = "sft",
         output_dir: str = "./output",
         quality_threshold: float = 0.7,
         base_model: Optional[str] = None,
         num_epochs: int = 3,
+        use_lora: bool = True,
         deploy: bool = False,
         deploy_port: int = 8001,
+        quantization: Optional[str] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        extra_callbacks: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """Extract → Generate → Clean → Normalize → Evaluate → Filter → Train → Test → Host"""
 
+        resolved_paths = self._resolve_file_paths(file_path=file_path, file_paths=file_paths)
+
         # Stages 1-5: generate + evaluate
-        ge_result = await self.generate_and_evaluate(
-            file_path=file_path,
+        ge_result = await self._generate_and_filter(
+            file_paths=resolved_paths,
             technique=technique,
             quality_threshold=quality_threshold,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_offset=0,
+            total_stages=9,
         )
         if not ge_result.get("success"):
             return ge_result
 
         data_points = ge_result["data_points"]
 
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
         # 6) Export dataset for finetuning
+        await self._report_stage(
+            progress_callback,
+            "export",
+            6,
+            9,
+            status_message=f"Exporting {len(data_points)} filtered record(s) to dataset.jsonl",
+            stage_current=len(data_points),
+            stage_total=len(data_points),
+            stage_unit="record",
+        )
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         dataset_path = str(output_path / "dataset.jsonl")
 
-        await self.generator.export_dataset(
-            data_points=data_points,
-            output_path=dataset_path,
-            format="jsonl",
+        export_result = await self._run_with_stage_heartbeat(
+            self.generator.export_dataset(
+                data_points=data_points,
+                output_path=dataset_path,
+                format="jsonl",
+            ),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="export",
+            current_step=6,
+            total_steps=9,
+            status_message=f"Exporting {len(data_points)} filtered record(s) to dataset.jsonl",
+            stage_current=len(data_points),
+            stage_total=len(data_points),
+            stage_unit="record",
         )
+        if isinstance(export_result, dict) and not export_result.get("success", True):
+            return {**ge_result, "export": export_result}
+
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
 
         # 7) Train
-        load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+        await self._report_stage(
+            progress_callback,
+            "train",
+            7,
+            9,
+            status_message=f"Loading dataset and starting training for {num_epochs} epoch(s)",
+        )
+        load_result = await self._run_with_stage_heartbeat(
+            self.finetuner.load_dataset_from_file(dataset_path, "jsonl"),
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            stage_name="train",
+            current_step=7,
+            total_steps=9,
+            status_message="Loading exported dataset and initializing training",
+        )
         if not load_result.get("success"):
             return {**ge_result, "training": load_result}
 
@@ -129,36 +515,118 @@ class PipelineOrchestrator:
             output_dir=str(output_path / "model"),
             base_model=base_model,
             num_epochs=num_epochs,
+            use_lora=use_lora,
+            extra_callbacks=extra_callbacks,
         )
 
+        if not train_result.get("success"):
+            return {
+                "success": False,
+                "error": train_result.get("error", "Training failed"),
+                "file_paths": resolved_paths,
+                **({"file_path": resolved_paths[0]} if len(resolved_paths) == 1 else {}),
+                "technique": technique,
+                "pipeline_stages": ge_result["pipeline_stages"],
+                "quality_threshold": quality_threshold,
+                "dataset_path": dataset_path,
+                "training": train_result,
+            }
+
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
         # 8) Test inference
+        await self._report_stage(
+            progress_callback,
+            "test",
+            8,
+            9,
+            status_message="Running post-training inference smoke test",
+        )
         test_result = None
         if train_result.get("success"):
+            model_args = self._deployment_model_args(
+                train_result,
+                base_model=base_model,
+                default_base_model="meta-llama/Llama-3.2-3B-Instruct",
+            )
             test_prompts = []
             for dp in data_points[:3]:
                 test_prompts.append(dp.get("instruction", dp.get("prompt", "")))
 
-            if test_prompts:
-                test_result = await self.finetuner.run_inference(
-                    prompts=test_prompts,
-                    model_path=base_model or "meta-llama/Llama-3.2-3B-Instruct",
-                    adapter_path=train_result.get("model_path"),
+            if test_prompts and model_args["model_path"]:
+                test_result = await self._run_with_stage_heartbeat(
+                    self.finetuner.run_inference(
+                        prompts=test_prompts,
+                        model_path=model_args["model_path"],
+                        adapter_path=model_args["adapter_path"],
+                    ),
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                    stage_name="test",
+                    current_step=8,
+                    total_steps=9,
+                    status_message="Running post-training inference smoke test",
+                    stage_current=len(test_prompts),
+                    stage_total=len(test_prompts),
+                    stage_unit="prompt",
                 )
 
+        if self._is_cancelled(cancel_event):
+            return self._cancelled_result()
+
         # 9) Deploy (optional)
+        await self._report_stage(
+            progress_callback,
+            "deploy",
+            9,
+            9,
+            status_message=(
+                f"Deploying trained model on port {deploy_port}" if deploy else "Skipping deployment"
+            ),
+        )
         deploy_result = None
         if deploy and train_result.get("success"):
-            config = HostingConfig(
-                model_path=base_model or "meta-llama/Llama-3.2-3B-Instruct",
-                adapter_path=train_result.get("model_path"),
-                port=deploy_port,
+            model_args = self._deployment_model_args(
+                train_result,
+                base_model=base_model,
+                default_base_model="meta-llama/Llama-3.2-3B-Instruct",
             )
-            deploy_result = await self.hoster.deploy_as_mcp(config)
+            config = HostingConfig(
+                model_path=model_args["model_path"],
+                adapter_path=model_args["adapter_path"],
+                port=deploy_port,
+                quantization=quantization,
+            )
+            deploy_result = await self._run_with_stage_heartbeat(
+                self.hoster.deploy_as_mcp(config),
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+                stage_name="deploy",
+                current_step=9,
+                total_steps=9,
+                status_message=f"Deploying trained model on port {deploy_port}",
+            )
+            if not deploy_result.get("success", True):
+                return {
+                    "success": False,
+                    "error": deploy_result.get("error", "Deployment failed"),
+                    "file_paths": resolved_paths,
+                    **({"file_path": resolved_paths[0]} if len(resolved_paths) == 1 else {}),
+                    "technique": technique,
+                    "pipeline_stages": ge_result["pipeline_stages"],
+                    "quality_threshold": quality_threshold,
+                    "dataset_path": dataset_path,
+                    "training": train_result,
+                    "testing": test_result,
+                    "deployment": deploy_result,
+                }
 
         return {
             "success": True,
-            "file_path": file_path,
             "technique": technique,
+            "file_paths": resolved_paths,
+            **({"file_path": resolved_paths[0]} if len(resolved_paths) == 1 else {}),
             "pipeline_stages": ge_result["pipeline_stages"],
             "quality_threshold": quality_threshold,
             "dataset_path": dataset_path,
@@ -183,6 +651,7 @@ class PipelineOrchestrator:
         custom_template: Optional[str] = None,
         deploy: bool = False,
         deploy_port: int = 8001,
+        quantization: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extract → Generate → Clean → Normalize → Evaluate → Filter → Curriculum Train → Compare → Host
 
@@ -305,11 +774,16 @@ class PipelineOrchestrator:
         # ── 10. Deploy (optional) ─────────────────────────────────────────
         deploy_result = None
         if deploy and train_result.get("success"):
-            resolved_base = base_model or "meta-llama/Llama-3.2-3B-Instruct"
+            model_args = self._deployment_model_args(
+                train_result,
+                base_model=base_model,
+                default_base_model="meta-llama/Llama-3.2-3B-Instruct",
+            )
             config = HostingConfig(
-                model_path=resolved_base,
-                adapter_path=train_result["final_model_path"],
+                model_path=model_args["model_path"],
+                adapter_path=model_args["adapter_path"],
                 port=deploy_port,
+                quantization=quantization,
             )
             deploy_result = await self.hoster.deploy_as_mcp(config)
 
@@ -470,6 +944,8 @@ class PipelineOrchestrator:
         tool_descriptions: Optional[list] = None,
         deploy: bool = False,
         deploy_port: int = 8002,
+        quantization: Optional[str] = None,
+        training_data: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Full orchestration training pipeline:
@@ -479,27 +955,30 @@ class PipelineOrchestrator:
             return {"success": False, "error": "OrchestrationDataService not configured"}
 
         ods = self.orchestration_data_service
+        generated_problems: List[Dict[str, Any]] = []
+        collected: List[Dict[str, Any]] = []
 
-        # 1) Generate synthetic orchestration problems
-        problems = await ods.generate_problems(
-            domain_description=domain_description,
-            num_problems=num_problems,
-            tool_descriptions=tool_descriptions,
-        )
+        if training_data is None:
+            # 1) Generate synthetic orchestration problems
+            generated_problems = await ods.generate_problems(
+                domain_description=domain_description,
+                num_problems=num_problems,
+                tool_descriptions=tool_descriptions,
+            )
 
-        # 2) Collect trajectories (run agent N times per problem)
-        collected = await ods.collect_trajectories(
-            problems=problems, agent=agent, n_per_problem=n_per_problem,
-        )
+            # 2) Collect trajectories (run agent N times per problem)
+            collected = await ods.collect_trajectories(
+                problems=generated_problems, agent=agent, n_per_problem=n_per_problem,
+            )
 
-        # 3) Score trajectories + build training data
-        training_data = await ods.build_training_data(
-            collected=collected,
-            format=output_format,
-            tool_descriptions=tool_descriptions,
-            cost_budget=cost_budget,
-            time_budget=time_budget,
-        )
+            # 3) Score trajectories + build training data
+            training_data = await ods.build_training_data(
+                collected=collected,
+                format=output_format,
+                tool_descriptions=tool_descriptions,
+                cost_budget=cost_budget,
+                time_budget=time_budget,
+            )
 
         # 4) Export to JSONL
         output_path = Path(output_dir)
@@ -507,43 +986,61 @@ class PipelineOrchestrator:
         dataset_path = str(output_path / "orchestrator_dataset.jsonl")
         await ods.export(training_data, dataset_path, file_format="jsonl")
 
-        # 5) Fine-tune small model
-        load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
-        if not load_result.get("success"):
+        # 5) Fine-tune orchestrator with the correct objective for the exported format
+        train_output_dir = str(output_path / "model")
+        if output_format == "sft":
+            train_result = await self.finetuner.train_model(
+                dataset=training_data,
+                output_dir=train_output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+            )
+        elif output_format == "dpo":
+            train_result = await self.finetuner.train_dpo_model(
+                dataset=training_data,
+                output_dir=train_output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+            )
+        elif output_format == "grpo":
+            train_result = await self.finetuner.train_grpo_model(
+                dataset=training_data,
+                output_dir=train_output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+            )
+        else:
             return {
                 "success": False,
-                "problems_generated": len(problems),
-                "trajectories_collected": sum(len(c["trajectories"]) for c in collected),
-                "training_examples": len(training_data),
+                "error": f"Unsupported orchestration output_format: {output_format}",
                 "dataset_path": dataset_path,
-                "error": load_result,
             }
-
-        train_result = await self.finetuner.train_model(
-            dataset=load_result["dataset_object"],
-            output_dir=str(output_path / "model"),
-            base_model=base_model,
-            num_epochs=num_epochs,
-        )
 
         # 6) Optionally deploy
         deploy_result = None
         if deploy and train_result.get("success"):
+            model_args = self._deployment_model_args(
+                train_result,
+                base_model=base_model,
+                default_base_model="meta-llama/Llama-3.2-3B-Instruct",
+            )
             config = HostingConfig(
-                model_path=base_model or "meta-llama/Llama-3.2-3B-Instruct",
-                adapter_path=train_result.get("model_path"),
+                model_path=model_args["model_path"],
+                adapter_path=model_args["adapter_path"],
                 port=deploy_port,
+                quantization=quantization,
             )
             deploy_result = await self.hoster.deploy_as_mcp(config)
 
         return {
             "success": True,
             "domain": domain_description,
-            "problems_generated": len(problems),
+            "problems_generated": len(generated_problems),
             "trajectories_collected": sum(len(c["trajectories"]) for c in collected),
             "training_examples": len(training_data),
             "output_format": output_format,
             "dataset_path": dataset_path,
             "training": train_result,
             "deployment": deploy_result,
+            "used_provided_training_data": training_data is not None and not collected and not generated_problems,
         }

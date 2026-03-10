@@ -52,6 +52,11 @@ class TrainingProgress(BaseModel):
     gpu_memory_total_gb: Optional[float] = None
     last_updated: str = ""
     log_history: List[Dict[str, Any]] = Field(default_factory=list)
+    current_stage: Optional[str] = None
+    status_message: Optional[str] = None
+    stage_current: Optional[int] = None
+    stage_total: Optional[int] = None
+    stage_unit: Optional[str] = None
 
 
 class TrainingJob(BaseModel):
@@ -155,7 +160,12 @@ class TrainingJobManager:
                     cancel_event=cancel_event,
                     output_dir=job.output_dir,
                 )
-                result = await training_coro(extra_callbacks=[callback])
+
+                def _run_in_worker() -> Any:
+                    return asyncio.run(training_coro(extra_callbacks=[callback]))
+
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(self._executor, _run_in_worker)
 
                 elapsed = time.monotonic() - start
                 if cancel_event.is_set():
@@ -168,6 +178,8 @@ class TrainingJobManager:
             except Exception as exc:
                 job.status = JobStatus.FAILED
                 job.error = str(exc)
+                if hasattr(exc, "result"):
+                    job.result = getattr(exc, "result")
                 job.completed_at = _now_iso()
                 job.elapsed_seconds = round(time.monotonic() - start, 2)
                 logger.exception("Training job %s failed", job_id)
@@ -203,6 +215,9 @@ class TrainingJobManager:
             return False
         event.set()
         return True
+
+    def get_cancel_event(self, job_id: str) -> Optional[threading.Event]:
+        return self._cancel_events.get(job_id)
 
     # ── progress update ──
 

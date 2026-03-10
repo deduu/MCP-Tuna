@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from agentsoul.core.agent import AgentSoul
+from agentsoul.tools.service import ToolService
 from agentsoul.server import MCPServer
 from app.core.config import settings
 from dotenv import load_dotenv
@@ -58,6 +61,7 @@ class TunaGateway:
         self._advanced_judge_svc = None
         self._ft_evaluator_svc = None
         self._job_manager_instance = None
+        self._workflow_job_manager_instance = None
         self._dataset_svc = None
         self._file_svc = None
         self._chat_sessions: Dict[str, Any] = {}
@@ -236,6 +240,13 @@ class TunaGateway:
         return self._job_manager_instance
 
     @property
+    def workflow_job_manager(self):
+        if self._workflow_job_manager_instance is None:
+            from shared.training_jobs import TrainingJobManager
+            self._workflow_job_manager_instance = TrainingJobManager(max_concurrent=1)
+        return self._workflow_job_manager_instance
+
+    @property
     def dataset_service(self):
         if self._dataset_svc is None:
             from shared.dataset_service import DatasetService
@@ -249,9 +260,214 @@ class TunaGateway:
             self._file_svc = FileService(str(settings.files.upload_root))
         return self._file_svc
 
+    def _configured_model_browser_roots(self) -> List[tuple[str, str, Path]]:
+        roots: List[tuple[str, str, Path]] = []
+        configured_paths: List[str] = []
+
+        single_root = os.getenv("MODEL_ROOT", "").strip()
+        if single_root:
+            configured_paths.append(single_root)
+
+        multi_roots = os.getenv("MODEL_BROWSE_ROOTS", "").strip()
+        if multi_roots:
+            configured_paths.extend(
+                item.strip() for item in multi_roots.split(os.pathsep) if item.strip()
+            )
+
+        for index, configured_path in enumerate(configured_paths, start=1):
+            root_path = Path(configured_path).expanduser().resolve()
+            root_id = "model_root" if index == 1 else f"model_root_{index}"
+            label = "Model Root" if index == 1 else f"Model Root {index}"
+            roots.append((root_id, label, root_path))
+
+        return roots
+
+    def _deployment_browser_roots(self) -> List[Dict[str, Any]]:
+        workspace_root = Path.cwd().resolve()
+        output_root = (workspace_root / "output").resolve()
+        uploads_root = settings.files.upload_root.resolve()
+        hf_home = Path(
+            os.getenv("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
+        ).resolve()
+        hf_cache_root = (hf_home / "hub").resolve()
+
+        candidates = [
+            ("workspace", "Workspace", workspace_root),
+            ("output", "Output", output_root),
+            ("uploads", "Uploads", uploads_root),
+            ("hf_cache", "HF Cache", hf_cache_root),
+            *self._configured_model_browser_roots(),
+        ]
+
+        roots: List[Dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for root_id, label, root_path in candidates:
+            normalized = str(root_path)
+            if normalized in seen_paths:
+                continue
+            seen_paths.add(normalized)
+            roots.append({
+                "id": root_id,
+                "label": label,
+                "path": normalized,
+                "exists": root_path.exists(),
+            })
+        return roots
+
+    def _resolve_deployment_browser_root(self, root_id: str) -> Path:
+        for root in self._deployment_browser_roots():
+            if root["id"] == root_id:
+                return Path(root["path"]).resolve()
+        raise ValueError(f"Unknown browse root: {root_id}")
+
+    @staticmethod
+    def _resolve_hf_cache_snapshot(target_path: Path) -> Optional[Path]:
+        """If target_path is an HF cache wrapper (has snapshots/ but no config.json),
+        resolve to the latest snapshot directory."""
+        snapshots_dir = target_path / "snapshots"
+        if not snapshots_dir.is_dir():
+            return None
+        # Only redirect if this looks like an HF cache wrapper (blobs/refs/snapshots)
+        if (target_path / "config.json").exists():
+            return None  # Already a real model directory
+        # Pick the most recently modified snapshot
+        snapshot_dirs = [d for d in snapshots_dir.iterdir() if d.is_dir()]
+        if not snapshot_dirs:
+            return None
+        return max(snapshot_dirs, key=lambda d: d.stat().st_mtime)
+
+    def _browse_deployment_directory(
+        self,
+        root_id: str,
+        path: str = ".",
+    ) -> Dict[str, Any]:
+        try:
+            root_path = self._resolve_deployment_browser_root(root_id)
+            relative_path = path or "."
+            target_path = (root_path / relative_path).resolve()
+            if root_path != target_path and root_path not in target_path.parents:
+                return {"success": False, "error": f"Path escapes root '{root_id}': {path}"}
+            if not target_path.exists():
+                return {"success": False, "error": f"Directory not found: {target_path}"}
+            if not target_path.is_dir():
+                return {"success": False, "error": f"Not a directory: {target_path}"}
+
+            # Auto-resolve HF cache wrapper directories to the latest snapshot
+            resolved_snapshot = self._resolve_hf_cache_snapshot(target_path)
+            if resolved_snapshot is not None:
+                # Ensure the resolved snapshot is still within the root
+                if root_path == resolved_snapshot or root_path in resolved_snapshot.parents:
+                    target_path = resolved_snapshot
+
+            entries = []
+            for entry in sorted(
+                target_path.iterdir(),
+                key=lambda item: (not item.is_dir(), item.name.lower()),
+            ):
+                rel_path = entry.relative_to(root_path)
+                entries.append({
+                    "name": entry.name,
+                    "path": str(rel_path).replace("\\", "/"),
+                    "absolute_path": str(entry),
+                    "type": "directory" if entry.is_dir() else "file",
+                    "selectable": entry.is_dir(),
+                })
+
+            current_rel = "." if target_path == root_path else str(
+                target_path.relative_to(root_path)
+            ).replace("\\", "/")
+            parent_rel = None
+            if target_path != root_path:
+                parent = target_path.parent
+                parent_rel = (
+                    "."
+                    if parent == root_path
+                    else str(parent.relative_to(root_path)).replace("\\", "/")
+                )
+
+            return {
+                "success": True,
+                "root_id": root_id,
+                "root_path": str(root_path),
+                "current_path": current_rel,
+                "current_absolute_path": str(target_path),
+                "parent_path": parent_rel,
+                "entries": entries,
+                "count": len(entries),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "root_id": root_id, "path": path}
+
     async def _invoke_dependency(self, func, /, *args, **kwargs):
         """Gateway boundary: await async services and offload sync services."""
         return await call_maybe_async(func, *args, **kwargs)
+
+    @staticmethod
+    def _coerce_tool_result(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return value
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return value
+
+    @staticmethod
+    def _orchestration_tool_name_allowed(tool_name: str) -> bool:
+        blocked_prefixes = ("orchestration.", "workflow.")
+        blocked_names = {
+            "host.stop",
+            "host.list_deployments",
+            "host.health",
+        }
+        return not tool_name.startswith(blocked_prefixes) and tool_name not in blocked_names
+
+    async def _execute_internal_gateway_tool(self, tool_name: str, **kwargs) -> Any:
+        tool_info = self.mcp._tools.get(tool_name)
+        if tool_info is None:
+            raise ValueError(f"Unknown gateway tool: {tool_name}")
+        result = await call_maybe_async(tool_info["func"], **kwargs)
+        return self._coerce_tool_result(result)
+
+    def _build_internal_orchestration_tool_service(self) -> ToolService:
+        tool_service = ToolService()
+        for tool_name, tool_info in self.mcp._tools.items():
+            if not self._orchestration_tool_name_allowed(tool_name):
+                continue
+
+            async def internal_wrapper(_tool_name: str = tool_name, **kwargs) -> Any:
+                return await self._execute_internal_gateway_tool(_tool_name, **kwargs)
+
+            tool_service.register_tool(
+                name=tool_name,
+                func=internal_wrapper,
+                description={
+                    "name": tool_name,
+                    "description": tool_info.get("description", ""),
+                    "parameters": tool_info.get("schema", {}),
+                },
+            )
+        return tool_service
+
+    def _build_internal_orchestration_agent(self) -> AgentSoul:
+        from shared.provider_factory import create_llm
+        from shared.config import PipelineConfig
+
+        llm = create_llm(PipelineConfig())
+        return AgentSoul(
+            llm_provider=llm,
+            tool_service=self._build_internal_orchestration_tool_service(),
+            system_prompt=(
+                "You are an orchestration agent. Use the available tools to solve tasks "
+                "efficiently and accurately. Prefer multi-step plans only when needed."
+            ),
+            max_turns=8,
+        )
+
+    def _default_orchestration_tool_descriptions(self) -> List[Dict[str, Any]]:
+        return self._build_internal_orchestration_tool_service().get_tool_descriptions()
 
     # ------------------------------------------------------------------ #
     # Auto-deploy helper
@@ -270,24 +486,237 @@ class TunaGateway:
         if not deploy or not train_result.get("success"):
             return None
 
-        model_path = train_result.get("model_path") or train_result.get(
-            "final_model_path"
-        )
+        model_path = self._training_output_path(train_result)
         if not model_path:
             return None
 
-        resolved_base = base_model or self.finetuner.config.base_model
-        config = HostingConfig(
-            model_path=resolved_base,
-            adapter_path=model_path,
-            port=deploy_port,
+        config = self._build_hosting_config_for_training_result(
+            train_result=train_result,
+            deploy_port=deploy_port,
+            base_model=base_model,
         )
+        if config is None:
+            return None
         result = await self.hoster.deploy_as_mcp(config)
         if result.get("success"):
             endpoint = result.get("endpoint", "")
             result["chat_command"] = (
                 f"python scripts/chat_cli.py --endpoint {endpoint}"
             )
+        return result
+
+    @staticmethod
+    def _training_output_path(train_result: Dict[str, Any]) -> Optional[str]:
+        return train_result.get("model_path") or train_result.get("final_model_path")
+
+    @classmethod
+    def _training_uses_adapter(cls, train_result: Dict[str, Any]) -> bool:
+        config = train_result.get("config")
+        if isinstance(config, dict):
+            use_lora = config.get("use_lora")
+            if isinstance(use_lora, bool):
+                return use_lora
+            if config.get("trainer") == "grpo":
+                return False
+
+        stage_results = train_result.get("stage_results")
+        if isinstance(stage_results, list) and stage_results:
+            last_stage = stage_results[-1]
+            if isinstance(last_stage, dict):
+                nested = last_stage.get("training_result")
+                if isinstance(nested, dict):
+                    return cls._training_uses_adapter(nested)
+
+        return True
+
+    def _build_hosting_config_for_training_result(
+        self,
+        *,
+        train_result: Dict[str, Any],
+        deploy_port: int,
+        base_model: Optional[str] = None,
+        quantization: Optional[str] = None,
+    ) -> Optional[HostingConfig]:
+        model_path = self._training_output_path(train_result)
+        if not model_path:
+            return None
+
+        if self._training_uses_adapter(train_result):
+            resolved_base = base_model or self.finetuner.config.base_model
+            return HostingConfig(
+                model_path=resolved_base,
+                adapter_path=model_path,
+                port=deploy_port,
+                quantization=quantization,
+            )
+
+        return HostingConfig(
+            model_path=model_path,
+            adapter_path=None,
+            port=deploy_port,
+            quantization=quantization,
+        )
+
+    @staticmethod
+    def _detect_dataset_format(dataset_path: str) -> str:
+        suffix = Path(dataset_path).suffix.lower()
+        if suffix == ".json":
+            return "json"
+        if suffix == ".csv":
+            return "csv"
+        if suffix == ".parquet":
+            return "parquet"
+        return "jsonl"
+
+    async def _run_workflow_training_tool(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        extra_callbacks: Optional[List[Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if tool_name == "finetune.sequential_train":
+            stages = params["stages"]
+            if isinstance(stages, str):
+                try:
+                    stages = json.loads(stages)
+                except json.JSONDecodeError as exc:
+                    return {"success": False, "error": f"Invalid stages JSON: {exc}"}
+            result = await self.finetuner.train_sequential(
+                stages=stages,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                merge_between_stages=params.get("merge_between_stages", True),
+                extra_callbacks=extra_callbacks,
+            )
+            deploy_result = await self._auto_deploy_if_requested(
+                result,
+                params.get("deploy", False),
+                params.get("deploy_port", 8001),
+                params.get("base_model"),
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
+            return result
+
+        training_tools = {
+            "finetune.train",
+            "finetune.train_dpo",
+            "finetune.train_grpo",
+            "finetune.train_kto",
+            "finetune.train_curriculum",
+        }
+        if tool_name not in training_tools:
+            return None
+
+        dataset_path = params["dataset_path"]
+        load_result = await self.finetuner.load_dataset_from_file(
+            dataset_path,
+            self._detect_dataset_format(dataset_path),
+        )
+        if not load_result.get("success"):
+            return load_result
+
+        dataset_obj = load_result["dataset_object"]
+        if tool_name == "finetune.train":
+            result = await self.finetuner.train_model(
+                dataset=dataset_obj,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_epochs=params.get("num_epochs", 3),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", 8),
+                lora_alpha=params.get("lora_alpha", 16),
+                completion_only_loss=params.get("completion_only_loss", True),
+                early_stopping_patience=params.get("early_stopping_patience"),
+                eval_file_path=params.get("eval_file_path"),
+                push_to_hub=params.get("push_to_hub"),
+                lr_scheduler_type=params.get("lr_scheduler_type", "linear"),
+                warmup_ratio=params.get("warmup_ratio", 0.0),
+                weight_decay=params.get("weight_decay", 0.0),
+                max_grad_norm=params.get("max_grad_norm", 1.0),
+                learning_rate=params.get("learning_rate", 2e-4),
+                report_to=params.get("report_to") or [],
+                max_seq_length=params.get("max_seq_length", 2048),
+                per_device_train_batch_size=params.get("per_device_train_batch_size", 1),
+                gradient_accumulation_steps=params.get("gradient_accumulation_steps", 4),
+                gradient_checkpointing=params.get("gradient_checkpointing", False),
+                optim=params.get("optim", "adamw_torch"),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+            )
+        elif tool_name == "finetune.train_dpo":
+            result = await self.finetuner.train_dpo_model(
+                dataset=dataset_obj,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_epochs=params.get("num_epochs", 3),
+                beta=params.get("beta", 0.1),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", 8),
+                resume_from_checkpoint=params.get("resume_from_checkpoint"),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+            )
+        elif tool_name == "finetune.train_grpo":
+            result = await self.finetuner.train_grpo_model(
+                dataset=dataset_obj,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_epochs=params.get("num_epochs", 3),
+                num_generations=params.get("num_generations", 4),
+                max_prompt_length=params.get("max_prompt_length", 512),
+                max_completion_length=params.get("max_completion_length", 256),
+                resume_from_checkpoint=params.get("resume_from_checkpoint"),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+            )
+        elif tool_name == "finetune.train_kto":
+            result = await self.finetuner.train_kto_model(
+                dataset=dataset_obj,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_epochs=params.get("num_epochs", 3),
+                beta=params.get("beta", 0.1),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", 8),
+                desirable_weight=params.get("desirable_weight", 1.0),
+                undesirable_weight=params.get("undesirable_weight", 1.0),
+                resume_from_checkpoint=params.get("resume_from_checkpoint"),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+            )
+        else:
+            result = await self.finetuner.train_curriculum_model(
+                dataset=dataset_obj,
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_stages=params.get("num_stages", 3),
+                num_epochs_per_stage=params.get("num_epochs_per_stage", 1),
+                difficulty_order=params.get("difficulty_order", "easy_first"),
+                score_column=params.get("score_column", "weighted_score"),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", 8),
+                lora_alpha=params.get("lora_alpha", 16),
+                max_seq_length=params.get("max_seq_length", 2048),
+                per_device_train_batch_size=params.get("per_device_train_batch_size", 1),
+                gradient_accumulation_steps=params.get("gradient_accumulation_steps", 4),
+                gradient_checkpointing=params.get("gradient_checkpointing", False),
+                optim=params.get("optim", "adamw_torch"),
+                learning_rate=params.get("learning_rate", 2e-4),
+                lr_scheduler_type=params.get("lr_scheduler_type", "linear"),
+                warmup_ratio=params.get("warmup_ratio", 0.0),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+            )
+
+        deploy_result = await self._auto_deploy_if_requested(
+            result,
+            params.get("deploy", False),
+            params.get("deploy_port", 8001),
+            params.get("base_model"),
+        )
+        if deploy_result is not None:
+            result["deployment"] = deploy_result
         return result
 
     # ------------------------------------------------------------------ #
@@ -340,7 +769,7 @@ class TunaGateway:
             ),
         )
         async def preflight_check(
-            model_name: str,
+            model_name: Optional[str] = None,
             quantization: str = "4bit",
             batch_size: int = 1,
             max_seq_length: int = 512,
@@ -349,9 +778,10 @@ class TunaGateway:
             lora_r: int = 8,
             gradient_checkpointing: bool = False,
         ) -> str:
+            resolved_model = model_name or self.finetuner.config.base_model
             result = await self._invoke_dependency(
                 self.finetuner.preflight_check,
-                model_name=model_name,
+                model_name=resolved_model,
                 quantization=quantization,
                 batch_size=batch_size,
                 max_seq_length=max_seq_length,
@@ -374,10 +804,20 @@ class TunaGateway:
             ),
         )
         async def prescribe(
-            dataset_path: str,
+            dataset_path: Optional[str] = None,
             model_name: Optional[str] = None,
             technique: str = "sft",
         ) -> str:
+            if not dataset_path:
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        "dataset_path is required for system.prescribe. "
+                        "Use system.auto_prescribe if you need model suggestions "
+                        "before selecting a dataset."
+                    ),
+                }, indent=2)
+
             resolved_model = model_name or self.finetuner.config.base_model
 
             # Get dataset metadata + text length stats
@@ -423,6 +863,169 @@ class TunaGateway:
                 import shutil
 
                 checks = []
+                def _check(
+                    name: str,
+                    status: str,
+                    detail: str,
+                    *,
+                    category: str,
+                    required: bool = False,
+                    action_path: Optional[str] = None,
+                    action_label: Optional[str] = None,
+                ) -> Dict[str, Any]:
+                    return {
+                        "name": name,
+                        "status": status,
+                        "detail": detail,
+                        "category": category,
+                        "required": required,
+                        "action_path": action_path,
+                        "action_label": action_label,
+                    }
+
+                openai_key = bool(os.getenv("OPENAI_API_KEY"))
+                openai_base = (
+                    os.getenv("OPENAI_BASE_URL")
+                    or os.getenv("OPENAI_API_BASE")
+                    or os.getenv("OPENAI_API_BASE_URL")
+                )
+                anthropic_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+                anthropic_base = os.getenv("ANTHROPIC_API_BASE")
+                google_key = bool(os.getenv("GOOGLE_API_KEY"))
+                hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+                any_provider = openai_key or anthropic_key or google_key
+
+                checks.extend([
+                    _check(
+                        "LLM API Provider",
+                        "pass" if any_provider else "fail",
+                        "At least one provider is configured"
+                        if any_provider
+                        else "No provider configured. Add OpenAI, Anthropic, or Google credentials.",
+                        category="provider",
+                        required=True,
+                        action_path="/settings#providers",
+                        action_label="Configure providers",
+                    ),
+                    _check(
+                        "OpenAI API Key",
+                        "pass" if openai_key else "warn",
+                        "Configured"
+                        if openai_key
+                        else "Optional unless you want GPT or OpenAI-compatible models.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Edit provider settings",
+                    ),
+                    _check(
+                        "OpenAI Base URL",
+                        "pass" if openai_base else "warn",
+                        f"Configured: {openai_base}"
+                        if openai_base
+                        else "Optional. Use for proxies, local gateways, or OpenAI-compatible APIs.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Edit provider settings",
+                    ),
+                    _check(
+                        "Anthropic API Key",
+                        "pass" if anthropic_key else "warn",
+                        "Configured" if anthropic_key else "Optional unless you want Claude models.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Edit provider settings",
+                    ),
+                    _check(
+                        "Anthropic Base URL",
+                        "pass" if anthropic_base else "warn",
+                        f"Configured: {anthropic_base}"
+                        if anthropic_base
+                        else "Optional. Use for Anthropic-compatible gateways or proxies.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Edit provider settings",
+                    ),
+                    _check(
+                        "Google API Key",
+                        "pass" if google_key else "warn",
+                        "Configured" if google_key else "Optional unless you want Gemini models.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Edit provider settings",
+                    ),
+                    _check(
+                        "HF Token",
+                        "pass" if hf_token else "warn",
+                        "Configured"
+                        if hf_token
+                        else "Optional, but required for gated models and push_to_hub.",
+                        category="provider",
+                        action_path="/settings#providers",
+                        action_label="Configure providers",
+                    ),
+                ])
+
+                try:
+                    import torch
+                    gpu_ok = torch.cuda.is_available()
+                    gpu_name = torch.cuda.get_device_name(0) if gpu_ok else None
+                    checks.append(_check(
+                        "GPU",
+                        "pass" if gpu_ok else "warn",
+                        gpu_name or "No GPU detected. Training will be slower and more limited.",
+                        category="system",
+                        action_path="/settings#environment",
+                        action_label="View environment",
+                    ))
+                except ImportError:
+                    checks.append(_check(
+                        "GPU",
+                        "fail",
+                        "torch is not installed, so GPU checks are unavailable.",
+                        category="system",
+                        required=True,
+                        action_path="/settings#environment",
+                        action_label="View environment",
+                    ))
+
+                disk = shutil.disk_usage(".")
+                free_gb = round(disk.free / (1024 ** 3), 1)
+                disk_status = "pass" if free_gb > 15 else "warn" if free_gb > 5 else "fail"
+                checks.append(_check(
+                    "Disk Space",
+                    disk_status,
+                    f"{free_gb} GB free",
+                    category="system",
+                    required=True,
+                    action_path="/settings#storage",
+                    action_label="Review storage",
+                ))
+
+                for pkg in ["torch", "transformers", "peft", "trl", "datasets"]:
+                    try:
+                        __import__(pkg)
+                        checks.append(_check(
+                            f"Package: {pkg}",
+                            "pass",
+                            "Installed",
+                            category="package",
+                            required=True,
+                            action_path="/settings#environment",
+                            action_label="View environment",
+                        ))
+                    except ImportError:
+                        checks.append(_check(
+                            f"Package: {pkg}",
+                            "fail",
+                            "Not installed",
+                            category="package",
+                            required=True,
+                            action_path="/settings#environment",
+                            action_label="View environment",
+                        ))
+
+                all_passed = all(c["status"] != "fail" for c in checks)
+                return {"success": True, "checks": checks, "all_passed": all_passed}
 
                 has_key = bool(os.getenv("OPENAI_API_KEY"))
                 checks.append({
@@ -478,6 +1081,22 @@ class TunaGateway:
                 "config": self._config,
                 "env": {
                     "OPENAI_API_KEY": "***" if os.getenv("OPENAI_API_KEY") else None,
+                    "OPENAI_API_BASE": (
+                        os.getenv("OPENAI_BASE_URL")
+                        or os.getenv("OPENAI_API_BASE")
+                        or os.getenv("OPENAI_API_BASE_URL")
+                    ),
+                    "ANTHROPIC_API_KEY": "***" if os.getenv("ANTHROPIC_API_KEY") else None,
+                    "ANTHROPIC_API_BASE": os.getenv("ANTHROPIC_API_BASE"),
+                    "GOOGLE_API_KEY": "***" if os.getenv("GOOGLE_API_KEY") else None,
+                    "HF_TOKEN": "***" if os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") else None,
+                },
+            }, indent=2)
+            return json.dumps({
+                "success": True,
+                "config": self._config,
+                "env": {
+                    "OPENAI_API_KEY": "***" if os.getenv("OPENAI_API_KEY") else None,
                     "OPENAI_API_BASE": os.getenv("OPENAI_API_BASE"),
                     "HF_TOKEN": "***" if os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") else None,
                 },
@@ -521,6 +1140,50 @@ class TunaGateway:
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
+            name="system.set_runtime_env",
+            description=(
+                "Set or clear supported provider environment variables at runtime. "
+                "Useful for API keys and provider base URLs in the dashboard settings. "
+                "Changes are in-memory only and reset on gateway restart."
+            ),
+        )
+        async def set_runtime_env(key: str, value: Optional[str] = None) -> str:
+            def _set_runtime_env_sync() -> Dict[str, Any]:
+                import os as _os
+
+                aliases = {
+                    "OPENAI_API_KEY": ["OPENAI_API_KEY"],
+                    "OPENAI_API_BASE": ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_BASE_URL"],
+                    "ANTHROPIC_API_KEY": ["ANTHROPIC_API_KEY"],
+                    "ANTHROPIC_API_BASE": ["ANTHROPIC_API_BASE"],
+                    "GOOGLE_API_KEY": ["GOOGLE_API_KEY"],
+                    "HF_TOKEN": ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"],
+                }
+                if key not in aliases:
+                    return {"success": False, "error": f"Unsupported runtime env key: {key}"}
+
+                normalized = value.strip() if isinstance(value, str) else ""
+                for target in aliases[key]:
+                    if normalized:
+                        _os.environ[target] = normalized
+                    else:
+                        _os.environ.pop(target, None)
+
+                return {
+                    "success": True,
+                    "key": key,
+                    "configured": bool(normalized),
+                    "message": (
+                        f"{key} updated for the current gateway process."
+                        if normalized
+                        else f"{key} cleared from the current gateway process."
+                    ),
+                }
+
+            result = await self._invoke_dependency(_set_runtime_env_sync)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
             name="system.health",
             description=(
                 "Unified health dashboard: GPU/RAM/disk status, active training jobs, "
@@ -532,7 +1195,7 @@ class TunaGateway:
             resources = await self._invoke_dependency(self.finetuner.check_resources)
 
             # Active training jobs
-            job_manager = self._job_manager
+            job_manager = self._job_manager_instance
             jobs = job_manager.list_jobs() if job_manager else []
             running_jobs = [j for j in jobs if j.get("status") == "running"]
 
@@ -544,22 +1207,38 @@ class TunaGateway:
             # Health scoring
             warnings: list = []
             gpu = resources.get("gpu", {})
+            gpus = resources.get("gpus", [])
             ram = resources.get("ram", {})
             disk = resources.get("disk", {})
 
             status = "green"
-            if gpu.get("available"):
-                vram_used_pct = 0.0
-                total = gpu.get("vram_total_gb", 1)
-                free = gpu.get("vram_free_gb", total)
-                if total > 0:
-                    vram_used_pct = (1 - free / total) * 100
-                if vram_used_pct > 80:
+            gpu_devices = gpus or ([gpu] if gpu.get("available") else [])
+            if gpu_devices:
+                hottest_gpu = None
+                hottest_vram_pct = 0.0
+                for device in gpu_devices:
+                    total = device.get("vram_total_gb", 0) or 0
+                    if total <= 0:
+                        continue
+                    used = max(
+                        float(device.get("vram_used_gb", 0) or 0),
+                        float(device.get("vram_reserved_gb", 0) or 0),
+                    )
+                    used_pct = (used / total) * 100
+                    if used_pct >= hottest_vram_pct:
+                        hottest_vram_pct = used_pct
+                        hottest_gpu = device
+
+                if hottest_vram_pct > 80:
                     status = "red"
-                    warnings.append(f"GPU VRAM {vram_used_pct:.0f}% used")
-                elif vram_used_pct > 60:
+                    warnings.append(
+                        f"GPU {hottest_gpu.get('index', 0)} VRAM {hottest_vram_pct:.0f}% used"
+                    )
+                elif hottest_vram_pct > 60:
                     status = "yellow"
-                    warnings.append(f"GPU VRAM {vram_used_pct:.0f}% used")
+                    warnings.append(
+                        f"GPU {hottest_gpu.get('index', 0)} VRAM {hottest_vram_pct:.0f}% used"
+                    )
 
             ram_pct = ram.get("percent_used", 0)
             if ram_pct > 90:
@@ -587,6 +1266,23 @@ class TunaGateway:
                 "active_deployments": deployments_info.get("count", 0),
                 "warnings": warnings,
             }, indent=2)
+
+        @self.mcp.tool(
+            name="system.clear_gpu_cache",
+            description=(
+                "Free the current MCP process's PyTorch GPU cache without stopping "
+                "deployments or deleting data. Use this after training/inference to "
+                "recover VRAM held by this process."
+            ),
+        )
+        async def clear_gpu_cache() -> str:
+            result = await self._invoke_dependency(self.finetuner.clear_gpu_memory)
+            if result.get("success"):
+                result["message"] = (
+                    "Cleared the current process GPU cache. VRAM used by other processes "
+                    "or active deployments may remain allocated."
+                )
+            return json.dumps(result, indent=2)
 
         @self.mcp.tool(
             name="system.clear_all",
@@ -775,6 +1471,29 @@ class TunaGateway:
             return json.dumps(result, indent=2)
 
     def _register_file_tools(self):
+        @self.mcp.tool(
+            name="file.list_deployment_roots",
+            description=(
+                "List safe server-side roots for browsing model and adapter folders. "
+                "Includes workspace, output, uploads, and Hugging Face cache when available."
+            ),
+        )
+        async def file_list_deployment_roots() -> str:
+            return json.dumps({
+                "success": True,
+                "roots": self._deployment_browser_roots(),
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="file.browse_deployment_dir",
+            description=(
+                "Browse directories within a safe server-side root for deployment path selection. "
+                "Returns the current absolute folder path and child entries."
+            ),
+        )
+        async def file_browse_deployment_dir(root_id: str, path: str = ".") -> str:
+            return json.dumps(self._browse_deployment_directory(root_id, path), indent=2)
+
         @self.mcp.tool(
             name="file.upload",
             description=(
@@ -1182,6 +1901,7 @@ class TunaGateway:
             gradient_accumulation_steps: int = 4,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
+            load_in_4bit: bool = True,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -1211,6 +1931,7 @@ class TunaGateway:
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 optim=optim,
+                load_in_4bit=load_in_4bit,
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -1235,6 +1956,7 @@ class TunaGateway:
             beta: float = 0.1,
             use_lora: bool = True,
             lora_r: int = 8,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
@@ -1250,6 +1972,7 @@ class TunaGateway:
                 beta=beta,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                load_in_4bit=load_in_4bit,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             deploy_result = await self._auto_deploy_if_requested(
@@ -1273,6 +1996,7 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             num_generations: int = 4,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
@@ -1286,6 +2010,7 @@ class TunaGateway:
                 base_model=base_model,
                 num_epochs=num_epochs,
                 num_generations=num_generations,
+                load_in_4bit=load_in_4bit,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             deploy_result = await self._auto_deploy_if_requested(
@@ -1311,6 +2036,7 @@ class TunaGateway:
             beta: float = 0.1,
             use_lora: bool = True,
             lora_r: int = 8,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
@@ -1326,6 +2052,7 @@ class TunaGateway:
                 beta=beta,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                load_in_4bit=load_in_4bit,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             deploy_result = await self._auto_deploy_if_requested(
@@ -1361,6 +2088,7 @@ class TunaGateway:
             learning_rate: float = 2e-4,
             lr_scheduler_type: str = "linear",
             warmup_ratio: float = 0.0,
+            load_in_4bit: bool = True,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -1385,6 +2113,7 @@ class TunaGateway:
                 learning_rate=learning_rate,
                 lr_scheduler_type=lr_scheduler_type,
                 warmup_ratio=warmup_ratio,
+                load_in_4bit=load_in_4bit,
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -1517,6 +2246,7 @@ class TunaGateway:
             gradient_accumulation_steps: int = 4,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
+            load_in_4bit: bool = True,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -1531,6 +2261,7 @@ class TunaGateway:
                     "num_epochs": num_epochs, "lora_r": lora_r,
                     "batch_size": per_device_train_batch_size,
                     "learning_rate": learning_rate,
+                    "load_in_4bit": load_in_4bit,
                 },
             )
             dataset_obj = load_result["dataset_object"]
@@ -1559,6 +2290,7 @@ class TunaGateway:
                     gradient_accumulation_steps=gradient_accumulation_steps,
                     gradient_checkpointing=gradient_checkpointing,
                     optim=optim,
+                    load_in_4bit=load_in_4bit,
                     extra_callbacks=extra_callbacks,
                 )
 
@@ -1585,6 +2317,7 @@ class TunaGateway:
             beta: float = 0.1,
             use_lora: bool = True,
             lora_r: int = 8,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
@@ -1596,7 +2329,11 @@ class TunaGateway:
                 trainer_type="dpo",
                 base_model=resolved_base,
                 output_dir=output_dir,
-                config_summary={"num_epochs": num_epochs, "beta": beta},
+                config_summary={
+                    "num_epochs": num_epochs,
+                    "beta": beta,
+                    "load_in_4bit": load_in_4bit,
+                },
             )
             dataset_obj = load_result["dataset_object"]
 
@@ -1609,6 +2346,7 @@ class TunaGateway:
                     beta=beta,
                     use_lora=use_lora,
                     lora_r=lora_r,
+                    load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
                     extra_callbacks=extra_callbacks,
                 )
@@ -1635,6 +2373,7 @@ class TunaGateway:
             num_generations: int = 4,
             max_prompt_length: int = 512,
             max_completion_length: int = 256,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
@@ -1646,7 +2385,11 @@ class TunaGateway:
                 trainer_type="grpo",
                 base_model=resolved_base,
                 output_dir=output_dir,
-                config_summary={"num_epochs": num_epochs, "num_generations": num_generations},
+                config_summary={
+                    "num_epochs": num_epochs,
+                    "num_generations": num_generations,
+                    "load_in_4bit": load_in_4bit,
+                },
             )
             dataset_obj = load_result["dataset_object"]
 
@@ -1659,6 +2402,7 @@ class TunaGateway:
                     num_generations=num_generations,
                     max_prompt_length=max_prompt_length,
                     max_completion_length=max_completion_length,
+                    load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
                     extra_callbacks=extra_callbacks,
                 )
@@ -1687,6 +2431,7 @@ class TunaGateway:
             lora_r: int = 8,
             desirable_weight: float = 1.0,
             undesirable_weight: float = 1.0,
+            load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
@@ -1698,7 +2443,11 @@ class TunaGateway:
                 trainer_type="kto",
                 base_model=resolved_base,
                 output_dir=output_dir,
-                config_summary={"num_epochs": num_epochs, "beta": beta},
+                config_summary={
+                    "num_epochs": num_epochs,
+                    "beta": beta,
+                    "load_in_4bit": load_in_4bit,
+                },
             )
             dataset_obj = load_result["dataset_object"]
 
@@ -1713,6 +2462,7 @@ class TunaGateway:
                     lora_r=lora_r,
                     desirable_weight=desirable_weight,
                     undesirable_weight=undesirable_weight,
+                    load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
                     extra_callbacks=extra_callbacks,
                 )
@@ -1742,6 +2492,7 @@ class TunaGateway:
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
+            load_in_4bit: bool = True,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -1755,6 +2506,7 @@ class TunaGateway:
                 config_summary={
                     "num_stages": num_stages,
                     "epochs_per_stage": num_epochs_per_stage,
+                    "load_in_4bit": load_in_4bit,
                 },
             )
             dataset_obj = load_result["dataset_object"]
@@ -1771,6 +2523,7 @@ class TunaGateway:
                     use_lora=use_lora,
                     lora_r=lora_r,
                     lora_alpha=lora_alpha,
+                    load_in_4bit=load_in_4bit,
                     extra_callbacks=extra_callbacks,
                 )
 
@@ -2072,8 +2825,12 @@ class TunaGateway:
         async def deploy_mcp(
             model_path: str, adapter_path: Optional[str] = None,
             port: int = 8001,
+            quantization: Optional[str] = None,
         ) -> str:
-            config = HostingConfig(model_path=model_path, adapter_path=adapter_path, port=port)
+            config = HostingConfig(
+                model_path=model_path, adapter_path=adapter_path,
+                port=port, quantization=quantization,
+            )
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
 
         @self.mcp.tool(
@@ -2087,8 +2844,12 @@ class TunaGateway:
         async def deploy_api(
             model_path: str, adapter_path: Optional[str] = None,
             port: int = 8001,
+            quantization: Optional[str] = None,
         ) -> str:
-            config = HostingConfig(model_path=model_path, adapter_path=adapter_path, port=port)
+            config = HostingConfig(
+                model_path=model_path, adapter_path=adapter_path,
+                port=port, quantization=quantization,
+            )
             return json.dumps(await self.hoster.deploy_as_api(config), indent=2)
 
         @self.mcp.tool(name="host.list_deployments",
@@ -2114,13 +2875,15 @@ class TunaGateway:
                 "Chat with a deployed or local fine-tuned model. "
                 "IMPORTANT: After any finetune.train* with deploy=True succeeds, "
                 "offer to use this tool so the user can test the model interactively. "
-                "Pass the endpoint from the deployment result, or a model_path for direct loading. "
+                "Pass deployment_id to use an active deployment directly, or pass the endpoint "
+                "from the deployment result, or a model_path for direct loading. "
                 "Use conversation_id to maintain multi-turn context across calls. "
                 "Also share the deployment's chat_command for standalone CLI access."
             ),
         )
         async def chat_with_model(
             message: str,
+            deployment_id: Optional[str] = None,
             endpoint: Optional[str] = None,
             model_path: Optional[str] = None,
             adapter_path: Optional[str] = None,
@@ -2135,14 +2898,38 @@ class TunaGateway:
             if cid in self._chat_sessions:
                 session = self._chat_sessions[cid]
             else:
+                provider = None
+                resolved_endpoint = endpoint
+                resolved_model_path = model_path
+                resolved_adapter_path = adapter_path
+
+                if deployment_id:
+                    deployment = self.hoster.get_deployment(deployment_id)
+                    if deployment is None:
+                        return json.dumps(
+                            {"success": False, "error": f"Deployment {deployment_id} not found"},
+                            indent=2,
+                        )
+                    deployment_endpoint = (
+                        f"http://{deployment['host']}:{deployment['port']}"
+                        if deployment.get("transport") == "http"
+                        else None
+                    )
+                    if deployment.get("type") == "api" and deployment_endpoint:
+                        resolved_endpoint = deployment_endpoint
+                    else:
+                        resolved_model_path = deployment.get("model_path")
+                        resolved_adapter_path = deployment.get("adapter_path")
+                        provider = deployment.get("provider")
+
                 config = ChatConfig(
-                    endpoint=endpoint,
-                    model_path=model_path,
-                    adapter_path=adapter_path,
+                    endpoint=resolved_endpoint,
+                    model_path=resolved_model_path,
+                    adapter_path=resolved_adapter_path,
                     max_new_tokens=max_new_tokens,
                     system_prompt=system_prompt,
                 )
-                session = ChatSession(config)
+                session = ChatSession(config, provider=provider)
                 await session.initialize()
                 self._chat_sessions[cid] = session
 
@@ -2151,6 +2938,7 @@ class TunaGateway:
                 {
                     "success": True,
                     "conversation_id": cid,
+                    "deployment_id": deployment_id,
                     "response": response,
                     "turns": session.get_info()["turns"],
                 },
@@ -2159,39 +2947,100 @@ class TunaGateway:
 
     # -- Workflow --
     def _register_workflow_tools(self):
+        class WorkflowExecutionError(RuntimeError):
+            def __init__(self, message: str, result: Optional[Dict[str, Any]] = None):
+                super().__init__(message)
+                self.result = result
+
+        def _coerce_file_paths(
+            file_path: Optional[str] = None,
+            file_paths: Optional[Union[str, List[str]]] = None,
+        ) -> tuple[Optional[str], Optional[List[str]]]:
+            resolved: List[str] = []
+            if file_path and file_path.strip():
+                resolved.append(file_path.strip())
+            if isinstance(file_paths, str):
+                try:
+                    parsed = json.loads(file_paths)
+                    if isinstance(parsed, list):
+                        resolved.extend(
+                            item.strip() for item in parsed
+                            if isinstance(item, str) and item.strip()
+                        )
+                    elif isinstance(parsed, str) and parsed.strip():
+                        resolved.append(parsed.strip())
+                except (json.JSONDecodeError, ValueError):
+                    resolved.extend(
+                        part.strip() for part in file_paths.splitlines()
+                        if part.strip()
+                    )
+            elif isinstance(file_paths, list):
+                resolved.extend(
+                    item.strip() for item in file_paths
+                    if isinstance(item, str) and item.strip()
+                )
+
+            unique: List[str] = []
+            seen = set()
+            for item in resolved:
+                if item not in seen:
+                    seen.add(item)
+                    unique.append(item)
+
+            if not unique:
+                raise ValueError("Provide file_path or file_paths")
+            if len(unique) == 1:
+                return unique[0], None
+            return None, unique
+
+        def _serialize_workflow_job(job) -> Dict[str, Any]:
+            data = job.model_dump()
+            data["steps"] = data.get("config_summary", {}).get("steps", [])
+            return data
+
         @self.mcp.tool(name="workflow.full_pipeline",
-                       description="End-to-end: Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter -> Train -> Test -> Host")
+                       description="End-to-end pipeline over one or more documents: Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter -> Train -> Test -> Host")
         async def full_pipeline(
-            file_path: str,
+            file_path: Optional[str] = None,
+            file_paths: Optional[Union[str, List[str]]] = None,
             technique: str = "sft",
             output_dir: str = "./output",
             quality_threshold: float = 0.7,
             base_model: Optional[str] = None,
             num_epochs: int = 3,
+            use_lora: bool = True,
             deploy: bool = False,
             deploy_port: int = 8001,
+            quantization: Optional[str] = None,
         ) -> str:
+            resolved_file_path, resolved_file_paths = _coerce_file_paths(file_path, file_paths)
             result = await self.orchestrator.full_pipeline(
-                file_path=file_path,
+                file_path=resolved_file_path,
+                file_paths=resolved_file_paths,
                 technique=technique,
                 output_dir=output_dir,
                 quality_threshold=quality_threshold,
                 base_model=base_model,
                 num_epochs=num_epochs,
+                use_lora=use_lora,
                 deploy=deploy,
                 deploy_port=deploy_port,
+                quantization=quantization,
             )
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="workflow.generate_and_evaluate",
-                       description="Extract -> Generate -> Clean -> Normalize -> Evaluate -> Filter")
+                       description="Generate and score a dataset from one or more documents.")
         async def generate_and_evaluate(
-            file_path: str,
+            file_path: Optional[str] = None,
+            file_paths: Optional[Union[str, List[str]]] = None,
             technique: str = "sft",
             quality_threshold: float = 0.7,
         ) -> str:
+            resolved_file_path, resolved_file_paths = _coerce_file_paths(file_path, file_paths)
             result = await self.orchestrator.generate_and_evaluate(
-                file_path=file_path,
+                file_path=resolved_file_path,
+                file_paths=resolved_file_paths,
                 technique=technique,
                 quality_threshold=quality_threshold,
             )
@@ -2314,6 +3163,194 @@ class TunaGateway:
             return result.model_dump_json(indent=2)
 
         @self.mcp.tool(
+            name="workflow.run_pipeline_async",
+            description=(
+                "Run a custom workflow pipeline in the background and return a job_id. "
+                "Poll workflow.job_status(job_id) or workflow.list_jobs()."
+            ),
+        )
+        async def run_pipeline_async(
+            steps: str,
+            dry_run: bool = False,
+            output_dir: str = "./output/workflow_jobs/custom",
+        ) -> str:
+            from shared.pipeline_executor import PipelineExecutor, PipelineStep
+
+            parsed_steps = [PipelineStep(**s) for s in json.loads(steps)]
+            step_names = [step.tool for step in parsed_steps]
+            job = self.workflow_job_manager.create_job(
+                trainer_type="workflow_custom",
+                base_model="workflow.run_pipeline",
+                output_dir=output_dir,
+                config_summary={
+                    "steps": step_names,
+                    "dry_run": dry_run,
+                    "pipeline_type": "custom",
+                },
+            )
+
+            async def _run_workflow(extra_callbacks=None):
+                cancel_event = self.workflow_job_manager.get_cancel_event(job.job_id)
+                executor = PipelineExecutor(self.mcp._tools)
+
+                async def _step_update(phase: str, step_index: int, total_steps: int, step, **kwargs):
+                    current_step = step_index if phase == "start" else step_index + 1
+                    self.workflow_job_manager.update_progress(
+                        job.job_id,
+                        current_stage=step.tool,
+                        current_step=current_step,
+                        max_steps=total_steps,
+                        percent_complete=round(current_step / max(total_steps, 1) * 100, 1),
+                    )
+
+                async def _tool_runner(step, resolved_params, tool_func):
+                    intercepted = await self._run_workflow_training_tool(
+                        step.tool,
+                        resolved_params,
+                        extra_callbacks=extra_callbacks,
+                    )
+                    if intercepted is not None:
+                        return intercepted
+                    return await tool_func(**resolved_params)
+
+                result = await executor.execute(
+                    parsed_steps,
+                    dry_run=dry_run,
+                    step_callback=_step_update,
+                    cancel_event=cancel_event,
+                    tool_runner=_tool_runner,
+                )
+                payload = result.model_dump()
+                if not payload.get("success"):
+                    if cancel_event is not None and cancel_event.is_set():
+                        return payload
+                    raise WorkflowExecutionError(payload.get("error", "Workflow pipeline failed"), payload)
+                return payload
+
+            await self.workflow_job_manager.start_job(job.job_id, _run_workflow)
+            return json.dumps({
+                "success": True,
+                "job_id": job.job_id,
+                "status": "running",
+                "message": "Workflow pipeline started. Use workflow.job_status to monitor progress.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.full_pipeline_async",
+            description=(
+                "Run the full pipeline in the background for one or more documents. "
+                "Returns a job_id immediately."
+            ),
+        )
+        async def full_pipeline_async(
+            file_path: Optional[str] = None,
+            file_paths: Optional[Union[str, List[str]]] = None,
+            technique: str = "sft",
+            output_dir: str = "./output",
+            quality_threshold: float = 0.7,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            deploy: bool = False,
+            deploy_port: int = 8001,
+            quantization: Optional[str] = None,
+        ) -> str:
+            resolved_file_path, resolved_file_paths = _coerce_file_paths(file_path, file_paths)
+            resolved_paths = resolved_file_paths or ([resolved_file_path] if resolved_file_path else [])
+            job = self.workflow_job_manager.create_job(
+                trainer_type="workflow_full",
+                base_model=base_model or "meta-llama/Llama-3.2-3B-Instruct",
+                output_dir=output_dir,
+                config_summary={
+                    "steps": ["generate", "clean", "normalize", "evaluate", "filter", "export", "train", "test", "deploy"],
+                    "pipeline_type": "full",
+                    "technique": technique,
+                    "file_count": len(resolved_paths),
+                    "use_lora": use_lora,
+                    "deploy": deploy,
+                    "quantization": quantization,
+                },
+            )
+
+            async def _run_workflow(extra_callbacks=None):
+                cancel_event = self.workflow_job_manager.get_cancel_event(job.job_id)
+
+                async def _progress_update(**kwargs):
+                    self.workflow_job_manager.update_progress(job.job_id, **kwargs)
+
+                result = await self.orchestrator.full_pipeline(
+                    file_path=resolved_file_path,
+                    file_paths=resolved_file_paths,
+                    technique=technique,
+                    output_dir=output_dir,
+                    quality_threshold=quality_threshold,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    use_lora=use_lora,
+                    deploy=deploy,
+                    deploy_port=deploy_port,
+                    quantization=quantization,
+                    progress_callback=_progress_update,
+                    cancel_event=cancel_event,
+                    extra_callbacks=extra_callbacks,
+                )
+                if not result.get("success"):
+                    if cancel_event is not None and cancel_event.is_set():
+                        return result
+                    raise WorkflowExecutionError(result.get("error", "Full pipeline failed"), result)
+                return result
+
+            await self.workflow_job_manager.start_job(job.job_id, _run_workflow)
+            return json.dumps({
+                "success": True,
+                "job_id": job.job_id,
+                "status": "running",
+                "message": "Full pipeline started. Use workflow.job_status to monitor progress.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.job_status",
+            description="Get the current status of an async workflow job.",
+        )
+        async def workflow_job_status(job_id: str) -> str:
+            job = self.workflow_job_manager.get_job(job_id)
+            if job is None:
+                return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
+            return json.dumps({"success": True, **_serialize_workflow_job(job)}, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.list_jobs",
+            description="List workflow jobs started with workflow.run_pipeline_async or workflow.full_pipeline_async.",
+        )
+        async def workflow_list_jobs(status: Optional[str] = None, limit: int = 20) -> str:
+            from shared.training_jobs import JobStatus as JS
+
+            status_enum = JS(status) if status else None
+            jobs = self.workflow_job_manager.list_jobs(status=status_enum, limit=limit)
+            return json.dumps({
+                "success": True,
+                "count": len(jobs),
+                "jobs": [_serialize_workflow_job(job) for job in jobs],
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.cancel_job",
+            description="Cancel a running workflow job.",
+        )
+        async def workflow_cancel_job(job_id: str) -> str:
+            success = self.workflow_job_manager.cancel_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or not running: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Cancellation requested. Workflow stops after the current stage.",
+            }, indent=2)
+
+        @self.mcp.tool(
             name="workflow.guided_pipeline",
             description=(
                 "Describe what you want to do in plain English. Returns the exact "
@@ -2349,7 +3386,7 @@ class TunaGateway:
             result = await self.orchestration_data_service.generate_problems(
                 domain_description=domain_description,
                 num_problems=num_problems,
-                tool_descriptions=tool_descriptions,
+                tool_descriptions=tool_descriptions or self._default_orchestration_tool_descriptions(),
             )
             return json.dumps(result, indent=2)
 
@@ -2361,12 +3398,7 @@ class TunaGateway:
             problems: List[Dict],
             n_per_problem: int = 4,
         ) -> str:
-            # Uses the orchestrator's agent (the gateway itself uses an internal agent)
-            from agentsoul.core.agent import AgentSoul
-            from shared.provider_factory import create_llm
-            from shared.config import PipelineConfig
-            llm = create_llm(PipelineConfig())
-            agent = AgentSoul(llm_provider=llm)
+            agent = self._build_internal_orchestration_agent()
             result = await self.orchestration_data_service.collect_trajectories(
                 problems=problems, agent=agent, n_per_problem=n_per_problem,
             )
@@ -2386,7 +3418,7 @@ class TunaGateway:
             result = await self.orchestration_data_service.build_training_data(
                 collected=collected,
                 format=format,
-                tool_descriptions=tool_descriptions,
+                tool_descriptions=tool_descriptions or self._default_orchestration_tool_descriptions(),
                 cost_budget=cost_budget,
                 time_budget=time_budget,
             )
@@ -2406,15 +3438,11 @@ class TunaGateway:
             num_epochs: int = 3,
             deploy: bool = False,
             deploy_port: int = 8002,
+            training_data: Optional[List[Dict]] = None,
         ) -> str:
-            from agentsoul.core.agent import AgentSoul
-            from shared.provider_factory import create_llm
-            from shared.config import PipelineConfig
-            llm = create_llm(PipelineConfig())
-            agent = AgentSoul(llm_provider=llm)
             result = await self.orchestrator.train_orchestrator(
                 domain_description=domain_description,
-                agent=agent,
+                agent=self._build_internal_orchestration_agent() if training_data is None else None,
                 num_problems=num_problems,
                 n_per_problem=n_per_problem,
                 output_dir=output_dir,
@@ -2423,6 +3451,8 @@ class TunaGateway:
                 num_epochs=num_epochs,
                 deploy=deploy,
                 deploy_port=deploy_port,
+                tool_descriptions=self._default_orchestration_tool_descriptions(),
+                training_data=training_data,
             )
             return json.dumps(result, indent=2)
 
