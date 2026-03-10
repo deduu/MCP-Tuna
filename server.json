@@ -1,34 +1,53 @@
 {
-  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
-  "name": "mcp-tuna",
-  "display_name": "MCP Tuna",
-  "description": "End-to-end LLM fine-tuning platform — generate, clean, normalize, evaluate, train, and host models via MCP tools.",
-  "vendor": {
-    "name": "MCP Tuna",
-    "url": "https://github.com/deduu/AgentY"
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.deduu/mcp-tuna",
+  "description": "MCP server suite for LLM fine-tuning workflows: generate datasets, evaluate quality, train adapters, and deploy models.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/deduu/MCP-Tuna",
+    "source": "github"
   },
-  "license": "MIT",
-  "runtime": "python",
-  "config": {
-    "command": "mcp-tuna-gateway",
-    "args": [],
-    "env": {
-      "OPENAI_API_KEY": {
-        "description": "OpenAI API key for data generation and evaluation",
-        "required": true
+  "version": "0.2.0",
+  "website_url": "https://github.com/deduu/MCP-Tuna",
+  "packages": [
+    {
+      "registry_type": "pypi",
+      "registry_base_url": "https://pypi.org",
+      "identifier": "mcp-tuna",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
       },
-      "HF_TOKEN": {
-        "description": "HuggingFace token for model downloads and uploads",
-        "required": false
-      }
+      "runtime_hint": "uvx",
+      "runtime_arguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "mcp-tuna[all-servers]"
+        }
+      ],
+      "package_arguments": [
+        {
+          "type": "positional",
+          "value": "mcp-tuna-gateway"
+        }
+      ],
+      "environment_variables": [
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "OpenAI API key for generation and evaluation features.",
+          "is_required": false,
+          "is_secret": true,
+          "format": "string"
+        },
+        {
+          "name": "HF_TOKEN",
+          "description": "HuggingFace token for model download, upload, and hosting workflows.",
+          "is_required": false,
+          "is_secret": true,
+          "format": "string"
+        }
+      ]
     }
-  },
-  "packages": {
-    "pypi": "mcp-tuna[all-servers]"
-  },
-  "categories": ["machine-learning", "data-processing"],
-  "tags": ["fine-tuning", "llm", "sft", "dpo", "grpo", "lora", "training", "datasets", "evaluation"],
-  "tools": {
-    "count": 84
-  }
+  ]
 }

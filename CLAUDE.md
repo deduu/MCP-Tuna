@@ -87,7 +87,7 @@ This project was renamed twice: **AgentY → Transcendence → MCP Tuna** (`mcp-
 - The canonical name is **mcp-tuna** (package) / **MCP Tuna** (display) / **TunaGateway** (class).
 - `mcp_gateway.py` exports backwards-compatible aliases: `AgentYGateway = TunaGateway`, `TranscendenceGateway = TunaGateway`. **Do not remove these.**
 - `CHANGELOG.md` contains historical references to "Transcendence" — these are intentional.
-- The GitHub repo may still use the old `AgentY` URL. Do not "fix" these unless the repo is renamed.
+- The GitHub repo is `deduu/MCP-Tuna`; update stale `AgentY` repo URLs when you encounter them, but keep code-level compatibility aliases.
 - CLI commands all use the `mcp-tuna-*` prefix (e.g., `mcp-tuna-gateway`, `mcp-tuna-data`).
 - Env vars use `MCP_TUNA_*` prefix (e.g., `MCP_TUNA_GATEWAY_PORT`).
 

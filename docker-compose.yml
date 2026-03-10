@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: insights
       POSTGRES_DB: insights_db
     ports:
-      - "55432:5432" # ⬅️ change here
+      - "55432:5432" # Change if local PostgreSQL already uses 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
 

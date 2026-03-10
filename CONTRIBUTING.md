@@ -6,7 +6,7 @@ Thanks for your interest in contributing!
 
 ```bash
 # Clone and install
-git clone https://github.com/deduu/AgentY.git
+git clone https://github.com/deduu/MCP-Tuna.git
 cd mcp-tuna
 uv sync --all-extras
 
@@ -60,7 +60,7 @@ uv run ruff check .
 
 ## Reporting Issues
 
-Open an issue at https://github.com/deduu/AgentY/issues with:
+Open an issue at https://github.com/deduu/MCP-Tuna/issues with:
 - Steps to reproduce
 - Expected vs actual behavior
 - Python version and OS

@@ -14,14 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `finetune.merge_adapter` (LoRA merge) and `finetune.export_gguf` (GGUF export) tools
 - `host.health` tool for deployment health checks
 - Adapter service (`finetuning_pipeline/services/adapter_service.py`) for merge and GGUF export
-- 6 standalone MCP servers: `transcendence-data`, `transcendence-eval`, `transcendence-model-eval`, `transcendence-train`, `transcendence-host`, `transcendence-orchestrate`
+- 6 standalone MCP servers: `mcp-tuna-data`, `mcp-tuna-eval`, `mcp-tuna-model-eval`, `mcp-tuna-train`, `mcp-tuna-host`, `mcp-tuna-orchestrate`
 - Per-server optional dependency groups in `pyproject.toml` (install only what you need)
 - `argparse` CLI for gateway and all split servers (`--help`, `--version`, `--port`)
 - Graceful `ImportError` messages when optional extras are missing
 - MCP Registry metadata (`server.json`)
 - Example MCP client configs for Claude Desktop, Cursor, and HTTP mode
 - Dockerfile (GPU + CPU targets) and `.dockerignore`
-- `transcendence-gateway` service in `docker-compose.yml` with GPU reservation
+- `mcp-tuna-gateway` service in `docker-compose.yml` with GPU reservation
 - CI/CD workflows: lint/test (Python 3.11 + 3.12 matrix), PyPI publish (OIDC), Docker build
 - PyPI classifiers, `CHANGELOG.md`, `LICENSE` (MIT), `CONTRIBUTING.md`
 - Ruff `per-file-ignores` config for intentional re-exports and dotenv patterns
