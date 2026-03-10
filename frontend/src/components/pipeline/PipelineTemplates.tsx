@@ -5,49 +5,104 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CustomPipelineForm } from './CustomPipelineForm'
+import { DocumentPathInput } from './DocumentPathInput'
+import { DocumentPathListInput } from './DocumentPathListInput'
+import { ModelPathField } from './ModelPathField'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 const TECHNIQUES = ['sft', 'dpo', 'grpo', 'kto'] as const
 
+function parseDocumentPaths(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 export function PipelineTemplates() {
-  // Full pipeline state
-  const [docPath, setDocPath] = useState('')
+  const [singleDocPath, setSingleDocPath] = useState('')
+  const [multiDocPaths, setMultiDocPaths] = useState('')
+  const [useMultipleDocuments, setUseMultipleDocuments] = useState(false)
   const [technique, setTechnique] = useState<string>('sft')
   const [modelPath, setModelPath] = useState('')
   const [lastResult, setLastResult] = useState<Record<string, unknown> | null>(null)
+  const [showFullAdvanced, setShowFullAdvanced] = useState(false)
+  const [outputDir, setOutputDir] = useState('./output')
+  const [qualityThreshold, setQualityThreshold] = useState('0.7')
+  const [numEpochs, setNumEpochs] = useState('3')
+  const [useLora, setUseLora] = useState(true)
+  const [deploy, setDeploy] = useState(false)
+  const [deployPort, setDeployPort] = useState('8001')
+  const [quantization, setQuantization] = useState('4bit')
   const fullPipeline = useRunFullPipeline()
 
-  // Custom pipeline
   const [customOpen, setCustomOpen] = useState(false)
   const customPipeline = useRunPipeline()
 
   function handleRunFull() {
-    if (!docPath.trim()) {
+    const docPaths = useMultipleDocuments ? parseDocumentPaths(multiDocPaths) : []
+    if (useMultipleDocuments) {
+      if (docPaths.length === 0) {
+        toast.error('At least one document path is required')
+        return
+      }
+    } else if (!singleDocPath.trim()) {
       toast.error('Document path is required')
       return
     }
-    fullPipeline.mutate(
-      {
-        file_path: docPath,
-        technique,
-        ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+
+    const parsedThreshold = Number(qualityThreshold)
+    if (!Number.isFinite(parsedThreshold) || parsedThreshold < 0 || parsedThreshold > 1) {
+      toast.error('Quality threshold must be a number between 0 and 1')
+      return
+    }
+
+    const parsedEpochs = Number(numEpochs)
+    if (!Number.isInteger(parsedEpochs) || parsedEpochs < 1) {
+      toast.error('Epochs must be a positive integer')
+      return
+    }
+
+    const parsedDeployPort = Number(deployPort)
+    if (deploy && (!Number.isInteger(parsedDeployPort) || parsedDeployPort < 1 || parsedDeployPort > 65535)) {
+      toast.error('Deploy port must be an integer between 1 and 65535')
+      return
+    }
+
+    const args: Record<string, unknown> = {
+      technique,
+      output_dir: outputDir.trim() || './output',
+      quality_threshold: parsedThreshold,
+      num_epochs: parsedEpochs,
+      use_lora: useLora,
+      deploy,
+      ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+      ...(deploy ? { deploy_port: parsedDeployPort } : {}),
+      ...(deploy && quantization !== 'none' ? { quantization } : {}),
+    }
+
+    if (useMultipleDocuments) {
+      if (docPaths.length === 1) args.file_path = docPaths[0]
+      else args.file_paths = docPaths
+    } else {
+      args.file_path = singleDocPath.trim()
+    }
+
+    fullPipeline.mutate(args, {
+      onSuccess: (data) => {
+        setLastResult(data as Record<string, unknown>)
+        toast.success('Full pipeline started')
       },
-      {
-        onSuccess: (data) => {
-          setLastResult(data as Record<string, unknown>)
-          toast.success('Full pipeline completed')
-        },
-        onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
-      },
-    )
+      onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
+    })
   }
 
   function handleRunCustom(args: Record<string, unknown>) {
     customPipeline.mutate(args, {
       onSuccess: (data) => {
         setLastResult(data as Record<string, unknown>)
-        toast.success('Custom pipeline completed')
+        toast.success('Custom pipeline started')
       },
       onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
     })
@@ -55,7 +110,6 @@ export function PipelineTemplates() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      {/* Full Pipeline */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -66,15 +120,56 @@ export function PipelineTemplates() {
             End-to-end: load &rarr; generate &rarr; clean &rarr; normalize &rarr; evaluate &rarr; train
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground block">Document Source</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setUseMultipleDocuments(false)}
+                className={cn(
+                  'rounded-md border px-3 py-1.5 text-sm transition-colors',
+                  !useMultipleDocuments
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-input text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Single Document
+              </button>
+              <button
+                type="button"
+                onClick={() => setUseMultipleDocuments(true)}
+                className={cn(
+                  'rounded-md border px-3 py-1.5 text-sm transition-colors',
+                  useMultipleDocuments
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-input text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Multiple Documents
+              </button>
+            </div>
+          </div>
+
           <div>
             <label className="text-sm font-medium text-foreground mb-1 block">Document Path</label>
-            <Input
-              value={docPath}
-              onChange={(e) => setDocPath(e.target.value)}
-              placeholder="/path/to/documents"
-            />
+            {useMultipleDocuments ? (
+              <DocumentPathListInput
+                value={multiDocPaths}
+                onChange={setMultiDocPaths}
+                disabled={fullPipeline.isPending}
+              />
+            ) : (
+              <DocumentPathInput
+                value={singleDocPath}
+                onChange={setSingleDocPath}
+                placeholder="/path/to/document.pdf"
+                disabled={fullPipeline.isPending}
+                helperText="Browse uploads a single document to the backend and uses the returned server path for the pipeline."
+              />
+            )}
           </div>
+
           <div>
             <label className="text-sm font-medium text-foreground mb-1 block">Technique</label>
             <select
@@ -89,21 +184,116 @@ export function PipelineTemplates() {
               ))}
             </select>
           </div>
+
           <div>
             <label className="text-sm font-medium text-foreground mb-1 block">Model Path</label>
-            <Input
+            <ModelPathField
               value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
-              placeholder="meta-llama/Llama-3-8B"
+              onChange={setModelPath}
+              disabled={fullPipeline.isPending}
+              placeholder="meta-llama/Llama-3-8B or ~/.cache/huggingface/hub/..."
+              helperText="Use a Hugging Face model ID or browse a backend-visible model folder. Browse defaults to HF Cache when available."
             />
           </div>
+
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowFullAdvanced((open) => !open)}
+              className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showFullAdvanced && 'rotate-180')} />
+              Advanced full_pipeline options
+            </button>
+            {showFullAdvanced && (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1 block">Output Dir</label>
+                  <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} placeholder="./output" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1 block">Quality Threshold</label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={qualityThreshold}
+                    onChange={(e) => setQualityThreshold(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1 block">Epochs</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={numEpochs}
+                    onChange={(e) => setNumEpochs(e.target.value)}
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={useLora}
+                    onChange={(e) => setUseLora(e.target.checked)}
+                    className="h-4 w-4 rounded border-input bg-transparent"
+                  />
+                  Train with LoRA adapter
+                </label>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1 block">Deploy Port</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="65535"
+                    step="1"
+                    value={deployPort}
+                    onChange={(e) => setDeployPort(e.target.value)}
+                    disabled={!deploy}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1 block">Deploy Quantization</label>
+                  <select
+                    value={quantization}
+                    onChange={(e) => setQuantization(e.target.value)}
+                    disabled={!deploy}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="4bit">4-bit (recommended, saves memory)</option>
+                    <option value="8bit">8-bit</option>
+                    <option value="none">None (full precision)</option>
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={deploy}
+                    onChange={(e) => setDeploy(e.target.checked)}
+                    className="h-4 w-4 rounded border-input bg-transparent"
+                  />
+                  Deploy after training
+                </label>
+                {deploy && (
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    {useLora
+                      ? 'Deployment will load the selected base model plus the trained LoRA adapter.'
+                      : 'Deployment will load the trained model folder directly because LoRA is disabled.'}{' '}
+                    4-bit quantization significantly reduces memory usage. Use &quot;None&quot; only if you have enough
+                    VRAM/RAM.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
           <Button onClick={handleRunFull} disabled={fullPipeline.isPending}>
-            {fullPipeline.isPending ? 'Starting...' : 'Run Full Pipeline'}
+            {fullPipeline.isPending ? 'Starting...' : 'Start Full Pipeline'}
           </Button>
         </CardContent>
       </Card>
 
-      {/* Custom Pipeline (collapsible) */}
       <Card>
         <CardHeader>
           <button
@@ -117,16 +307,11 @@ export function PipelineTemplates() {
               className={cn('h-4 w-4 transition-transform text-muted-foreground', customOpen && 'rotate-180')}
             />
           </button>
-          <CardDescription>
-            Select individual steps and configure each one
-          </CardDescription>
+          <CardDescription>Select individual steps and configure each one</CardDescription>
         </CardHeader>
         {customOpen && (
           <CardContent>
-            <CustomPipelineForm
-              onSubmit={handleRunCustom}
-              isPending={customPipeline.isPending}
-            />
+            <CustomPipelineForm onSubmit={handleRunCustom} isPending={customPipeline.isPending} />
           </CardContent>
         )}
       </Card>

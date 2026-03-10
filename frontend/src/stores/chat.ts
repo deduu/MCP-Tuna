@@ -48,6 +48,10 @@ interface ChatStore {
   messages: ChatMessage[]
   isStreaming: boolean
   abortController: AbortController | null
+  chatMode: 'agent' | 'deployment'
+  selectedModel: string
+  selectedDeploymentId: string | null
+  deploymentConversationId: string | null
 
   addUserMessage: (content: string) => void
   startAssistantMessage: () => string
@@ -62,6 +66,10 @@ interface ChatStore {
   resolveConfirmation: (id: string) => void
   finishAssistantMessage: (id: string, history?: unknown[]) => void
   setStreaming: (streaming: boolean, controller?: AbortController | null) => void
+  setChatMode: (mode: 'agent' | 'deployment') => void
+  setSelectedModel: (model: string) => void
+  setSelectedDeploymentId: (deploymentId: string | null) => void
+  setDeploymentConversationId: (conversationId: string | null) => void
   clearMessages: () => void
 }
 
@@ -73,6 +81,10 @@ export const useChatStore = create<ChatStore>((set) => ({
   messages: [],
   isStreaming: false,
   abortController: null,
+  chatMode: 'agent',
+  selectedModel: 'gpt-4o',
+  selectedDeploymentId: null,
+  deploymentConversationId: null,
 
   addUserMessage: (content) =>
     set((s) => ({
@@ -283,5 +295,28 @@ export const useChatStore = create<ChatStore>((set) => ({
   setStreaming: (streaming, controller) =>
     set({ isStreaming: streaming, abortController: controller ?? null }),
 
-  clearMessages: () => set({ messages: [] }),
+  setChatMode: (chatMode) =>
+    set((state) =>
+      state.chatMode === chatMode
+        ? state
+        : { chatMode, deploymentConversationId: null, messages: [] },
+    ),
+
+  setSelectedModel: (selectedModel) =>
+    set((state) =>
+      state.selectedModel === selectedModel
+        ? state
+        : { selectedModel, deploymentConversationId: null, messages: [] },
+    ),
+
+  setSelectedDeploymentId: (selectedDeploymentId) =>
+    set((state) =>
+      state.selectedDeploymentId === selectedDeploymentId
+        ? state
+        : { selectedDeploymentId, deploymentConversationId: null, messages: [] },
+    ),
+
+  setDeploymentConversationId: (deploymentConversationId) => set({ deploymentConversationId }),
+
+  clearMessages: () => set({ messages: [], deploymentConversationId: null }),
 }))

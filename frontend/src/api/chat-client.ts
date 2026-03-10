@@ -1,5 +1,6 @@
 import { useChatStore } from '@/stores/chat'
 import type { TurnMetrics } from '@/stores/chat'
+import { mcpCall } from '@/api/client'
 
 const CHAT_URL = '/v1/chat/completions'
 
@@ -7,6 +8,8 @@ interface ChatRequestOptions {
   model?: string
   temperature?: number
   selectedTools?: string[]
+  source?: 'agent' | 'deployment'
+  deploymentId?: string | null
 }
 
 /**
@@ -35,6 +38,30 @@ export async function sendChatMessage(
     .map((m) => ({ role: m.role, content: m.content }))
 
   try {
+    if (options.source === 'deployment') {
+      if (!options.deploymentId) {
+        throw new Error('Select a running deployment before using Deployed Local chat.')
+      }
+
+      const result = await mcpCall<{
+        success: boolean
+        conversation_id: string
+        response: string
+      }>('host.chat', {
+        deployment_id: options.deploymentId,
+        message: userContent,
+        ...(store.deploymentConversationId
+          ? { conversation_id: store.deploymentConversationId }
+          : {}),
+      })
+
+      store.setDeploymentConversationId(result.conversation_id)
+      store.appendToken(msgId, result.response ?? '')
+      store.finishAssistantMessage(msgId)
+      store.setStreaming(false)
+      return
+    }
+
     const response = await fetch(CHAT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

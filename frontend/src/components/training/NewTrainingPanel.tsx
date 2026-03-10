@@ -33,6 +33,8 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
   const [modelPath, setModelPath] = useState('')
   const [datasetPath, setDatasetPath] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [outputDir, setOutputDir] = useState('./output')
+  const [quantization, setQuantization] = useState<'4bit' | 'none'>('4bit')
 
   // Hyperparameters
   const [learningRate, setLearningRate] = useState('2e-4')
@@ -42,7 +44,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
   const [loraAlpha, setLoraAlpha] = useState('32')
 
   // Advanced
-  const [warmupSteps, setWarmupSteps] = useState('0')
+  const [warmupRatio, setWarmupRatio] = useState('0')
   const [weightDecay, setWeightDecay] = useState('0.01')
   const [gradAccum, setGradAccum] = useState('1')
   const [maxSeqLength, setMaxSeqLength] = useState('2048')
@@ -101,18 +103,83 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
       return
     }
 
-    const args: Record<string, unknown> = {
-      model_name: modelPath,
-      dataset_path: datasetPath,
-      learning_rate: parseFloat(learningRate),
-      num_train_epochs: parseInt(epochs),
-      per_device_train_batch_size: parseInt(batchSize),
-      lora_r: parseInt(loraR),
-      lora_alpha: parseInt(loraAlpha),
-      warmup_steps: parseInt(warmupSteps),
-      weight_decay: parseFloat(weightDecay),
-      gradient_accumulation_steps: parseInt(gradAccum),
-      max_seq_length: parseInt(maxSeqLength),
+    const parsedEpochs = parseInt(epochs, 10)
+    const parsedBatchSize = parseInt(batchSize, 10)
+    const parsedLoraR = parseInt(loraR, 10)
+    const parsedLoraAlpha = parseInt(loraAlpha, 10)
+    const parsedWarmupRatio = parseFloat(warmupRatio)
+    const parsedWeightDecay = parseFloat(weightDecay)
+    const parsedGradAccum = parseInt(gradAccum, 10)
+    const parsedMaxSeqLength = parseInt(maxSeqLength, 10)
+    const parsedLearningRate = parseFloat(learningRate)
+
+    const commonArgs: Record<string, unknown> = {
+      output_dir: outputDir.trim() || './output',
+      base_model: modelPath.trim(),
+      dataset_path: datasetPath.trim(),
+      num_epochs: parsedEpochs,
+      load_in_4bit: quantization === '4bit',
+    }
+
+    let args: Record<string, unknown> = { ...commonArgs }
+
+    if (technique === 'sft') {
+      args = {
+        ...commonArgs,
+        learning_rate: parsedLearningRate,
+        per_device_train_batch_size: parsedBatchSize,
+        lora_r: parsedLoraR,
+        lora_alpha: parsedLoraAlpha,
+        warmup_ratio: parsedWarmupRatio,
+        weight_decay: parsedWeightDecay,
+        gradient_accumulation_steps: parsedGradAccum,
+        max_seq_length: parsedMaxSeqLength,
+      }
+    } else if (technique === 'dpo') {
+      args = {
+        ...commonArgs,
+        use_lora: true,
+        lora_r: parsedLoraR,
+      }
+    } else if (technique === 'kto') {
+      args = {
+        ...commonArgs,
+        use_lora: true,
+        lora_r: parsedLoraR,
+      }
+    }
+
+    if (sequential) {
+      const sequentialStage = {
+        technique,
+        dataset_path: datasetPath.trim(),
+        num_epochs: parsedEpochs,
+        ...(technique === 'sft'
+          ? {
+              learning_rate: parsedLearningRate,
+              per_device_train_batch_size: parsedBatchSize,
+              lora_r: parsedLoraR,
+              lora_alpha: parsedLoraAlpha,
+              warmup_ratio: parsedWarmupRatio,
+              weight_decay: parsedWeightDecay,
+              gradient_accumulation_steps: parsedGradAccum,
+              max_seq_length: parsedMaxSeqLength,
+            }
+          : {}),
+        ...((technique === 'dpo' || technique === 'kto')
+          ? {
+              use_lora: true,
+              lora_r: parsedLoraR,
+            }
+          : {}),
+        load_in_4bit: quantization === '4bit',
+      }
+
+      args = {
+        output_dir: outputDir.trim() || './output',
+        base_model: modelPath.trim(),
+        stages: JSON.stringify([sequentialStage]),
+      }
     }
 
     const selectedTechnique = sequential ? 'sequential' : technique
@@ -320,8 +387,23 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
           {showAdvanced && (
             <div className="grid grid-cols-2 gap-3 mt-3">
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">warmup_steps</label>
-                <Input type="number" value={warmupSteps} onChange={(e) => setWarmupSteps(e.target.value)} />
+                <label className="text-xs text-muted-foreground">output_dir</label>
+                <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">quantization</label>
+                <select
+                  value={quantization}
+                  onChange={(e) => setQuantization(e.target.value === 'none' ? 'none' : '4bit')}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="4bit">4-bit (recommended, saves memory)</option>
+                  <option value="none">None (full precision)</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">warmup_ratio</label>
+                <Input value={warmupRatio} onChange={(e) => setWarmupRatio(e.target.value)} />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">weight_decay</label>
@@ -335,6 +417,9 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
                 <label className="text-xs text-muted-foreground">max_seq_length</label>
                 <Input type="number" value={maxSeqLength} onChange={(e) => setMaxSeqLength(e.target.value)} />
               </div>
+              <p className="col-span-2 text-xs text-muted-foreground">
+                4-bit loading reduces memory usage during training. Use full precision only if you have enough VRAM/RAM.
+              </p>
             </div>
           )}
         </div>

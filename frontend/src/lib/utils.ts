@@ -24,3 +24,22 @@ export function formatDuration(seconds: number): string {
 export function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`
 }
+
+export function formatTimeAgo(value?: string): string | null {
+  if (!value) return null
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return null
+
+  const diffSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
+  if (diffSeconds < 5) return 'just now'
+  if (diffSeconds < 60) return `${diffSeconds}s ago`
+
+  const diffMinutes = Math.floor(diffSeconds / 60)
+  if (diffMinutes < 60) return `${diffMinutes}m ago`
+
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}

@@ -31,10 +31,11 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
 
 export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const techniqueKey = (job.technique ?? job.trainer_type ?? 'unknown').toLowerCase()
 
-  const technique = TECHNIQUE_STYLE[job.technique] ?? {
+  const technique = TECHNIQUE_STYLE[techniqueKey] ?? {
     variant: 'secondary' as const,
-    label: job.technique.toUpperCase(),
+    label: techniqueKey.toUpperCase(),
   }
   const statusVariant = STATUS_VARIANT[job.status] ?? 'secondary'
   const isActive = job.status === 'running' || job.status === 'pending'
@@ -69,7 +70,9 @@ export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps
             {job.progress.eta_seconds != null && (
               <span>ETA: {formatDuration(job.progress.eta_seconds)}</span>
             )}
-            <span>Loss: {job.progress.loss.toFixed(4)}</span>
+            {typeof job.progress.loss === 'number' && (
+              <span>Loss: {job.progress.loss.toFixed(4)}</span>
+            )}
           </div>
         )}
 

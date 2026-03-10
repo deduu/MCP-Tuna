@@ -2,12 +2,40 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpCall } from '../client'
 import type { Deployment } from '../types'
 
+function normalizeDeployment(raw: Record<string, unknown>): Deployment {
+  const deploymentId =
+    typeof raw.deployment_id === 'string'
+      ? raw.deployment_id
+      : typeof raw.id === 'string'
+        ? raw.id
+        : ''
+
+  const type =
+    raw.type === 'api' || raw.type === 'mcp'
+      ? raw.type
+      : raw.transport === 'stdio'
+        ? 'mcp'
+        : 'mcp'
+
+  const status = raw.status === 'stopped' ? 'stopped' : 'running'
+
+  return {
+    deployment_id: deploymentId,
+    model_path: typeof raw.model_path === 'string' ? raw.model_path : '',
+    adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : undefined,
+    endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
+    type,
+    status,
+    transport: typeof raw.transport === 'string' ? raw.transport : undefined,
+  }
+}
+
 export function useDeployments() {
   return useQuery<Deployment[]>({
     queryKey: ['deployments'],
     queryFn: async () => {
-      const result = await mcpCall<{ deployments: Deployment[] }>('host.list_deployments')
-      return result.deployments ?? []
+      const result = await mcpCall<{ deployments: Array<Record<string, unknown>> }>('host.list_deployments')
+      return (result.deployments ?? []).map(normalizeDeployment)
     },
     refetchInterval: 10_000,
     retry: 1,

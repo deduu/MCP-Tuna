@@ -10,3 +10,11 @@ export function useToolRegistry() {
     retry: 2,
   })
 }
+
+export function useToolCount() {
+  const registry = useToolRegistry()
+  return {
+    ...registry,
+    toolCount: registry.data?.length ?? 0,
+  }
+}

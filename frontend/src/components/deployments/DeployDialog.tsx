@@ -14,12 +14,8 @@ interface DeployDialogProps {
 export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
-  // MCP fields
-  const [toolName, setToolName] = useState('')
-  const [description, setDescription] = useState('')
-  // API fields
-  const [port, setPort] = useState('8080')
-  const [route, setRoute] = useState('/v1/chat/completions')
+  const [port, setPort] = useState('8001')
+  const [quantization, setQuantization] = useState('4bit')
 
   const deployMutation = useDeploy()
 
@@ -37,12 +33,10 @@ export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
       args.adapter_path = adapterPath.trim()
     }
 
-    if (type === 'mcp') {
-      if (toolName.trim()) args.tool_name = toolName.trim()
-      if (description.trim()) args.description = description.trim()
-    } else {
-      args.port = parseInt(port, 10)
-      if (route.trim()) args.route = route.trim()
+    args.port = parseInt(port, 10)
+
+    if (quantization !== "none") {
+      args.quantization = quantization
     }
 
     deployMutation.mutate(
@@ -63,10 +57,8 @@ export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
   const resetForm = () => {
     setModelPath('')
     setAdapterPath('')
-    setToolName('')
-    setDescription('')
-    setPort('8080')
-    setRoute('/v1/chat/completions')
+    setPort('8001')
+    setQuantization('4bit')
   }
 
   const title = type === 'mcp' ? 'Deploy as MCP Server' : 'Deploy as API Endpoint'
@@ -92,51 +84,40 @@ export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
           />
         </div>
 
-        {/* MCP-specific fields */}
-        {type === 'mcp' && (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Tool Name</label>
-              <Input
-                placeholder="my_model_tool"
-                value={toolName}
-                onChange={(e) => setToolName(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Description</label>
-              <textarea
-                className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-                placeholder="Describe what this MCP tool does..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </div>
-          </>
-        )}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Port</label>
+          <Input
+            type="number"
+            placeholder="8001"
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+          />
+        </div>
 
-        {/* API-specific fields */}
-        {type === 'api' && (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Port</label>
-              <Input
-                type="number"
-                placeholder="8080"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Route</label>
-              <Input
-                placeholder="/v1/chat/completions"
-                value={route}
-                onChange={(e) => setRoute(e.target.value)}
-              />
-            </div>
-          </>
-        )}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Quantization</label>
+          <select
+            value={quantization}
+            onChange={(e) => setQuantization(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="4bit">4-bit (recommended, saves memory)</option>
+            <option value="8bit">8-bit</option>
+            <option value="none">None (full precision)</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            4-bit quantization significantly reduces memory usage. Use &quot;None&quot; only if you have enough VRAM/RAM.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Runtime Details</label>
+          <p className="rounded-md border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
+            {type === 'mcp'
+              ? 'MCP deployments expose a hosted MCP server on the selected port.'
+              : 'API deployments expose fixed routes: /generate and /health.'}
+          </p>
+        </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">

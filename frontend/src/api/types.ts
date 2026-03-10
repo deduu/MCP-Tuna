@@ -23,17 +23,22 @@ export interface MCPToolResult {
   [key: string]: unknown
 }
 
+export interface GPUInfo {
+  index?: number
+  available: boolean
+  name?: string
+  vram_total_gb?: number
+  vram_free_gb?: number
+  vram_used_gb?: number
+  vram_reserved_gb?: number
+  compute_capability?: string
+  cuda_version?: string
+}
+
 export interface SystemResources {
-  gpu: {
-    available: boolean
-    name?: string
-    vram_total_gb?: number
-    vram_free_gb?: number
-    vram_used_gb?: number
-    vram_reserved_gb?: number
-    compute_capability?: string
-    cuda_version?: string
-  }
+  gpu: GPUInfo
+  gpus?: GPUInfo[]
+  gpu_count?: number
   ram: {
     total_gb: number
     free_gb: number
@@ -52,6 +57,10 @@ export interface SetupCheck {
   name: string
   status: 'pass' | 'warn' | 'fail'
   detail: string
+  category?: 'provider' | 'system' | 'package'
+  required?: boolean
+  action_path?: string
+  action_label?: string
 }
 
 export interface SetupCheckResult {
@@ -60,18 +69,50 @@ export interface SetupCheckResult {
   all_passed: boolean
 }
 
+export interface SystemHealthResult {
+  success: boolean
+  status: 'green' | 'yellow' | 'red'
+  resources: SystemResources
+  active_training_jobs: number
+  active_deployments: number
+  warnings: string[]
+}
+
+export interface GatewayConfigResult {
+  success: boolean
+  config: {
+    finetuning?: {
+      base_model?: string
+      [key: string]: unknown
+    }
+    [key: string]: unknown
+  }
+  env: {
+    OPENAI_API_KEY?: string | null
+    OPENAI_API_BASE?: string | null
+    ANTHROPIC_API_KEY?: string | null
+    ANTHROPIC_API_BASE?: string | null
+    GOOGLE_API_KEY?: string | null
+    HF_TOKEN?: string | null
+    [key: string]: string | null | undefined
+  }
+}
+
 export interface TrainingJob {
   job_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  technique: string
+  technique?: string
+  trainer_type?: string
   base_model: string
-  dataset_path: string
+  dataset_path?: string
   output_dir: string
   created_at: string
   started_at?: string
   completed_at?: string
   progress?: TrainingProgress
   error?: string
+  result?: Record<string, unknown>
+  config_summary?: Record<string, unknown>
 }
 
 export interface TrainingProgress {
@@ -79,11 +120,11 @@ export interface TrainingProgress {
   max_steps: number
   current_epoch: number
   max_epochs: number
-  loss: number
-  learning_rate: number
-  eval_loss?: number
-  grad_norm?: number
-  eta_seconds?: number
+  loss?: number | null
+  learning_rate?: number | null
+  eval_loss?: number | null
+  grad_norm?: number | null
+  eta_seconds?: number | null
   percent_complete: number
   gpu_memory_used_gb?: number
   gpu_memory_total_gb?: number
@@ -102,6 +143,7 @@ export interface Deployment {
   endpoint: string
   type: 'mcp' | 'api'
   status: 'running' | 'stopped'
+  transport?: string
 }
 
 export interface DatasetInfo {
@@ -147,6 +189,39 @@ export interface RecommendResult {
   success: boolean
   use_case: string
   recommendations: RecommendedModel[]
+  count: number
+  error?: string
+}
+
+export interface LocalModelCandidate {
+  id: string
+  model_path: string
+  usable_for?: string[]
+}
+
+export interface DeploymentBrowseRoot {
+  id: string
+  label: string
+  path: string
+  exists: boolean
+}
+
+export interface DeploymentBrowseEntry {
+  name: string
+  path: string
+  absolute_path: string
+  type: 'directory' | 'file'
+  selectable: boolean
+}
+
+export interface DeploymentBrowseResult {
+  success: boolean
+  root_id: string
+  root_path: string
+  current_path: string
+  current_absolute_path: string
+  parent_path?: string | null
+  entries: DeploymentBrowseEntry[]
   count: number
   error?: string
 }

@@ -1,15 +1,64 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useSetupCheck } from '@/api/hooks/useSystemResources'
+import { useSetupCheck, useSystemConfig } from '@/api/hooks/useSystemResources'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
+import type { MCPToolResult, RecommendResult } from '@/api/types'
 import { Stethoscope, ChevronDown, ChevronUp, Play, HardDrive, Sparkles } from 'lucide-react'
 
 interface CheckItem {
   name: string
   status: 'pass' | 'warn' | 'fail'
   detail?: string
+}
+
+interface PreflightResult extends MCPToolResult {
+  can_run?: boolean
+  estimated_vram_gb?: number
+  available_vram_gb?: number
+  headroom_gb?: number
+  recommendations?: string[]
+  warnings?: string[]
+}
+
+function formatGb(value?: number) {
+  return typeof value === 'number' ? `${value.toFixed(2)} GB` : 'n/a'
+}
+
+function buildPreflightChecks(result: PreflightResult | undefined): CheckItem[] {
+  if (!result) return []
+
+  return [
+    {
+      name: 'Can Run',
+      status: result.can_run ? 'pass' : 'warn',
+      detail: result.can_run ? 'Configuration fits available VRAM' : 'Configuration is likely to OOM',
+    },
+    {
+      name: 'Estimated VRAM',
+      status: 'pass',
+      detail: formatGb(result.estimated_vram_gb),
+    },
+    {
+      name: 'Available VRAM',
+      status: typeof result.available_vram_gb === 'number' && result.available_vram_gb > 0 ? 'pass' : 'warn',
+      detail: formatGb(result.available_vram_gb),
+    },
+    {
+      name: 'Headroom',
+      status:
+        typeof result.headroom_gb === 'number'
+          ? result.headroom_gb >= 1
+            ? 'pass'
+            : result.headroom_gb >= 0
+              ? 'warn'
+              : 'fail'
+          : 'warn',
+      detail: formatGb(result.headroom_gb),
+    },
+  ]
 }
 
 function CollapsibleResult({
@@ -63,19 +112,23 @@ function CheckList({ checks }: { checks: CheckItem[] }) {
 
 export function DiagnosticsSection() {
   const { data: setup, isLoading: setupLoading } = useSetupCheck()
+  const { data: config, isLoading: configLoading } = useSystemConfig()
 
   const preflight = useToolExecution()
   const diskPreflight = useToolExecution()
-  const prescribe = useToolExecution()
+  const recommendations = useToolExecution()
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
+  const baseModel = config?.config?.finetuning?.base_model
 
   const toggle = (key: string) =>
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }))
 
   const runPreflight = () => {
+    if (!baseModel) return
+
     preflight.mutate(
-      { toolName: 'system.preflight_check', args: {} },
+      { toolName: 'system.preflight_check', args: { model_name: baseModel } },
       { onSuccess: () => setOpenSections((prev) => ({ ...prev, preflight: true })) },
     )
   }
@@ -87,12 +140,15 @@ export function DiagnosticsSection() {
     )
   }
 
-  const runPrescribe = () => {
-    prescribe.mutate(
-      { toolName: 'system.prescribe', args: {} },
-      { onSuccess: () => setOpenSections((prev) => ({ ...prev, prescribe: true })) },
+  const runRecommendations = () => {
+    recommendations.mutate(
+      { toolName: 'validate.recommend_models', args: { use_case: 'general' } },
+      { onSuccess: () => setOpenSections((prev) => ({ ...prev, recommendations: true })) },
     )
   }
+
+  const preflightData = preflight.data as PreflightResult | undefined
+  const recommendData = recommendations.data as RecommendResult | undefined
 
   return (
     <Card>
@@ -112,19 +168,35 @@ export function DiagnosticsSection() {
           ) : setup?.checks ? (
             <div className="flex flex-wrap gap-1.5">
               {setup.checks.map((check) => (
-                <Badge
-                  key={check.name}
-                  variant={
-                    check.status === 'pass'
-                      ? 'success'
-                      : check.status === 'warn'
-                        ? 'warning'
-                        : 'error'
-                  }
-                  title={check.detail}
-                >
-                  {check.name}
-                </Badge>
+                check.action_path ? (
+                  <Link key={check.name} to={check.action_path} title={check.detail} className="transition-opacity hover:opacity-85">
+                    <Badge
+                      variant={
+                        check.status === 'pass'
+                          ? 'success'
+                          : check.status === 'warn'
+                            ? 'warning'
+                            : 'error'
+                      }
+                    >
+                      {check.name}
+                    </Badge>
+                  </Link>
+                ) : (
+                  <Badge
+                    key={check.name}
+                    variant={
+                      check.status === 'pass'
+                        ? 'success'
+                        : check.status === 'warn'
+                          ? 'warning'
+                          : 'error'
+                    }
+                    title={check.detail}
+                  >
+                    {check.name}
+                  </Badge>
+                )
               ))}
             </div>
           ) : (
@@ -134,11 +206,17 @@ export function DiagnosticsSection() {
 
         {/* Preflight Check */}
         <div className="space-y-2">
+          <div className="text-xs text-muted-foreground">
+            Base model:{' '}
+            <span className="font-mono">
+              {baseModel ?? (configLoading ? 'Loading configuration...' : 'Unavailable')}
+            </span>
+          </div>
           <Button
             variant="outline"
             size="sm"
             onClick={runPreflight}
-            disabled={preflight.isPending}
+            disabled={preflight.isPending || !baseModel}
           >
             <Play className="h-3.5 w-3.5" />
             Run Preflight
@@ -152,7 +230,27 @@ export function DiagnosticsSection() {
               isOpen={openSections.preflight ?? false}
               onToggle={() => toggle('preflight')}
             >
-              <CheckList checks={(preflight.data as { checks?: CheckItem[] }).checks ?? []} />
+              <CheckList checks={buildPreflightChecks(preflightData)} />
+              {!!preflightData?.recommendations?.length && (
+                <div className="pt-3 text-sm">
+                  <p className="font-medium">Recommendations</p>
+                  <ul className="list-disc pl-5 pt-1 text-muted-foreground">
+                    {preflightData.recommendations.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {!!preflightData?.warnings?.length && (
+                <div className="pt-3 text-sm">
+                  <p className="font-medium">Warnings</p>
+                  <ul className="list-disc pl-5 pt-1 text-muted-foreground">
+                    {preflightData.warnings.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </CollapsibleResult>
           )}
         </div>
@@ -189,26 +287,38 @@ export function DiagnosticsSection() {
           <Button
             variant="outline"
             size="sm"
-            onClick={runPrescribe}
-            disabled={prescribe.isPending}
+            onClick={runRecommendations}
+            disabled={recommendations.isPending}
           >
             <Sparkles className="h-3.5 w-3.5" />
             AI Recommendations
           </Button>
-          {prescribe.error && (
-            <p className="text-sm text-destructive">{prescribe.error.message}</p>
+          {recommendations.error && (
+            <p className="text-sm text-destructive">{recommendations.error.message}</p>
           )}
-          {prescribe.data && (
+          {recommendData && (
             <CollapsibleResult
-              label="Recommendations"
-              isOpen={openSections.prescribe ?? false}
-              onToggle={() => toggle('prescribe')}
+              label="Recommended Models"
+              isOpen={openSections.recommendations ?? false}
+              onToggle={() => toggle('recommendations')}
             >
-              <pre className="mt-2 text-xs font-mono text-muted-foreground whitespace-pre-wrap overflow-x-auto leading-relaxed">
-                {typeof (prescribe.data as { recommendations?: string }).recommendations === 'string'
-                  ? (prescribe.data as { recommendations?: string }).recommendations
-                  : JSON.stringify(prescribe.data, null, 2)}
-              </pre>
+              {recommendData.recommendations?.length ? (
+                <div className="space-y-2 pt-2">
+                  {recommendData.recommendations.map((item) => (
+                    <div key={item.model_id} className="rounded-md border px-3 py-2">
+                      <div className="text-sm font-medium">{item.model_id}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {item.size} | {item.memory}
+                      </div>
+                      <p className="pt-1 text-sm text-muted-foreground">{item.description}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <pre className="mt-2 text-xs font-mono text-muted-foreground whitespace-pre-wrap overflow-x-auto leading-relaxed">
+                  {JSON.stringify(recommendData, null, 2)}
+                </pre>
+              )}
             </CollapsibleResult>
           )}
         </div>

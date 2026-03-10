@@ -23,6 +23,11 @@ export function OrchestrationTab() {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-lg border border-border/70 bg-card/60 p-4 text-sm text-muted-foreground">
+        The orchestrator flow is for training a model to choose and sequence tools. It works as:
+        generate tasks, collect tool-using trajectories, convert them into SFT/DPO/GRPO data, then fine-tune a model on that dataset.
+      </div>
+
       <div className="flex items-center justify-between">
         <StepIndicator steps={ORCH_STEPS} currentStep={currentStep} />
         <Button variant="ghost" size="sm" onClick={reset} className="gap-1 text-xs shrink-0 ml-4">

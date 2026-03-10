@@ -1,6 +1,6 @@
 import { SystemStatusCard } from './SystemStatusCard'
 import { QuickActions } from './QuickActions'
-import { useToolRegistry } from '@/api/hooks/useToolRegistry'
+import { useToolCount, useToolRegistry } from '@/api/hooks/useToolRegistry'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Wrench, Fish } from 'lucide-react'
@@ -8,6 +8,7 @@ import { NAMESPACE_MAP, getNamespaceFromToolName } from '@/lib/tool-registry'
 
 export function DashboardPage() {
   const { data: tools } = useToolRegistry()
+  const { toolCount } = useToolCount()
 
   const toolsByNamespace: Record<string, number> = {}
   if (tools) {
@@ -30,7 +31,7 @@ export function DashboardPage() {
         {tools && (
           <Badge variant="secondary" className="ml-auto">
             <Wrench className="h-3 w-3 mr-1" />
-            {tools.length} tools
+            {toolCount} tools
           </Badge>
         )}
       </div>

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { RefreshCw } from 'lucide-react'
 import { LogViewer } from './LogViewer'
-import { InferenceTest } from './InferenceTest'
+import { DeploymentChat } from './DeploymentChat'
 
 interface DeploymentDetailProps {
   deploymentId: string
@@ -109,8 +109,7 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
         </CardContent>
       </Card>
 
-      {/* Inference test */}
-      <InferenceTest modelPath={deployment.model_path} />
+      <DeploymentChat deployment={deployment} />
     </div>
   )
 }

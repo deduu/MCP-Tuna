@@ -34,13 +34,15 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
           <div className="flex justify-between">
             <span className="text-muted-foreground">Epoch</span>
             <span className="font-mono">
-              {p.current_epoch.toFixed(1)} / {p.max_epochs}
+              {typeof p.current_epoch === 'number' ? p.current_epoch.toFixed(1) : '?'} / {p.max_epochs}
             </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Learning Rate</span>
-            <span className="font-mono">{p.learning_rate.toExponential(2)}</span>
-          </div>
+          {typeof p.learning_rate === 'number' && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Learning Rate</span>
+              <span className="font-mono">{p.learning_rate.toExponential(2)}</span>
+            </div>
+          )}
           {p.grad_norm != null && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Grad Norm</span>

@@ -5,7 +5,7 @@ import { PipelineJobCard } from './PipelineJobCard'
 import { toast } from 'sonner'
 
 export function PipelineJobTracker() {
-  const { data: jobs, isLoading } = usePipelineJobs()
+  const { data: jobs, isLoading, error } = usePipelineJobs()
   const cancel = useCancelPipeline()
 
   function handleCancel(jobId: string) {
@@ -30,9 +30,18 @@ export function PipelineJobTracker() {
         </div>
       )}
 
-      {!isLoading && (!jobs || jobs.length === 0) && (
+      {!isLoading && error && (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-red-300">
+          Unable to load pipeline jobs from the gateway. The backend may be down or restarting.
+          <div className="mt-1 font-mono text-xs text-red-200/80">
+            {error.message}
+          </div>
+        </div>
+      )}
+
+      {!isLoading && !error && (!jobs || jobs.length === 0) && (
         <p className="text-sm text-muted-foreground py-8 text-center">
-          No async pipeline jobs available. Current workflow tools execute synchronously.
+          No pipeline jobs yet. Start a full or custom pipeline to monitor it here.
         </p>
       )}
 

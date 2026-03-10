@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { Command } from 'cmdk'
 import { useNavigate } from 'react-router'
 import { useAppStore } from '@/stores/app'
-import { useToolRegistry } from '@/api/hooks/useToolRegistry'
+import { useToolCount, useToolRegistry } from '@/api/hooks/useToolRegistry'
 import { NAMESPACE_MAP, getNamespaceFromToolName, getToolShortName } from '@/lib/tool-registry'
 
 export function CommandPalette() {
@@ -10,6 +10,7 @@ export function CommandPalette() {
   const setOpen = useAppStore((s) => s.setCommandPaletteOpen)
   const navigate = useNavigate()
   const { data: tools } = useToolRegistry()
+  const { toolCount } = useToolCount()
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -42,7 +43,7 @@ export function CommandPalette() {
         loop
       >
         <Command.Input
-          placeholder="Search 84 tools..."
+          placeholder={toolCount > 0 ? `Search ${toolCount} tools...` : 'Search tools...'}
           className="w-full border-b bg-transparent px-4 py-3 text-sm outline-none placeholder:text-muted-foreground"
           autoFocus
         />
