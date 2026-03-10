@@ -31,7 +31,7 @@ async def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="./AgentY/data_generator_pipeline/scripts/config.yaml",
+        default=str(Path(__file__).resolve().parents[1] / "scripts" / "config.yaml"),
         help="Path to configuration file"
     )
     parser.add_argument(

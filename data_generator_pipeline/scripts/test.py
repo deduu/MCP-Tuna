@@ -1,6 +1,10 @@
 # Load configuration
+from pathlib import Path
+
 import yaml
 
-with open("./AgentY/data_generator_pipeline/scripts/config.yaml", 'r') as f:
+config_path = Path(__file__).with_name("config.yaml")
+
+with config_path.open("r") as f:
     config = yaml.safe_load(f)
     print(config)
