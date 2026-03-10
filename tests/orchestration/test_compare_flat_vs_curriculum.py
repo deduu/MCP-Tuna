@@ -46,6 +46,10 @@ def _mock_curriculum_success(final_path: str):
     }
 
 
+def _mock_orchestration_dataset():
+    return [{"instruction": "Use tools", "output": "Step 1: search()"}]
+
+
 # ----------------------------------------------------------------
 # Core workflow tests
 # ----------------------------------------------------------------
@@ -197,3 +201,78 @@ async def test_compare_output_structure():
     assert result["base_model"] == "my-base"
     assert result["flat_sft"]["total_epochs"] == 2
     assert result["curriculum_sft"]["num_stages"] == 3
+
+
+@pytest.mark.asyncio
+async def test_train_orchestrator_uses_provided_training_data_for_sft():
+    finetuner = AsyncMock()
+    finetuner.train_model = AsyncMock(return_value=_mock_train_success("/out/model"))
+
+    orch = _make_orchestrator(
+        finetuner=finetuner,
+        orchestration_data_service=AsyncMock(),
+    )
+    orch.orchestration_data_service.export = AsyncMock(return_value={"success": True})
+
+    result = await orch.train_orchestrator(
+        domain_description="tool routing",
+        agent=AsyncMock(),
+        output_dir="/out",
+        output_format="sft",
+        training_data=_mock_orchestration_dataset(),
+    )
+
+    assert result["success"] is True
+    assert result["used_provided_training_data"] is True
+    finetuner.train_model.assert_awaited_once()
+    orch.orchestration_data_service.generate_problems.assert_not_called()
+    orch.orchestration_data_service.collect_trajectories.assert_not_called()
+    orch.orchestration_data_service.build_training_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_train_orchestrator_uses_dpo_trainer_for_dpo_format():
+    finetuner = AsyncMock()
+    finetuner.train_dpo_model = AsyncMock(return_value=_mock_train_success("/out/model"))
+
+    orch = _make_orchestrator(
+        finetuner=finetuner,
+        orchestration_data_service=AsyncMock(),
+    )
+    orch.orchestration_data_service.export = AsyncMock(return_value={"success": True})
+
+    result = await orch.train_orchestrator(
+        domain_description="tool routing",
+        agent=AsyncMock(),
+        output_dir="/out",
+        output_format="dpo",
+        training_data=[{"prompt": "Task", "chosen": "Best", "rejected": "Worst"}],
+    )
+
+    assert result["success"] is True
+    finetuner.train_dpo_model.assert_awaited_once()
+    finetuner.train_model.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_train_orchestrator_uses_grpo_trainer_for_grpo_format():
+    finetuner = AsyncMock()
+    finetuner.train_grpo_model = AsyncMock(return_value=_mock_train_success("/out/model"))
+
+    orch = _make_orchestrator(
+        finetuner=finetuner,
+        orchestration_data_service=AsyncMock(),
+    )
+    orch.orchestration_data_service.export = AsyncMock(return_value={"success": True})
+
+    result = await orch.train_orchestrator(
+        domain_description="tool routing",
+        agent=AsyncMock(),
+        output_dir="/out",
+        output_format="grpo",
+        training_data=[{"prompt": "Task", "responses": ["A"], "rewards": [1.0]}],
+    )
+
+    assert result["success"] is True
+    finetuner.train_grpo_model.assert_awaited_once()
+    finetuner.train_model.assert_not_called()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import pytest
 
 from shared.pipeline_executor import PipelineExecutor, PipelineStep, PipelineResult, StepResult
@@ -186,6 +187,88 @@ class TestExecution:
         assert result.success is False
         assert result.steps_completed == 0
         assert "unexpected explosion" in result.error.lower() or "exception" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_step_callback_receives_progress_events(self):
+        tools = {
+            **_make_tools(**{"step1": {"success": True, "v": 1}}),
+            **_make_tools(**{"step2": {"success": True, "v": 2}}),
+        }
+        events = []
+
+        async def on_step_event(phase: str, step_index: int, step: PipelineStep, **kwargs):
+            events.append((phase, step_index, step.tool))
+
+        executor = PipelineExecutor(tools=tools)
+        steps = [
+            PipelineStep(tool="step1", params={}),
+            PipelineStep(tool="step2", params={}),
+        ]
+        result = await executor.execute(steps, step_callback=on_step_event)
+
+        assert result.success is True
+        assert events == [
+            ("start", 0, "step1"),
+            ("complete", 0, "step1"),
+            ("start", 1, "step2"),
+            ("complete", 1, "step2"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cancel_event_stops_pipeline_before_next_step(self):
+        tools = {
+            **_make_tools(**{"step1": {"success": True, "v": 1}}),
+            **_make_tools(**{"step2": {"success": True, "v": 2}}),
+        }
+        cancel_event = threading.Event()
+
+        async def on_step_event(phase: str, step_index: int, **kwargs):
+            if phase == "complete" and step_index == 0:
+                cancel_event.set()
+
+        executor = PipelineExecutor(tools=tools)
+        steps = [
+            PipelineStep(tool="step1", params={}),
+            PipelineStep(tool="step2", params={}),
+        ]
+        result = await executor.execute(
+            steps,
+            step_callback=on_step_event,
+            cancel_event=cancel_event,
+        )
+
+        assert result.success is False
+        assert result.steps_completed == 1
+        assert result.error == "Pipeline cancelled"
+        assert len(result.results) == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_runner_can_override_selected_step_execution(self):
+        tools = {
+            **_make_tools(**{"step1": {"success": True, "value": 1}}),
+            **_make_tools(**{"step2": {"success": True, "value": 2}}),
+        }
+        invoked = []
+
+        async def tool_runner(step: PipelineStep, resolved_params: dict, tool_func):
+            invoked.append(step.tool)
+            if step.tool == "step2":
+                return {"success": True, "value": 99, "source": "override"}
+            return await tool_func(**resolved_params)
+
+        executor = PipelineExecutor(tools=tools)
+        result = await executor.execute(
+            [
+                PipelineStep(tool="step1", params={}),
+                PipelineStep(tool="step2", params={}),
+            ],
+            tool_runner=tool_runner,
+        )
+
+        assert result.success is True
+        assert invoked == ["step1", "step2"]
+        assert result.results[1].result["value"] == 99
+        assert result.results[1].result["source"] == "override"
 
 
 # ---------------------------------------------------------------------------

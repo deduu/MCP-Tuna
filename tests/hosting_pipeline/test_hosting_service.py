@@ -112,3 +112,36 @@ class TestHostingServiceVRAMLeak:
         }
 
         assert svc._deployments[dep_id]["provider"] is provider
+
+    async def test_list_deployments_returns_frontend_fields(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-005"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "type": "api",
+            "model_path": "test/model",
+            "adapter_path": "./adapter",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "thread": thread,
+            "task": MagicMock(),
+        }
+
+        result = await svc.list_deployments()
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["deployments"][0] == {
+            "deployment_id": dep_id,
+            "model_path": "test/model",
+            "adapter_path": "./adapter",
+            "type": "api",
+            "transport": "http",
+            "status": "running",
+            "endpoint": "http://127.0.0.1:8080",
+        }

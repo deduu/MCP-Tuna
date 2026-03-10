@@ -69,6 +69,12 @@ class TestToolRegistration:
     def test_system_config_registered(self, tool_names):
         assert "system.config" in tool_names
 
+    def test_system_clear_gpu_cache_registered(self, tool_names):
+        assert "system.clear_gpu_cache" in tool_names
+
+    def test_system_set_runtime_env_registered(self, tool_names):
+        assert "system.set_runtime_env" in tool_names
+
     # Finetune tools
     def test_finetune_merge_adapter_registered(self, tool_names):
         assert "finetune.merge_adapter" in tool_names

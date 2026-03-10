@@ -16,6 +16,7 @@ import os
 import tempfile
 import types
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -489,6 +490,32 @@ class TestBuildConfig:
 # ──────────────────────────────────────────────
 # Push to hub
 # ──────────────────────────────────────────────
+
+class TestResolveModelPath:
+    def test_resolves_hf_cache_wrapper_to_latest_snapshot(self, tmp_path: Path):
+        svc = TrainingService()
+        wrapper = tmp_path / "models--demo--model"
+        snapshots = wrapper / "snapshots"
+        snapshots.mkdir(parents=True)
+
+        older = snapshots / "old-snap"
+        older.mkdir()
+        newer = snapshots / "new-snap"
+        newer.mkdir()
+
+        os.utime(older, (1, 1))
+        os.utime(newer, None)
+
+        assert svc._resolve_model_path(str(wrapper)) == str(newer)
+
+    def test_keeps_real_model_directory_unchanged(self, tmp_path: Path):
+        svc = TrainingService()
+        model_dir = tmp_path / "real-model"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+
+        assert svc._resolve_model_path(str(model_dir)) == str(model_dir)
+
 
 class TestPushToHub:
     @pytest.mark.asyncio

@@ -169,7 +169,7 @@ class TestChatSessionDirectMode:
         ) as mock_cls:
             info = await session.initialize()
 
-        mock_cls.assert_called_once_with(model_path="test/model")
+        mock_cls.assert_called_once_with(model_path="test/model", lora_adapter_path=None)
         assert info["mode"] == "direct"
         assert info["model_path"] == "test/model"
 
@@ -183,11 +183,24 @@ class TestChatSessionDirectMode:
         with patch(
             "agentsoul.providers.hf.HuggingFaceProvider",
             return_value=mock_provider,
-        ):
+        ) as mock_cls:
             info = await session.initialize()
 
-        mock_provider.load_adapter.assert_called_once_with("./lora")
+        mock_cls.assert_called_once_with(model_path="test/model", lora_adapter_path="./lora")
         assert info["adapter_path"] == "./lora"
+
+    @pytest.mark.asyncio
+    async def test_initialize_direct_mode_reuses_existing_provider(self):
+        cfg = ChatConfig(model_path="test/model", adapter_path="./lora")
+        shared_provider = MagicMock()
+        session = ChatSession(cfg, provider=shared_provider)
+
+        with patch("agentsoul.providers.hf.HuggingFaceProvider") as mock_cls:
+            info = await session.initialize()
+
+        mock_cls.assert_not_called()
+        assert session._provider is shared_provider
+        assert info["shared_provider"] is True
 
     @pytest.mark.asyncio
     async def test_send_message_direct_mode(self):

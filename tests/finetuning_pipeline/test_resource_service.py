@@ -105,6 +105,42 @@ class TestCheckResources:
         assert result["ram"]["free_gb"] == pytest.approx(8.0, abs=0.1)
         assert result["ram"]["percent_used"] == pytest.approx(50.0, abs=0.1)
 
+    @patch("finetuning_pipeline.services.resource_service.psutil")
+    @patch("finetuning_pipeline.services.resource_service.torch")
+    def test_multiple_gpus_are_reported(self, mock_torch, mock_psutil, resource_service):
+        mock_torch.cuda.is_available.return_value = True
+        mock_torch.cuda.device_count.return_value = 2
+        mock_torch.cuda.get_device_name.side_effect = ["RTX 4090", "RTX 4070"]
+
+        props0 = MagicMock()
+        props0.total_memory = 24 * 1024**3
+        props0.major = 8
+        props0.minor = 9
+
+        props1 = MagicMock()
+        props1.total_memory = 12 * 1024**3
+        props1.major = 8
+        props1.minor = 6
+
+        mock_torch.cuda.get_device_properties.side_effect = [props0, props1]
+        mock_torch.cuda.memory_allocated.side_effect = [2 * 1024**3, 1 * 1024**3]
+        mock_torch.cuda.memory_reserved.side_effect = [3 * 1024**3, 1.5 * 1024**3]
+        mock_torch.version.cuda = "12.4"
+
+        mem = MagicMock()
+        mem.total = 64 * 1024**3
+        mem.available = 48 * 1024**3
+        mem.used = 16 * 1024**3
+        mem.percent = 25.0
+        mock_psutil.virtual_memory.return_value = mem
+
+        result = resource_service.check_resources()
+        assert result["gpu_count"] == 2
+        assert len(result["gpus"]) == 2
+        assert result["gpu"]["name"] == "RTX 4090"
+        assert result["gpus"][1]["name"] == "RTX 4070"
+        assert result["gpus"][1]["vram_total_gb"] == pytest.approx(12.0, abs=0.1)
+
 
 # ------------------------------------------------------------------ #
 # preflight_check()

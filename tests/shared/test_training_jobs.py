@@ -181,8 +181,12 @@ class TestTrainingJobManager:
             return {"success": True, "model_path": "/out"}
 
         await mgr.start_job(job.job_id, fake_training)
-        # Wait a bit for background task
-        await asyncio.sleep(0.2)
+
+        for _ in range(20):
+            updated = mgr.get_job(job.job_id)
+            if updated is not None and updated.status == JobStatus.COMPLETED:
+                break
+            await asyncio.sleep(0.05)
 
         updated = mgr.get_job(job.job_id)
         assert updated is not None
