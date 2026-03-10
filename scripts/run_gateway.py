@@ -1,5 +1,5 @@
 """
-MCP Tuna Gateway — Entry point for the unified MCP server.
+MCP Tuna Gateway - Entry point for the unified MCP server.
 
 Usage:
     mcp-tuna-gateway              # stdio mode (Claude Desktop)
@@ -10,19 +10,26 @@ Usage:
 """
 
 import argparse
-import sys
 import logging
 import socket
+import sys
+from pathlib import Path
 
 # Ensure stderr uses UTF-8 on Windows to prevent UnicodeEncodeError in log handlers
 if sys.stderr.encoding != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from agentsoul.server import StdioTransport, HTTPTransport
+# Prefer the workspace source tree over any installed copy when launched as scripts/run_gateway.py.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agentsoul.server import HTTPTransport, StdioTransport
 from agentsoul.utils.logger import configure_logging
 from mcp_gateway import TunaGateway
+from shared.version import get_package_version
 
-__version__ = "0.1.0"
+__version__ = get_package_version()
 
 
 def _check_port(host: str, port: int) -> None:
@@ -41,7 +48,7 @@ def _check_port(host: str, port: int) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcp-tuna-gateway",
-        description="MCP Tuna — Unified MCP gateway for LLM fine-tuning tools.",
+        description="MCP Tuna - Unified MCP gateway for LLM fine-tuning tools.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -87,7 +94,7 @@ def main():
         print(f"ERROR: gateway crashed: {exc}", flush=True)
         raise SystemExit(1) from exc
 
-    # If we reach here without exception, the server exited on its own —
+    # If we reach here without exception, the server exited on its own -
     # this is the "silent failure" path (e.g. port conflict inside uvicorn).
     print(
         "ERROR: server exited unexpectedly. "

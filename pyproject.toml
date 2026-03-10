@@ -65,6 +65,8 @@ training = [
     "trl>=0.12",
     "datasets",
     "sentence-transformers",
+    "sentencepiece",
+    "tiktoken",
     "scikit-learn",
     "scipy",
     "hf-xet>=1.2.0",
@@ -73,6 +75,8 @@ hosting = [
     "torch>=2.3.0",
     "transformers",
     "accelerate>=1.0.0",
+    "sentencepiece",
+    "tiktoken",
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "sse-starlette>=1.0",
@@ -120,14 +124,16 @@ mcp-tuna-train = "scripts.run_train_server:main"
 mcp-tuna-host = "scripts.run_host_server:main"
 mcp-tuna-orchestrate = "scripts.run_orchestrate_server:main"
 mcp-tuna-chat = "scripts.chat_cli:main"
+mcp-tuna-setup = "scripts.setup_mcp:main"
 
 [project.urls]
-Repository = "https://github.com/deduu/AgentY"
-Issues = "https://github.com/deduu/AgentY/issues"
-Changelog = "https://github.com/deduu/AgentY/blob/main/CHANGELOG.md"
+Repository = "https://github.com/deduu/MCP-Tuna"
+Issues = "https://github.com/deduu/MCP-Tuna/issues"
+Changelog = "https://github.com/deduu/MCP-Tuna/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = [
+    "app",
     "src/agentsoul",
     "scripts",
     "servers",

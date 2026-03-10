@@ -62,6 +62,33 @@ def _import_transformers():
         )
 
 
+def _load_tokenizer_with_fallback(
+    AutoTokenizer,
+    model_path: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+):
+    try:
+        return AutoTokenizer.from_pretrained(model_path, use_fast=True, **kwargs)
+    except Exception as exc:
+        message = str(exc).lower()
+        fallback_markers = (
+            "backend tokenizer",
+            "convert a slow tokenizer to a fast one",
+            "sentencepiece",
+            "tiktoken",
+        )
+        if not any(marker in message for marker in fallback_markers):
+            raise
+
+        logger.warning(
+            "Fast tokenizer unavailable for %s; falling back to slow tokenizer: %s",
+            model_path,
+            exc,
+        )
+        return AutoTokenizer.from_pretrained(model_path, use_fast=False, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Performance dataclass
 # ---------------------------------------------------------------------------
@@ -218,8 +245,11 @@ class HuggingFaceProvider(BaseLLM):
         self._attn_impl = attn_impl
 
         # Tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path, use_fast=True, trust_remote_code=True
+        self.tokenizer = _load_tokenizer_with_fallback(
+            AutoTokenizer,
+            model_path,
+            self.logger,
+            trust_remote_code=True,
         )
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

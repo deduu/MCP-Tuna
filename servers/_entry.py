@@ -7,6 +7,8 @@ import logging
 import socket
 import sys
 
+from shared.version import get_package_version
+
 
 def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
     """Standard entry point for all MCP Tuna standalone MCP servers.
@@ -20,7 +22,7 @@ def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
     if sys.stderr.encoding != "utf-8":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    from agentsoul.server import StdioTransport, HTTPTransport
+    from agentsoul.server import HTTPTransport, StdioTransport
     from agentsoul.utils.logger import configure_logging
     from dotenv import load_dotenv
 
@@ -29,20 +31,24 @@ def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
 
     parser = argparse.ArgumentParser(
         prog=name,
-        description=f"{name} — MCP Tuna standalone MCP server.",
+        description=f"{name} - MCP Tuna standalone MCP server.",
     )
+    package_version = get_package_version()
     parser.add_argument(
-        "--version", action="version", version="%(prog)s 0.2.0"
+        "--version", action="version", version=f"%(prog)s {package_version}"
     )
     sub = parser.add_subparsers(dest="transport")
 
     http_parser = sub.add_parser("http", help="Start in HTTP mode")
     http_parser.add_argument(
-        "--port", type=int, default=default_port,
+        "--port",
+        type=int,
+        default=default_port,
         help=f"Port to listen on (default: {default_port})",
     )
     http_parser.add_argument(
-        "--host", default="0.0.0.0",
+        "--host",
+        default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)",
     )
 
