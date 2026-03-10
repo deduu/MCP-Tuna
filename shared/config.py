@@ -85,6 +85,7 @@ class HostingConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8001
     transport: str = "http"  # http | stdio
+    quantization: Optional[str] = None  # None | "4bit" | "8bit"
 
 
 class ChatConfig(BaseModel):

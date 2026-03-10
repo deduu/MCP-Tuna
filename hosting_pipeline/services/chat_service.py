@@ -16,7 +16,7 @@ class ChatSession:
       using ``HuggingFaceProvider`` from agentsoul.
     """
 
-    def __init__(self, config: ChatConfig) -> None:
+    def __init__(self, config: ChatConfig, provider: Any = None) -> None:
         self._config = config
         self._history: List[Dict[str, str]] = []
         self._mode: Optional[str] = None
@@ -26,7 +26,8 @@ class ChatSession:
         self._http_client: Any = None
 
         # Direct mode
-        self._provider: Any = None
+        self._provider: Any = provider
+        self._owns_provider = provider is None
 
         # Seed system prompt into history
         if config.system_prompt:
@@ -62,25 +63,28 @@ class ChatSession:
         }
 
     async def _init_direct(self) -> Dict[str, Any]:
-        from agentsoul.providers.hf import HuggingFaceProvider
-
         self._mode = "direct"
-        self._provider = HuggingFaceProvider(model_path=self._config.model_path)
-        if self._config.adapter_path:
-            self._provider.load_adapter(self._config.adapter_path)
+        if self._provider is None:
+            from agentsoul.providers.hf import HuggingFaceProvider
+
+            self._provider = HuggingFaceProvider(
+                model_path=self._config.model_path,
+                lora_adapter_path=self._config.adapter_path,
+            )
 
         self._initialized = True
         return {
             "mode": "direct",
             "model_path": self._config.model_path,
             "adapter_path": self._config.adapter_path,
+            "shared_provider": not self._owns_provider,
         }
 
     async def shutdown(self) -> None:
         """Release resources: close HTTP client or unload model."""
         if self._mode == "api" and self._http_client is not None:
             await self._http_client.aclose()
-        elif self._mode == "direct" and self._provider is not None:
+        elif self._mode == "direct" and self._provider is not None and self._owns_provider:
             del self._provider
             self._provider = None
             try:
@@ -188,6 +192,7 @@ class ChatSession:
         elif self._mode == "direct":
             info["model_path"] = self._config.model_path
             info["adapter_path"] = self._config.adapter_path
+            info["shared_provider"] = not self._owns_provider
         if self._config.system_prompt:
             info["system_prompt"] = self._config.system_prompt
         return info
