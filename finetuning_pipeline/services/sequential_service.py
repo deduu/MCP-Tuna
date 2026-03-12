@@ -242,11 +242,38 @@ class SequentialTrainingService:
         merged_dir = Path(stage_dir) / "merged"
         merged_dir.mkdir(parents=True, exist_ok=True)
 
-        model = AutoModelForCausalLM.from_pretrained(
-            original_base,
-            torch_dtype=torch.float16,
-            device_map="auto",
+        load_attempts = []
+        if torch.cuda.is_available():
+            # Avoid device_map="auto" here: PEFT/Accelerate can mis-handle
+            # partially offloaded models during adapter loading on Windows.
+            load_attempts.append(
+                {
+                    "torch_dtype": torch.float16,
+                    "device_map": {"": 0},
+                    "low_cpu_mem_usage": True,
+                }
+            )
+        load_attempts.append(
+            {
+                "torch_dtype": torch.float32,
+                "low_cpu_mem_usage": True,
+            }
         )
+
+        last_exc = None
+        for load_kwargs in load_attempts:
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    original_base,
+                    **load_kwargs,
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        else:
+            raise last_exc
         model = PeftModel.from_pretrained(model, stage_dir)
         model = model.merge_and_unload()
         model.save_pretrained(str(merged_dir))
