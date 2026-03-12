@@ -38,6 +38,11 @@ def _resolve_hf_cache_path(model_path: str) -> str:
     return str(resolved)
 
 
+def _client_endpoint_host(host: str) -> str:
+    """Return a client-usable host for endpoints and health probes."""
+    return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+
+
 class HostingService:
     """Manages model deployments as MCP servers or FastAPI endpoints."""
 
@@ -186,7 +191,11 @@ class HostingService:
                 "status": "running",
                 "model_path": config.model_path,
                 "transport": config.transport,
-                "endpoint": f"http://{config.host}:{config.port}" if config.transport == "http" else "stdio",
+                "endpoint": (
+                    f"http://{_client_endpoint_host(config.host)}:{config.port}"
+                    if config.transport == "http"
+                    else "stdio"
+                ),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -237,6 +246,20 @@ class HostingService:
             if runtime.get("error") is not None:
                 raise runtime["error"]
 
+            started = await self._wait_for_port(config.host, config.port)
+            if not started:
+                task = runtime.get("task")
+                if task is not None and task.done():
+                    try:
+                        exc = task.exception()
+                    except Exception:
+                        exc = None
+                    if exc is not None:
+                        raise exc
+                raise TimeoutError(
+                    f"Hosted API server did not start listening on port {config.port}"
+                )
+
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "type": "api",
@@ -258,7 +281,7 @@ class HostingService:
                 "type": "api",
                 "status": "running",
                 "model_path": config.model_path,
-                "endpoint": f"http://{config.host}:{config.port}",
+                "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
                 "routes": ["/generate", "/health"],
             }
         except Exception as e:
@@ -289,7 +312,11 @@ class HostingService:
                 "type": dep.get("type", "mcp"),
                 "transport": dep["transport"],
                 "status": self._deployment_status(dep),
-                "endpoint": f"http://{dep['host']}:{dep['port']}" if dep["transport"] == "http" else "stdio",
+                "endpoint": (
+                    f"http://{_client_endpoint_host(dep['host'])}:{dep['port']}"
+                    if dep["transport"] == "http"
+                    else "stdio"
+                ),
             })
         return {"success": True, "deployments": deployments, "count": len(deployments)}
 
@@ -345,7 +372,7 @@ class HostingService:
             "model_path": dep.get("model_path"),
             "adapter_path": dep.get("adapter_path"),
             "endpoint": (
-                f"http://{dep['host']}:{dep['port']}"
+                f"http://{_client_endpoint_host(dep['host'])}:{dep['port']}"
                 if dep.get("transport") == "http" or dep.get("server")
                 else "stdio"
             ),
@@ -355,8 +382,9 @@ class HostingService:
         if is_alive and dep.get("server"):
             try:
                 import httpx
+                probe_host = _client_endpoint_host(dep["host"])
                 async with httpx.AsyncClient(timeout=5) as client:
-                    resp = await client.get(f"http://{dep['host']}:{dep['port']}/health")
+                    resp = await client.get(f"http://{probe_host}:{dep['port']}/health")
                     result["health_response"] = resp.json()
             except Exception:
                 result["health_response"] = None
