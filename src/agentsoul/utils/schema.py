@@ -7,7 +7,9 @@ Used by both ToolService.tool() and MCPServer.tool() decorators.
 
 import inspect
 import re
-from typing import Any, Callable, Dict, Union, get_type_hints
+import types
+from enum import Enum
+from typing import Annotated, Any, Callable, Dict, Literal, Union, get_args, get_origin, get_type_hints
 
 
 def python_type_to_json_schema(py_type: type) -> dict:
@@ -24,11 +26,23 @@ def python_type_to_json_schema(py_type: type) -> dict:
         dict: "object",
     }
 
-    origin = getattr(py_type, "__origin__", None)
+    origin = get_origin(py_type)
+
+    # Annotated[X, {...}] -> merge JSON schema metadata into the base schema.
+    if origin is Annotated:
+        args = get_args(py_type)
+        if not args:
+            return {"type": "string"}
+        base_type, *metadata = args
+        schema = python_type_to_json_schema(base_type)
+        for item in metadata:
+            if isinstance(item, dict):
+                schema.update(item)
+        return schema
 
     # List[X] -> {"type": "array", "items": {...}}
     if origin is list:
-        args = getattr(py_type, "__args__", ())
+        args = get_args(py_type)
         inner = python_type_to_json_schema(args[0]) if args else {"type": "string"}
         return {"type": "array", "items": inner}
 
@@ -37,11 +51,29 @@ def python_type_to_json_schema(py_type: type) -> dict:
         return {"type": "object"}
 
     # Optional[X] / Union[X, None]
-    if origin is Union:
-        args = getattr(py_type, "__args__", ())
+    if origin in (Union, types.UnionType):
+        args = get_args(py_type)
         non_none = [a for a in args if a is not type(None)]
         if non_none:
             return python_type_to_json_schema(non_none[0])
+
+    # Literal["a", "b"] -> {"type": "string", "enum": ["a", "b"]}
+    if origin is Literal:
+        literal_values = [v for v in get_args(py_type) if v is not None]
+        if not literal_values:
+            return {"type": "string"}
+        schema = python_type_to_json_schema(type(literal_values[0]))
+        schema["enum"] = literal_values
+        return schema
+
+    # Enum subclasses -> serialize to their raw values.
+    if inspect.isclass(py_type) and issubclass(py_type, Enum):
+        values = [member.value for member in py_type]
+        if not values:
+            return {"type": "string"}
+        schema = python_type_to_json_schema(type(values[0]))
+        schema["enum"] = values
+        return schema
 
     json_type = type_map.get(py_type, "string")
     return {"type": json_type}
@@ -89,7 +121,7 @@ def generate_tool_schema(func: Callable) -> dict:
     sig = inspect.signature(func)
 
     try:
-        type_hints = get_type_hints(func)
+        type_hints = get_type_hints(func, include_extras=True)
     except Exception:
         # Gracefully handle `from __future__ import annotations` or other failures
         type_hints = {}
