@@ -99,5 +99,10 @@ class GeneratorMCPServer:
         async def get_technique_schema(technique: str) -> str:
             return json.dumps(svc.get_technique_schema(technique), indent=2)
 
+        @self.mcp.tool(name="generate.get_template",
+                       description="Get the default prompt template for a specific technique")
+        async def get_template(technique: str) -> str:
+            return json.dumps(svc.get_template(technique), indent=2)
+
     def run(self, transport=None):
         self.mcp.run(transport)

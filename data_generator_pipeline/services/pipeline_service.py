@@ -359,3 +359,25 @@ class PipelineService:
             "technique": technique,
             "schema": schema,
         }
+
+    def get_template(self, technique: str) -> Dict[str, Any]:
+        """
+        Get the default prompt template for a technique.
+
+        MCP Tool: get_template
+        Returns: {"technique": str, "template": str}
+        """
+        try:
+            template = self.template_manager.get_template(technique)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "technique": technique,
+            }
+
+        return {
+            "success": True,
+            "technique": technique,
+            "template": template,
+        }

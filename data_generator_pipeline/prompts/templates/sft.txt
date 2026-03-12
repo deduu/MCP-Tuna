@@ -20,8 +20,9 @@ Return the result as a single JSON array, where each object follows the specifie
 3. **Comprehensive and Grounded Output**: The output must be a comprehensive and detailed answer that fully addresses the instruction. It must be generated exclusively from the information provided in the input field. If the input is empty, the output should still be a thorough, self-contained response.
 4. **Detailed Responses**: Avoid overly simple or short answers. The output should be explanatory and provide as much detail as is supported by the context in the input field.
 5. **Vary the Data**: Generate a mix of examples. Some should have a populated input field for context-dependent questions, and others should have an empty input ("") for more general instructions.
-6. **JSON Only**: Your entire output must be a single, valid JSON array of objects. Do not include any explanatory text, acknowledgements, or any characters before the opening [ or after the closing ].
-7. **Empty Source Text**: If the "Input Text" is empty or contains no meaningful information, you must return an empty JSON array [].
+6. **Target Dataset Density**: For each input chunk, aim to generate 6-12 diverse JSON objects when the source text supports it. Cover definitions, comparisons, enumerations, classification rules, thresholds, exceptions, and practical interpretation questions instead of repeating the same pattern.
+7. **JSON Only**: Your entire output must be a single, valid JSON array of objects. Do not include any explanatory text, acknowledgements, or any characters before the opening [ or after the closing ].
+8. **Empty Source Text**: If the "Input Text" is empty or contains no meaningful information, you must return an empty JSON array [].
 
 Input Text:
 
