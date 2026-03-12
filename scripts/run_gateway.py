@@ -21,8 +21,10 @@ if sys.stderr.encoding != "utf-8":
 
 # Prefer the workspace source tree over any installed copy when launched as scripts/run_gateway.py.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+project_root_str = str(PROJECT_ROOT)
+if project_root_str in sys.path:
+    sys.path.remove(project_root_str)
+sys.path.insert(0, project_root_str)
 
 from agentsoul.server import HTTPTransport, StdioTransport
 from agentsoul.utils.logger import configure_logging

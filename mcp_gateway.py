@@ -18,7 +18,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from agentsoul.core.agent import AgentSoul
 from agentsoul.tools.service import ToolService
@@ -38,6 +38,24 @@ from shared.config import (
     OrchestrationConfig,
     ModelEvaluationConfig,
 )
+
+TechniqueName = Literal["sft", "dpo", "grpo", "kto"]
+DifficultyOrder = Literal["easy_first", "hard_first"]
+ResourceQuantization = Literal["4bit", "8bit", "none", "fp16", "bf16", "fp32"]
+GGUFQuantization = Literal["q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16"]
+DatasetFormat = Literal["jsonl", "json", "csv", "parquet"]
+DatasetSaveFormat = Literal["jsonl", "json", "parquet"]
+ModelUseCase = Literal[
+    "general",
+    "low_memory",
+    "speed",
+    "quality",
+    "multilingual",
+    "indonesian",
+]
+OrchestrationTrainingFormat = Literal["sft", "dpo", "grpo"]
+ResultExportFormat = Literal["jsonl", "json"]
+ModelEvalExportFormat = Literal["jsonl", "json", "xlsx"]
 
 
 class TunaGateway:
@@ -770,10 +788,10 @@ class TunaGateway:
         )
         async def preflight_check(
             model_name: Optional[str] = None,
-            quantization: str = "4bit",
+            quantization: ResourceQuantization = "4bit",
             batch_size: int = 1,
             max_seq_length: int = 512,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             use_lora: bool = True,
             lora_r: int = 8,
             gradient_checkpointing: bool = False,
@@ -806,7 +824,7 @@ class TunaGateway:
         async def prescribe(
             dataset_path: Optional[str] = None,
             model_name: Optional[str] = None,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
         ) -> str:
             if not dataset_path:
                 return json.dumps({
@@ -1349,7 +1367,7 @@ class TunaGateway:
         async def prescribe_pipeline(
             dataset_path: str,
             model_name: Optional[str] = None,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             stages: Optional[str] = None,
         ) -> str:
             resolved_model = model_name or self.finetuner.config.base_model
@@ -1394,8 +1412,8 @@ class TunaGateway:
             dataset_row_count: int = 0,
             dataset_avg_text_length: int = 0,
             dataset_path: Optional[str] = None,
-            technique: str = "sft",
-            use_case: str = "general",
+            technique: TechniqueName = "sft",
+            use_case: ModelUseCase = "general",
         ) -> str:
             import os
             from pathlib import Path as _Path
@@ -1535,7 +1553,7 @@ class TunaGateway:
         @self.mcp.tool(name="generate.from_document",
                        description="Generate fine-tuning data from an entire document")
         async def gen_from_doc(
-            technique: str, file_path: str,
+            technique: TechniqueName, file_path: str,
             custom_template: Optional[str] = None,
             start_page: Optional[int] = None, end_page: Optional[int] = None,
         ) -> str:
@@ -1548,7 +1566,7 @@ class TunaGateway:
         @self.mcp.tool(name="generate.from_page",
                        description="Generate fine-tuning data from a single page")
         async def gen_from_page(
-            technique: str, page_text: str, page_index: int, file_name: str,
+            technique: TechniqueName, page_text: str, page_index: int, file_name: str,
             custom_template: Optional[str] = None,
         ) -> str:
             return json.dumps(await self.generator.generate_from_page(
@@ -1560,7 +1578,7 @@ class TunaGateway:
         @self.mcp.tool(name="generate.batch",
                        description="Generate fine-tuning data from multiple documents")
         async def gen_batch(
-            technique: str, file_paths: List[str],
+            technique: TechniqueName, file_paths: List[str],
             custom_template: Optional[str] = None,
         ) -> str:
             return json.dumps(await self.generator.generate_batch(
@@ -1579,7 +1597,7 @@ class TunaGateway:
 
         @self.mcp.tool(name="generate.get_schema",
                        description="Get the data schema for a fine-tuning technique")
-        async def get_schema(technique: str) -> str:
+        async def get_schema(technique: TechniqueName) -> str:
             from data_generator_pipeline.generators.registry import GENERATOR_REGISTRY
             import dataclasses
             if technique not in GENERATOR_REGISTRY:
@@ -1594,6 +1612,11 @@ class TunaGateway:
             }
             return json.dumps({"success": True, "technique": technique, "schema": schema}, indent=2)
 
+        @self.mcp.tool(name="generate.get_template",
+                       description="Get the default prompt template for a fine-tuning technique")
+        async def get_template(technique: TechniqueName) -> str:
+            return json.dumps(self.generator.get_template(technique), indent=2)
+
         @self.mcp.tool(
             name="generate.from_text",
             description=(
@@ -1603,7 +1626,7 @@ class TunaGateway:
             ),
         )
         async def gen_from_text(
-            technique: str,
+            technique: TechniqueName,
             text: str,
             source_name: str = "raw_text",
             custom_template: Optional[str] = None,
@@ -1686,7 +1709,7 @@ class TunaGateway:
 
         @self.mcp.tool(name="clean.validate_schema",
                        description="Validate entries have required fields for a technique")
-        async def validate_schema(data_points: List[Dict], technique: str = "sft") -> str:
+        async def validate_schema(data_points: List[Dict], technique: TechniqueName = "sft") -> str:
             return json.dumps(await self.cleaner.validate_schema(data_points, technique), indent=2)
 
         @self.mcp.tool(name="clean.remove_short",
@@ -1704,7 +1727,7 @@ class TunaGateway:
                        description="Apply all normalization steps to a dataset")
         async def normalize_dataset(
             data_points: List[Dict],
-            target_format: str = "sft",
+            target_format: TechniqueName = "sft",
             merge_instruction_input: bool = True,
         ) -> str:
             config = NormalizationConfig(
@@ -1720,7 +1743,7 @@ class TunaGateway:
 
         @self.mcp.tool(name="normalize.standardize_keys",
                        description="Rename keys to match target format")
-        async def standardize_keys(data_points: List[Dict], target_format: str = "sft") -> str:
+        async def standardize_keys(data_points: List[Dict], target_format: TechniqueName = "sft") -> str:
             return json.dumps(await self.normalizer.standardize_keys(data_points, target_format), indent=2)
 
         @self.mcp.tool(name="normalize.strip_text",
@@ -1847,7 +1870,7 @@ class TunaGateway:
         async def eval_model_export(
             results: List[Dict],
             output_path: str,
-            format: str = "jsonl",
+            format: ModelEvalExportFormat = "jsonl",
         ) -> str:
             result = await self.model_evaluator.export_results(
                 results=results,
@@ -2076,7 +2099,7 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
-            difficulty_order: str = "easy_first",
+            difficulty_order: DifficultyOrder = "easy_first",
             score_column: str = "weighted_score",
             use_lora: bool = True,
             lora_r: int = 8,
@@ -2156,7 +2179,7 @@ class TunaGateway:
 
         @self.mcp.tool(name="finetune.load_dataset",
                        description="Load a dataset from file for fine-tuning")
-        async def load_dataset(file_path: str, format: str = "jsonl") -> str:
+        async def load_dataset(file_path: str, format: DatasetFormat = "jsonl") -> str:
             result = await self.finetuner.load_dataset_from_file(file_path, format)
             if "dataset_object" in result:
                 del result["dataset_object"]
@@ -2203,7 +2226,7 @@ class TunaGateway:
         async def export_gguf(
             model_path: str,
             output_path: str,
-            quantization: str = "q4_k_m",
+            quantization: GGUFQuantization = "q4_k_m",
         ) -> str:
             return json.dumps(
                 await self.finetuner.export_gguf(
@@ -2488,7 +2511,7 @@ class TunaGateway:
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
             score_column: str = "weighted_score",
-            difficulty_order: str = "easy_first",
+            difficulty_order: DifficultyOrder = "easy_first",
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
@@ -2738,7 +2761,7 @@ class TunaGateway:
                 "multilingual, indonesian."
             ),
         )
-        async def recommend_models(use_case: str = "general") -> str:
+        async def recommend_models(use_case: ModelUseCase = "general") -> str:
             result = await self._invoke_dependency(
                 self.finetuner.get_recommended_models, use_case=use_case,
             )
@@ -2754,7 +2777,7 @@ class TunaGateway:
         )
         async def validate_schema(
             dataset_path: str,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
         ) -> str:
             meta = await self.dataset_service.info(dataset_path)
             if not meta.get("success"):
@@ -2910,8 +2933,11 @@ class TunaGateway:
                             {"success": False, "error": f"Deployment {deployment_id} not found"},
                             indent=2,
                         )
+                    deployment_host = deployment.get("host")
+                    if deployment_host in {"0.0.0.0", "::"}:
+                        deployment_host = "127.0.0.1"
                     deployment_endpoint = (
-                        f"http://{deployment['host']}:{deployment['port']}"
+                        f"http://{deployment_host}:{deployment['port']}"
                         if deployment.get("transport") == "http"
                         else None
                     )
@@ -3003,7 +3029,7 @@ class TunaGateway:
         async def full_pipeline(
             file_path: Optional[str] = None,
             file_paths: Optional[Union[str, List[str]]] = None,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             output_dir: str = "./output",
             quality_threshold: float = 0.7,
             base_model: Optional[str] = None,
@@ -3034,7 +3060,7 @@ class TunaGateway:
         async def generate_and_evaluate(
             file_path: Optional[str] = None,
             file_paths: Optional[Union[str, List[str]]] = None,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             quality_threshold: float = 0.7,
         ) -> str:
             resolved_file_path, resolved_file_paths = _coerce_file_paths(file_path, file_paths)
@@ -3060,12 +3086,12 @@ class TunaGateway:
         async def curriculum_pipeline(
             file_paths: Union[str, List[str]],
             output_dir: str,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             quality_threshold: float = 0.6,
             base_model: Optional[str] = None,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
-            difficulty_order: str = "easy_first",
+            difficulty_order: DifficultyOrder = "easy_first",
             use_lora: bool = True,
             lora_r: int = 8,
             deploy: bool = False,
@@ -3110,9 +3136,18 @@ class TunaGateway:
             num_epochs_flat: int = 3,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
-            difficulty_order: str = "easy_first",
+            difficulty_order: DifficultyOrder = "easy_first",
+            score_column: str = "weighted_score",
             use_lora: bool = True,
             lora_r: int = 8,
+            lora_alpha: int = 16,
+            load_in_4bit: bool = True,
+            learning_rate: float = 2e-4,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            gradient_checkpointing: bool = False,
+            max_seq_length: int = 2048,
+            warmup_ratio: float = 0.0,
             test_data_path: Optional[str] = None,
             test_prompts: Optional[str] = None,
         ) -> str:
@@ -3131,8 +3166,17 @@ class TunaGateway:
                 num_stages=num_stages,
                 num_epochs_per_stage=num_epochs_per_stage,
                 difficulty_order=difficulty_order,
+                score_column=score_column,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                load_in_4bit=load_in_4bit,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                max_seq_length=max_seq_length,
+                warmup_ratio=warmup_ratio,
                 test_data_path=test_data_path,
                 test_prompts=parsed_prompts,
             )
@@ -3245,7 +3289,7 @@ class TunaGateway:
         async def full_pipeline_async(
             file_path: Optional[str] = None,
             file_paths: Optional[Union[str, List[str]]] = None,
-            technique: str = "sft",
+            technique: TechniqueName = "sft",
             output_dir: str = "./output",
             quality_threshold: float = 0.7,
             base_model: Optional[str] = None,
@@ -3410,7 +3454,7 @@ class TunaGateway:
         )
         async def build_training_data(
             collected: List[Dict],
-            format: str = "sft",
+            format: OrchestrationTrainingFormat = "sft",
             tool_descriptions: Optional[List[Dict]] = None,
             cost_budget: float = 1.0,
             time_budget: float = 60.0,
@@ -3433,7 +3477,7 @@ class TunaGateway:
             num_problems: int = 50,
             n_per_problem: int = 4,
             output_dir: str = "./output/orchestrator",
-            output_format: str = "sft",
+            output_format: OrchestrationTrainingFormat = "sft",
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             deploy: bool = False,
@@ -3562,7 +3606,7 @@ class TunaGateway:
         async def judge_export(
             results: List[Dict],
             output_path: str,
-            format: str = "jsonl",
+            format: ResultExportFormat = "jsonl",
         ) -> str:
             result = await self.advanced_judge.export_results(
                 results=results, output_path=output_path, format=format,
@@ -3644,7 +3688,7 @@ class TunaGateway:
         async def ft_eval_export(
             results: List[Dict],
             output_path: str,
-            format: str = "jsonl",
+            format: ResultExportFormat = "jsonl",
         ) -> str:
             from model_evaluator_pipeline.models.ft_evaluator import FTEvalResult
             parsed = [FTEvalResult(**r) for r in results]
@@ -3671,7 +3715,7 @@ class TunaGateway:
         async def dataset_save(
             data_points: List[Dict],
             output_path: str,
-            format: str = "jsonl",
+            format: DatasetSaveFormat = "jsonl",
         ) -> str:
             return json.dumps(
                 await self.dataset_service.save(data_points, output_path, format),

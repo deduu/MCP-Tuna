@@ -132,6 +132,11 @@ class DataPrepServer:
             schema = {f.name: {"type": str(f.type), "required": f.default == dataclasses.MISSING} for f in dataclasses.fields(dp_cls)}
             return json.dumps({"success": True, "technique": technique, "schema": schema}, indent=2)
 
+        @self.mcp.tool(name="generate.get_template",
+                       description="Get the default prompt template for a fine-tuning technique")
+        async def get_template(technique: str) -> str:
+            return json.dumps(self.generator.get_template(technique), indent=2)
+
         @self.mcp.tool(name="generate.from_text",
                        description="Generate fine-tuning data from raw text (no file required)")
         async def gen_from_text(

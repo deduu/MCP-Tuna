@@ -815,9 +815,17 @@ class PipelineOrchestrator:
         num_stages: int = 3,
         num_epochs_per_stage: int = 1,
         difficulty_order: str = "easy_first",
+        score_column: str = "weighted_score",
         use_lora: bool = True,
         lora_r: int = 8,
         lora_alpha: int = 16,
+        load_in_4bit: bool = True,
+        learning_rate: float = 2e-4,
+        per_device_train_batch_size: int = 1,
+        gradient_accumulation_steps: int = 4,
+        gradient_checkpointing: bool = False,
+        max_seq_length: int = 2048,
+        warmup_ratio: float = 0.0,
         test_data_path: Optional[str] = None,
         test_prompts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
@@ -843,17 +851,27 @@ class PipelineOrchestrator:
             }
 
         dataset = load_result["dataset_object"]
+        common_training_kwargs = {
+            "base_model": base_model,
+            "use_lora": use_lora,
+            "lora_r": lora_r,
+            "lora_alpha": lora_alpha,
+            "load_in_4bit": load_in_4bit,
+            "learning_rate": learning_rate,
+            "per_device_train_batch_size": per_device_train_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "gradient_checkpointing": gradient_checkpointing,
+            "max_seq_length": max_seq_length,
+            "warmup_ratio": warmup_ratio,
+        }
 
         # 2. Flat SFT
         flat_dir = str(output_path / "flat_sft")
         flat_result = await self.finetuner.train_model(
             dataset=dataset,
             output_dir=flat_dir,
-            base_model=base_model,
             num_epochs=num_epochs_flat,
-            use_lora=use_lora,
-            lora_r=lora_r,
-            lora_alpha=lora_alpha,
+            **common_training_kwargs,
         )
 
         # 3. Curriculum SFT
@@ -861,13 +879,11 @@ class PipelineOrchestrator:
         curriculum_result = await self.finetuner.train_curriculum_model(
             dataset=dataset,
             output_dir=curriculum_dir,
-            base_model=base_model,
             num_stages=num_stages,
             num_epochs_per_stage=num_epochs_per_stage,
             difficulty_order=difficulty_order,
-            use_lora=use_lora,
-            lora_r=lora_r,
-            lora_alpha=lora_alpha,
+            score_column=score_column,
+            **common_training_kwargs,
         )
 
         # 4. Side-by-side comparison (qualitative)
@@ -925,6 +941,7 @@ class PipelineOrchestrator:
                 "num_stages": num_stages,
                 "epochs_per_stage": num_epochs_per_stage,
                 "difficulty_order": difficulty_order,
+                "score_column": score_column,
             },
             "comparison": comparison_result,
         }
