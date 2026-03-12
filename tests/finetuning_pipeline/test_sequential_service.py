@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ----------------------------------------------------------------
@@ -365,3 +365,37 @@ async def test_output_structure(mock_load, mock_train, tmp_path):
     assert "dataset_path" in sr
     assert "output_dir" in sr
     assert "training_result" in sr
+
+
+@pytest.mark.asyncio
+async def test_sequential_merge_lora_avoids_auto_device_map_and_falls_back(tmp_path):
+    """Merge should avoid device_map='auto' and retry on CPU if single-device load fails."""
+    from finetuning_pipeline.services.sequential_service import SequentialTrainingService
+
+    stage_dir = tmp_path / "stage_1_sft"
+    stage_dir.mkdir()
+
+    base_model = MagicMock()
+    peft_model = MagicMock()
+    merged_model = MagicMock()
+    tokenizer = MagicMock()
+    peft_model.merge_and_unload.return_value = merged_model
+
+    with patch("torch.cuda.is_available", return_value=True), patch(
+        "torch.cuda.empty_cache"
+    ), patch(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        side_effect=[RuntimeError("oom"), base_model],
+    ) as mock_load_model, patch(
+        "peft.PeftModel.from_pretrained", return_value=peft_model
+    ), patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
+    ):
+        result = await SequentialTrainingService._merge_lora(
+            str(stage_dir), "fake-base", "fake-tokenizer"
+        )
+
+    assert result == str(stage_dir / "merged")
+    assert mock_load_model.call_count == 2
+    assert mock_load_model.call_args_list[0].kwargs["device_map"] == {"": 0}
+    assert "device_map" not in mock_load_model.call_args_list[1].kwargs

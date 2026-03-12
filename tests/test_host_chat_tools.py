@@ -84,3 +84,28 @@ async def test_host_chat_uses_endpoint_for_api_deployment():
     assert _FakeChatSession.last_provider is None
     assert _FakeChatSession.last_config.endpoint == "http://127.0.0.1:8010"
     assert _FakeChatSession.last_config.model_path is None
+
+
+@pytest.mark.asyncio
+async def test_host_chat_normalizes_wildcard_host_for_api_deployment():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway.hoster._deployments["dep-api-wildcard"] = {
+        "id": "dep-api-wildcard",
+        "type": "api",
+        "model_path": "base/model",
+        "adapter_path": None,
+        "transport": "http",
+        "host": "0.0.0.0",
+        "port": 8011,
+    }
+
+    host_chat = gateway.mcp._tools["host.chat"]["func"]
+
+    with patch("hosting_pipeline.services.chat_service.ChatSession", _FakeChatSession):
+        result = json.loads(await host_chat(message="hello", deployment_id="dep-api-wildcard"))
+
+    assert result["success"] is True
+    assert _FakeChatSession.last_config.endpoint == "http://127.0.0.1:8011"

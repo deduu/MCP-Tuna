@@ -145,3 +145,64 @@ class TestHostingServiceVRAMLeak:
             "status": "running",
             "endpoint": "http://127.0.0.1:8080",
         }
+
+    async def test_list_deployments_normalizes_wildcard_host_endpoint(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-006"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "type": "api",
+            "model_path": "test/model",
+            "adapter_path": None,
+            "transport": "http",
+            "host": "0.0.0.0",
+            "port": 8001,
+            "thread": thread,
+            "task": MagicMock(),
+            "server": object(),
+        }
+
+        result = await svc.list_deployments()
+
+        assert result["deployments"][0]["endpoint"] == "http://127.0.0.1:8001"
+
+    async def test_health_check_normalizes_wildcard_host_for_probe(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-007"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "type": "api",
+            "model_path": "test/model",
+            "adapter_path": None,
+            "transport": "http",
+            "host": "0.0.0.0",
+            "port": 8001,
+            "thread": thread,
+            "task": MagicMock(),
+            "server": object(),
+        }
+
+        client = AsyncMock()
+        response = MagicMock()
+        response.json.return_value = {"status": "ok"}
+        client.get.return_value = response
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+
+        with pytest.MonkeyPatch.context() as mp:
+            import httpx
+
+            mp.setattr(httpx, "AsyncClient", lambda timeout=5: client)
+            result = await svc.health_check(dep_id)
+
+        client.get.assert_awaited_once_with("http://127.0.0.1:8001/health")
+        assert result["endpoint"] == "http://127.0.0.1:8001"
+        assert result["health_response"] == {"status": "ok"}

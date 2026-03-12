@@ -204,6 +204,65 @@ async def test_compare_output_structure():
 
 
 @pytest.mark.asyncio
+async def test_compare_passes_low_memory_training_knobs():
+    finetuner = AsyncMock()
+    finetuner.load_dataset_from_file = AsyncMock(return_value=_mock_load_success())
+    finetuner.train_model = AsyncMock(return_value=_mock_train_success("/out/flat"))
+    finetuner.train_curriculum_model = AsyncMock(
+        return_value=_mock_curriculum_success("/out/curriculum/stage_3")
+    )
+
+    orch = _make_orchestrator(finetuner=finetuner)
+    await orch.compare_flat_vs_curriculum(
+        dataset_path="/data.jsonl",
+        output_dir="/out",
+        score_column="complexity",
+        load_in_4bit=True,
+        learning_rate=1e-4,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=8,
+        gradient_checkpointing=True,
+        max_seq_length=256,
+        warmup_ratio=0.03,
+    )
+
+    train_kwargs = finetuner.train_model.await_args.kwargs
+    assert train_kwargs["dataset"] == _mock_load_success()["dataset_object"]
+    assert train_kwargs["output_dir"].endswith("flat_sft")
+    assert train_kwargs["num_epochs"] == 3
+    assert train_kwargs["base_model"] is None
+    assert train_kwargs["use_lora"] is True
+    assert train_kwargs["lora_r"] == 8
+    assert train_kwargs["lora_alpha"] == 16
+    assert train_kwargs["load_in_4bit"] is True
+    assert train_kwargs["learning_rate"] == 1e-4
+    assert train_kwargs["per_device_train_batch_size"] == 1
+    assert train_kwargs["gradient_accumulation_steps"] == 8
+    assert train_kwargs["gradient_checkpointing"] is True
+    assert train_kwargs["max_seq_length"] == 256
+    assert train_kwargs["warmup_ratio"] == 0.03
+
+    curriculum_kwargs = finetuner.train_curriculum_model.await_args.kwargs
+    assert curriculum_kwargs["dataset"] == _mock_load_success()["dataset_object"]
+    assert curriculum_kwargs["output_dir"].endswith("curriculum_sft")
+    assert curriculum_kwargs["num_stages"] == 3
+    assert curriculum_kwargs["num_epochs_per_stage"] == 1
+    assert curriculum_kwargs["difficulty_order"] == "easy_first"
+    assert curriculum_kwargs["score_column"] == "complexity"
+    assert curriculum_kwargs["base_model"] is None
+    assert curriculum_kwargs["use_lora"] is True
+    assert curriculum_kwargs["lora_r"] == 8
+    assert curriculum_kwargs["lora_alpha"] == 16
+    assert curriculum_kwargs["load_in_4bit"] is True
+    assert curriculum_kwargs["learning_rate"] == 1e-4
+    assert curriculum_kwargs["per_device_train_batch_size"] == 1
+    assert curriculum_kwargs["gradient_accumulation_steps"] == 8
+    assert curriculum_kwargs["gradient_checkpointing"] is True
+    assert curriculum_kwargs["max_seq_length"] == 256
+    assert curriculum_kwargs["warmup_ratio"] == 0.03
+
+
+@pytest.mark.asyncio
 async def test_train_orchestrator_uses_provided_training_data_for_sft():
     finetuner = AsyncMock()
     finetuner.train_model = AsyncMock(return_value=_mock_train_success("/out/model"))
