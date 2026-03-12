@@ -6,7 +6,11 @@ interface LossChartProps {
 }
 
 export function LossChart({ data, className }: LossChartProps) {
-  if (!data || data.length === 0) {
+  const chartData = data.filter(
+    (point) => Number.isFinite(point.step) && Number.isFinite(point.loss),
+  )
+
+  if (chartData.length === 0) {
     return (
       <div
         className={cn(
@@ -29,12 +33,15 @@ export function LossChart({ data, className }: LossChartProps) {
   const chartW = width - padLeft - padRight
   const chartH = height - padTop - padBottom
 
-  const steps = data.map((d) => d.step)
-  const losses = data.map((d) => d.loss)
+  const steps = chartData.map((d) => d.step)
+  const losses = chartData.map((d) => d.loss)
   const minStep = Math.min(...steps)
   const maxStep = Math.max(...steps)
   const minLoss = Math.min(...losses)
   const maxLoss = Math.max(...losses)
+  const uniqueStepCount = new Set(steps).size
+  const useIndexForX = uniqueStepCount < 2
+  const xRange = Math.max(chartData.length - 1, 1)
 
   const lossRange = maxLoss - minLoss || 1
   const lossPad = lossRange * 0.1
@@ -44,7 +51,10 @@ export function LossChart({ data, className }: LossChartProps) {
 
   const stepRange = maxStep - minStep || 1
 
-  function toX(step: number) {
+  function toX(step: number, index: number) {
+    if (useIndexForX) {
+      return padLeft + (index / xRange) * chartW
+    }
     return padLeft + ((step - minStep) / stepRange) * chartW
   }
 
@@ -52,7 +62,8 @@ export function LossChart({ data, className }: LossChartProps) {
     return padTop + chartH - ((loss - yMin) / yRange) * chartH
   }
 
-  const points = data.map((d) => `${toX(d.step)},${toY(d.loss)}`).join(' ')
+  const points = chartData.map((d, index) => `${toX(d.step, index)},${toY(d.loss)}`).join(' ')
+  const strokeColor = 'var(--color-ns-finetune)'
 
   const gridLines = 3
   const gridYValues = Array.from({ length: gridLines }, (_, i) => {
@@ -97,14 +108,26 @@ export function LossChart({ data, className }: LossChartProps) {
         })}
 
         {/* Loss polyline */}
-        <polyline
-          fill="none"
-          stroke="var(--color-ns-finetune, var(--color-primary))"
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          points={points}
-        />
+        {chartData.length > 1 && (
+          <polyline
+            fill="none"
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            points={points}
+            style={{ stroke: strokeColor }}
+          />
+        )}
+
+        {chartData.map((point, index) => (
+          <circle
+            key={`${point.step}-${index}`}
+            cx={toX(point.step, index)}
+            cy={toY(point.loss)}
+            r={chartData.length === 1 ? 3.5 : 2}
+            style={{ fill: strokeColor }}
+          />
+        ))}
 
         {/* X axis labels */}
         <text

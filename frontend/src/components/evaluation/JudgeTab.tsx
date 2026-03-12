@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { toast } from 'sonner'
@@ -11,6 +10,7 @@ import { CriteriaManager } from './CriteriaManager'
 import { SingleEvalForm } from './SingleEvalForm'
 import { CompareForm } from './CompareForm'
 import { MetricsTable } from './MetricsTable'
+import { BrowsePathField } from './BrowsePathField'
 
 type EvalMode = 'single' | 'rubric' | 'batch' | 'compare'
 
@@ -109,10 +109,14 @@ export function JudgeTab() {
           <CardContent className="pt-6 space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Dataset Path</label>
-              <Input
-                placeholder="/path/to/dataset.jsonl"
+              <BrowsePathField
                 value={batchPath}
-                onChange={(e) => setBatchPath(e.target.value)}
+                onChange={setBatchPath}
+                placeholder="/path/to/dataset.jsonl"
+                allowFiles
+                allowDirectories={false}
+                preferredRootIds={['workspace', 'uploads', 'output']}
+                helperText="Browse a dataset file for batch judge evaluation."
               />
             </div>
             <Button onClick={handleBatch} disabled={batchPending}>

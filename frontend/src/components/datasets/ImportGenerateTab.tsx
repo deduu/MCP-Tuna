@@ -31,6 +31,10 @@ export function ImportGenerateTab() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isLoadingTemplate, setIsLoadingTemplate] = useState(false)
+  const [customTemplate, setCustomTemplate] = useState('')
+  const [startPage, setStartPage] = useState('')
+  const [endPage, setEndPage] = useState('')
 
   const [pagePath, setPagePath] = useState('')
   const [batchPath, setBatchPath] = useState('')
@@ -131,14 +135,99 @@ export function ImportGenerateTab() {
     }
   }
 
+  function parseOptionalPage(value: string): number | undefined {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    const parsed = Number(trimmed)
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined
+  }
+
+  function validatePromptControls(): boolean {
+    if (customTemplate.trim() && !customTemplate.includes('{text}')) {
+      toast.error('Custom template must include the {text} placeholder')
+      return false
+    }
+
+    const parsedStart = parseOptionalPage(startPage)
+    const parsedEnd = parseOptionalPage(endPage)
+
+    if (startPage.trim() && parsedStart === undefined) {
+      toast.error('Start page must be a non-negative integer')
+      return false
+    }
+    if (endPage.trim() && parsedEnd === undefined) {
+      toast.error('End page must be a non-negative integer')
+      return false
+    }
+    if (parsedStart !== undefined && parsedEnd !== undefined && parsedEnd < parsedStart) {
+      toast.error('End page must be greater than or equal to start page')
+      return false
+    }
+
+    return true
+  }
+
+  function buildGenerateArgs(baseArgs: Record<string, unknown>) {
+    const args: Record<string, unknown> = { ...baseArgs }
+    const parsedStart = parseOptionalPage(startPage)
+    const parsedEnd = parseOptionalPage(endPage)
+
+    if (customTemplate.trim()) {
+      args.custom_template = customTemplate
+    }
+    if (parsedStart !== undefined) {
+      args.start_page = parsedStart
+    }
+    if (parsedEnd !== undefined) {
+      args.end_page = parsedEnd
+    }
+
+    return args
+  }
+
+  function buildTemplateArgs(baseArgs: Record<string, unknown>) {
+    const args: Record<string, unknown> = { ...baseArgs }
+    if (customTemplate.trim()) {
+      args.custom_template = customTemplate
+    }
+    return args
+  }
+
+  async function handleLoadDefaultTemplate() {
+    if (!technique) {
+      toast.error('Select a technique first')
+      return
+    }
+
+    setIsLoadingTemplate(true)
+    try {
+      const result = await executeTool({
+        toolName: 'generate.get_template',
+        args: { technique },
+      })
+      const payload = result as Record<string, unknown>
+      const template = typeof payload.template === 'string' ? payload.template : ''
+      if (!template) {
+        throw new Error(typeof payload.error === 'string' ? payload.error : 'Template not found')
+      }
+      setCustomTemplate(template)
+      toast.success(`Loaded default ${technique} template`)
+    } catch (err) {
+      toast.error(`Failed to load template: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setIsLoadingTemplate(false)
+    }
+  }
+
   async function handleGenerate() {
     if (!docPath.trim() || !technique) return
+    if (!validatePromptControls()) return
     setIsGenerating(true)
     setGenerationSummary(null)
     try {
       const result = await executeTool({
         toolName: 'generate.from_document',
-        args: { file_path: docPath, technique },
+        args: buildGenerateArgs({ file_path: docPath, technique }),
       })
 
       const payload = result as Record<string, unknown>
@@ -186,6 +275,7 @@ export function ImportGenerateTab() {
 
   async function handleGeneratePerPage() {
     if (!pagePath.trim() || !technique) return
+    if (!validatePromptControls()) return
     try {
       const loaded = await executeTool({
         toolName: 'extract.load_document',
@@ -194,14 +284,29 @@ export function ImportGenerateTab() {
       const payload = loaded as Record<string, unknown>
       const pages = Array.isArray(payload.pages) ? payload.pages : []
       const fileName = typeof payload.file_name === 'string' ? payload.file_name : 'document'
-      for (let i = 0; i < pages.length; i += 1) {
+      const parsedStart = parseOptionalPage(startPage) ?? 0
+      const parsedEnd = parseOptionalPage(endPage) ?? pages.length - 1
+
+      for (let i = parsedStart; i < pages.length && i <= parsedEnd; i += 1) {
+        const page = pages[i] as Record<string, unknown>
+        const pageText =
+          typeof page?.markdown === 'string'
+            ? page.markdown
+            : typeof page?.text === 'string'
+              ? page.text
+              : String(page)
         await executeTool({
           toolName: 'generate.from_page',
-          args: { technique, page_text: String(pages[i]), page_index: i, file_name: fileName },
+          args: buildTemplateArgs({
+            technique,
+            page_text: pageText,
+            page_index: i,
+            file_name: fileName,
+          }),
         })
       }
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
-      toast.success(`Per-page generation complete (${pages.length} pages)`)
+      toast.success('Per-page generation complete')
     } catch (err) {
       toast.error(`Per-page generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
@@ -209,6 +314,7 @@ export function ImportGenerateTab() {
 
   async function handleBatchGenerate() {
     if (!batchPath.trim() || !technique) return
+    if (!validatePromptControls()) return
     try {
       const filePaths = batchPath
         .split(/[\n,]/)
@@ -216,7 +322,7 @@ export function ImportGenerateTab() {
         .filter(Boolean)
       await executeTool({
         toolName: 'generate.batch',
-        args: { file_paths: filePaths, technique },
+        args: buildTemplateArgs({ file_paths: filePaths, technique }),
       })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       toast.success('Batch generation complete')
@@ -336,6 +442,63 @@ export function ImportGenerateTab() {
                 </option>
               ))}
             </select>
+            <div className="space-y-3 rounded-md border border-border/60 bg-secondary/20 p-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Start Page / Chunk</label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={startPage}
+                    onChange={(e) => setStartPage(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">End Page / Chunk</label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Last"
+                    value={endPage}
+                    onChange={(e) => setEndPage(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLoadDefaultTemplate}
+                  disabled={isPending || isLoadingTemplate || !technique}
+                >
+                  {isLoadingTemplate ? 'Loading template...' : 'Load Default Template'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCustomTemplate('')}
+                  disabled={!customTemplate}
+                >
+                  Clear Custom Template
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Custom Prompt Template</label>
+                <textarea
+                  value={customTemplate}
+                  onChange={(e) => setCustomTemplate(e.target.value)}
+                  placeholder={'Use the default template or write your own. Keep the {text} placeholder so the document chunk is injected.'}
+                  className="min-h-48 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Leave this blank to use the built-in template. For finer control, load the default
+                  template, then edit wording, density requirements, or answer style.
+                </p>
+              </div>
+            </div>
             <Button
               onClick={handleGenerate}
               disabled={isPending || isUploading || !docPath.trim() || !technique}

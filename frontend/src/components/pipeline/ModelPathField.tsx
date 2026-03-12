@@ -151,6 +151,7 @@ export function ModelPathField({
   const [validation, setValidation] = useState<ModelPathValidation | null>(null)
   const [selectedRootId, setSelectedRootId] = useState('')
   const [browsePath, setBrowsePath] = useState('.')
+  const [didAutoSyncOnOpen, setDidAutoSyncOnOpen] = useState(false)
   const { mutateAsync: executeTool, isPending: isValidating } = useToolExecution()
   const [rootMenuOpen, setRootMenuOpen] = useState(false)
   const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots()
@@ -172,17 +173,25 @@ export function ModelPathField({
   }, [])
 
   useEffect(() => {
+    if (!open) {
+      setDidAutoSyncOnOpen(false)
+    }
+  }, [open])
+
+  useEffect(() => {
     setValidation(null)
     onValidationChange?.(null)
   }, [value, onValidationChange])
 
   useEffect(() => {
     if (!open || !roots.length) return
+    if (didAutoSyncOnOpen) return
 
     const resolvedFromValue = resolveValueToBrowseLocation(value, roots)
     if (resolvedFromValue) {
       if (resolvedFromValue.rootId !== selectedRootId) setSelectedRootId(resolvedFromValue.rootId)
       if (resolvedFromValue.browsePath !== browsePath) setBrowsePath(resolvedFromValue.browsePath)
+      setDidAutoSyncOnOpen(true)
       return
     }
 
@@ -191,7 +200,8 @@ export function ModelPathField({
       setSelectedRootId(nextRootId)
       setBrowsePath('.')
     }
-  }, [open, roots, value, validationPurpose, selectedRootId, browsePath])
+    setDidAutoSyncOnOpen(true)
+  }, [open, roots, value, validationPurpose, selectedRootId, browsePath, didAutoSyncOnOpen])
 
   async function validatePath(nextValue?: string) {
     const target = (nextValue ?? value).trim()

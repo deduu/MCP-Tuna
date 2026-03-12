@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { toast } from 'sonner'
 import { MetricsTable } from './MetricsTable'
+import { BrowsePathField } from './BrowsePathField'
+import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 export function FtEvalTab() {
   const [modelPath, setModelPath] = useState('')
@@ -135,18 +136,23 @@ export function FtEvalTab() {
         <CardContent className="pt-6 space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Model Path (optional for inference)</label>
-            <Input
-              placeholder="/path/to/model"
+            <ModelPathField
               value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
+              onChange={setModelPath}
+              placeholder="/path/to/model"
+              helperText="Use a Hugging Face model ID or browse a backend-visible model folder."
             />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium">Dataset Path</label>
-            <Input
-              placeholder="/path/to/eval-dataset.jsonl"
+            <BrowsePathField
               value={datasetPath}
-              onChange={(e) => setDatasetPath(e.target.value)}
+              onChange={setDatasetPath}
+              placeholder="/path/to/eval-dataset.jsonl"
+              allowFiles
+              allowDirectories={false}
+              preferredRootIds={['workspace', 'uploads', 'output']}
+              helperText="Browse a dataset file visible to the gateway."
             />
           </div>
           <Button onClick={handleEvaluate} disabled={isPending}>
@@ -162,7 +168,7 @@ export function FtEvalTab() {
           </CardHeader>
           <CardContent className="space-y-4">
             <MetricsTable data={evalResult} />
-            <div className="flex flex-wrap gap-2">
+            <div className="space-y-3">
               <Button
                 variant="outline"
                 size="sm"
@@ -171,11 +177,16 @@ export function FtEvalTab() {
               >
                 {loadingSummary ? 'Loading...' : 'Compute Summary'}
               </Button>
-              <Input
-                className="max-w-sm"
-                placeholder="output/ft_eval_results.jsonl"
+              <BrowsePathField
                 value={exportPath}
-                onChange={(e) => setExportPath(e.target.value)}
+                onChange={setExportPath}
+                placeholder="output/ft_eval_results.jsonl"
+                allowFiles
+                allowDirectories
+                preferredRootIds={['output', 'workspace']}
+                directorySelectionMode="append-filename"
+                defaultFileName="ft_eval_results.jsonl"
+                helperText="Pick an existing export file or browse to a folder and keep the filename."
               />
               <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
                 {exporting ? 'Exporting...' : 'Export'}
@@ -203,10 +214,12 @@ export function FtEvalTab() {
         <CardContent className="space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Fine-tuned Adapter Path</label>
-            <Input
-              placeholder="/path/to/adapter"
+            <ModelPathField
               value={compareModelPath}
-              onChange={(e) => setCompareModelPath(e.target.value)}
+              onChange={setCompareModelPath}
+              placeholder="/path/to/adapter"
+              validationPurpose="adapter"
+              helperText="Browse the fine-tuned adapter folder or enter a backend-visible path."
             />
           </div>
           <Button

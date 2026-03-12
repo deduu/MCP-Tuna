@@ -1,17 +1,19 @@
 import { useState } from 'react'
-import { ChevronDown, Square, RotateCcw } from 'lucide-react'
+import { ChevronDown, Square, RotateCcw, Rocket } from 'lucide-react'
 import type { TrainingJob } from '@/api/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { cn, formatDuration } from '@/lib/utils'
+import { getDeployInitialValues } from './deployment-paths'
 import { TrainingJobDetail } from './TrainingJobDetail'
 
 interface TrainingJobCardProps {
   job: TrainingJob
   onCancel: (id: string) => void
   onRerun?: (job: TrainingJob) => void
+  onDeploy?: (job: TrainingJob, type: 'mcp' | 'api') => void
 }
 
 const TECHNIQUE_STYLE: Record<string, { variant: BadgeProps['variant']; label: string }> = {
@@ -29,7 +31,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   cancelled: 'outline',
 }
 
-export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps) {
+export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJobCardProps) {
   const [expanded, setExpanded] = useState(false)
   const techniqueKey = (job.technique ?? job.trainer_type ?? 'unknown').toLowerCase()
 
@@ -40,6 +42,7 @@ export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps
   const statusVariant = STATUS_VARIANT[job.status] ?? 'secondary'
   const isActive = job.status === 'running' || job.status === 'pending'
   const pct = job.progress?.percent_complete ?? 0
+  const deployValues = job.status === 'completed' ? getDeployInitialValues(job) : null
 
   return (
     <Card>
@@ -76,6 +79,13 @@ export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps
           </div>
         )}
 
+        {job.status === 'completed' && deployValues?.adapterPath && (
+          <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs">
+            <span className="text-muted-foreground">Adapter:</span>{' '}
+            <code className="break-all text-foreground">{deployValues.adapterPath}</code>
+          </div>
+        )}
+
         {/* Actions row */}
         <div className="flex items-center gap-2">
           <Button
@@ -101,6 +111,27 @@ export function TrainingJobCard({ job, onCancel, onRerun }: TrainingJobCardProps
                 <RotateCcw className="h-3.5 w-3.5" />
                 Re-run
               </Button>
+            )}
+            {job.status === 'completed' && onDeploy && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onDeploy(job, 'mcp')}
+                  className="gap-1 text-xs"
+                >
+                  <Rocket className="h-3.5 w-3.5" />
+                  Deploy MCP
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onDeploy(job, 'api')}
+                  className="gap-1 text-xs"
+                >
+                  API
+                </Button>
+              </>
             )}
             {isActive && (
               <Button

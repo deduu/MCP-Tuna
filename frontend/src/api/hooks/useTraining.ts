@@ -109,7 +109,7 @@ export function useDeploymentBrowseDir(rootId: string, path: string, enabled: bo
 }
 
 type TrainParams = {
-  technique: 'sft' | 'dpo' | 'grpo' | 'kto' | 'sequential'
+  technique: 'sft' | 'dpo' | 'grpo' | 'kto' | 'curriculum' | 'sequential'
   args: Record<string, unknown>
 }
 
@@ -118,6 +118,7 @@ const TECHNIQUE_TOOLS: Record<string, string> = {
   dpo: 'finetune.train_dpo_async',
   grpo: 'finetune.train_grpo_async',
   kto: 'finetune.train_kto_async',
+  curriculum: 'finetune.train_curriculum_async',
   sequential: 'finetune.sequential_train_async',
 }
 

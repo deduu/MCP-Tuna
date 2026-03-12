@@ -2,6 +2,7 @@ import type { TrainingJob } from '@/api/types'
 import { Progress } from '@/components/ui/progress'
 import { Card, CardContent } from '@/components/ui/card'
 import { LossChart } from './LossChart'
+import { getDeployInitialValues, getTrainingOutputPath, trainingUsesAdapter } from './deployment-paths'
 
 interface TrainingJobDetailProps {
   job: TrainingJob
@@ -9,6 +10,9 @@ interface TrainingJobDetailProps {
 
 export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
   const p = job.progress
+  const deployValues = getDeployInitialValues(job)
+  const outputPath = getTrainingOutputPath(job)
+  const usesAdapter = trainingUsesAdapter(job.result)
 
   const chartData =
     p?.log_history?.map((entry) => ({
@@ -73,6 +77,46 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
             color="var(--color-ns-finetune, var(--color-primary))"
           />
         </div>
+      )}
+
+      {job.status === 'completed' && deployValues && (
+        <Card className="border-border/70 bg-muted/20">
+          <CardContent className="space-y-3 p-3">
+            <div>
+              <p className="text-sm font-medium">Deployment Paths</p>
+              <p className="text-xs text-muted-foreground">
+                {usesAdapter
+                  ? 'LoRA training output detected. Deploy with the original base model plus this adapter folder.'
+                  : 'Merged/base model output detected. Deploy this folder directly as Model Path.'}
+              </p>
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Model Path</div>
+                <code className="block break-all rounded border border-border bg-background/70 px-2 py-1 text-[11px]">
+                  {deployValues.modelPath}
+                </code>
+              </div>
+
+              {deployValues.adapterPath && (
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Adapter Path</div>
+                  <code className="block break-all rounded border border-border bg-background/70 px-2 py-1 text-[11px]">
+                    {deployValues.adapterPath}
+                  </code>
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Training Output Folder</div>
+                <code className="block break-all rounded border border-border bg-background/70 px-2 py-1 text-[11px]">
+                  {outputPath}
+                </code>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Error message */}

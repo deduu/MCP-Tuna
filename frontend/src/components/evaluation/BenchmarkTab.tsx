@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { toast } from 'sonner'
 import { MetricsTable } from './MetricsTable'
+import { BrowsePathField } from './BrowsePathField'
+import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 export function BenchmarkTab() {
   const [modelPaths, setModelPaths] = useState<string[]>([''])
@@ -123,10 +124,11 @@ export function BenchmarkTab() {
             <label className="text-sm font-medium">Model Paths</label>
             {modelPaths.map((path, index) => (
               <div key={index} className="flex gap-2">
-                <Input
-                  placeholder={`/path/to/model-${index + 1}`}
+                <ModelPathField
                   value={path}
-                  onChange={(e) => updateModel(index, e.target.value)}
+                  onChange={(value) => updateModel(index, value)}
+                  placeholder={`/path/to/model-${index + 1}`}
+                  helperText={index === modelPaths.length - 1 ? 'Use a Hugging Face model ID or browse a backend-visible model folder.' : undefined}
                 />
                 {modelPaths.length > 1 && (
                   <Button
@@ -147,19 +149,29 @@ export function BenchmarkTab() {
 
           <div className="space-y-1">
             <label className="text-sm font-medium">Dataset Path</label>
-            <Input
-              placeholder="/path/to/benchmark-dataset.jsonl"
+            <BrowsePathField
               value={datasetPath}
-              onChange={(e) => setDatasetPath(e.target.value)}
+              onChange={setDatasetPath}
+              placeholder="/path/to/benchmark-dataset.jsonl"
+              allowFiles
+              allowDirectories={false}
+              preferredRootIds={['workspace', 'uploads', 'output']}
+              helperText="Browse a dataset file for model benchmarking."
             />
           </div>
 
           <div className="space-y-1">
             <label className="text-sm font-medium">Export Path</label>
-            <Input
-              placeholder="output/eval_results.jsonl"
+            <BrowsePathField
               value={exportPath}
-              onChange={(e) => setExportPath(e.target.value)}
+              onChange={setExportPath}
+              placeholder="output/eval_results.jsonl"
+              allowFiles
+              allowDirectories
+              preferredRootIds={['output', 'workspace']}
+              directorySelectionMode="append-filename"
+              defaultFileName="eval_results.jsonl"
+              helperText="Pick an existing export file or browse to a folder and keep the filename."
             />
           </div>
 

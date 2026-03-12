@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react'
 import { Cpu, Plus } from 'lucide-react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import type { TrainingJob } from '@/api/types'
 import { useTrainingJobs, useAvailableModels, useCancelTraining } from '@/api/hooks/useTraining'
 import { useSystemResources } from '@/api/hooks/useSystemResources'
 import { Badge } from '@/components/ui/badge'
@@ -9,12 +11,16 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 import { NewTrainingPanel } from './NewTrainingPanel'
 import { TrainingJobCard } from './TrainingJobCard'
+import { getDeployInitialValues } from './deployment-paths'
 
 export function TrainingPage() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('active')
+  const [selectedModelPath, setSelectedModelPath] = useState('')
+  const navigate = useNavigate()
 
   const { data: jobs = [], isLoading: jobsLoading } = useTrainingJobs()
   const { data: resources } = useSystemResources()
@@ -36,6 +42,22 @@ export function TrainingPage() {
     cancelTraining.mutate(jobId, {
       onSuccess: () => toast.success('Training job cancelled'),
       onError: (err) => toast.error(`Cancel failed: ${err.message}`),
+    })
+  }
+
+  function handleDeploy(job: TrainingJob, type: 'mcp' | 'api') {
+    const initialValues = getDeployInitialValues(job)
+    if (!initialValues?.modelPath) {
+      toast.error('Could not determine deployment paths for this training job')
+      return
+    }
+
+    navigate('/deployments', {
+      state: {
+        openDeployDialog: true,
+        deployDialogType: type,
+        deployInitialValues: initialValues,
+      },
     })
   }
 
@@ -66,6 +88,8 @@ export function TrainingPage() {
             open={panelOpen}
             onToggle={() => setPanelOpen((o) => !o)}
             onSubmit={() => setPanelOpen(false)}
+            modelPath={selectedModelPath}
+            onModelPathChange={setSelectedModelPath}
           />
 
           {panelOpen && (
@@ -100,6 +124,7 @@ export function TrainingPage() {
                         key={job.job_id}
                         job={job}
                         onCancel={handleCancel}
+                        onDeploy={handleDeploy}
                       />
                     ))}
                   </div>
@@ -165,8 +190,24 @@ export function TrainingPage() {
               ) : (
                 <ul className="space-y-1 max-h-48 overflow-y-auto">
                   {models.map((m) => (
-                    <li key={m} className="text-xs font-mono text-muted-foreground truncate" title={m}>
-                      {m}
+                    <li key={m}>
+                      <button
+                        type="button"
+                        title={m}
+                        onClick={() => {
+                          setSelectedModelPath(m)
+                          setPanelOpen(true)
+                        }}
+                        className={cn(
+                          'w-full rounded-md border px-2 py-2 text-left text-xs font-mono transition-colors cursor-pointer',
+                          'hover:border-primary/40 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          selectedModelPath === m
+                            ? 'border-primary bg-primary/10 text-foreground'
+                            : 'border-transparent text-muted-foreground',
+                        )}
+                      >
+                        <span className="block truncate">{m}</span>
+                      </button>
                     </li>
                   ))}
                 </ul>

@@ -1,23 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Rocket } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useDeployments } from '@/api/hooks/useDeployments'
 import { DeploymentList } from './DeploymentList'
 import { DeploymentDetail } from './DeploymentDetail'
-import { DeployDialog } from './DeployDialog'
+import { DeployDialog, type DeployDialogInitialValues } from './DeployDialog'
+
+type DeploymentsLocationState = {
+  openDeployDialog?: boolean
+  deployDialogType?: 'mcp' | 'api'
+  deployInitialValues?: DeployDialogInitialValues | null
+} | null
 
 export function DeploymentsPage() {
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null)
   const [deployDialogOpen, setDeployDialogOpen] = useState(false)
   const [deployDialogType, setDeployDialogType] = useState<'mcp' | 'api'>('mcp')
+  const [deployInitialValues, setDeployInitialValues] = useState<DeployDialogInitialValues | null>(null)
+  const location = useLocation()
+  const navigate = useNavigate()
 
   const { data: deployments = [], isLoading } = useDeployments()
 
   const activeCount = deployments.filter((d) => d.status === 'running').length
 
-  const openDeployDialog = (type: 'mcp' | 'api') => {
+  useEffect(() => {
+    const state = location.state as DeploymentsLocationState
+    if (!state?.openDeployDialog) return
+
+    setDeployDialogType(state.deployDialogType ?? 'mcp')
+    setDeployInitialValues(state.deployInitialValues ?? null)
+    setDeployDialogOpen(true)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate])
+
+  const openDeployDialog = (type: 'mcp' | 'api', initialValues: DeployDialogInitialValues | null = null) => {
     setDeployDialogType(type)
+    setDeployInitialValues(initialValues)
     setDeployDialogOpen(true)
   }
 
@@ -68,6 +89,7 @@ export function DeploymentsPage() {
         open={deployDialogOpen}
         onClose={() => setDeployDialogOpen(false)}
         type={deployDialogType}
+        initialValues={deployInitialValues}
       />
     </div>
   )

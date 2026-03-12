@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Dialog } from '@/components/ui/dialog'
@@ -28,6 +28,27 @@ export function SplitMergeDialog({
   const [splitRatio, setSplitRatio] = useState(0.8)
   const [outputDir, setOutputDir] = useState('data')
   const [outputName, setOutputName] = useState('')
+
+  useEffect(() => {
+    if (mode !== 'merge' || !datasetPaths?.length || outputName.trim()) {
+      return
+    }
+
+    const baseNames = datasetPaths.map((p) => p.split(/[\\/]/).pop()?.replace(/\.jsonl?$/i, '') ?? 'dataset')
+    const sharedPrefix = baseNames.reduce((prefix, name) => {
+      let i = 0
+      while (i < prefix.length && i < name.length && prefix[i] === name[i]) {
+        i += 1
+      }
+      return prefix.slice(0, i).replace(/[_-]+$/g, '')
+    })
+
+    const suggested = sharedPrefix
+      ? `data/${sharedPrefix}_merged`
+      : `data/merged_${datasetPaths.length}_datasets`
+
+    setOutputName(suggested)
+  }, [mode, datasetPaths, outputName])
 
   async function handleExecute() {
     try {
@@ -108,6 +129,9 @@ export function SplitMergeDialog({
           <>
             <div className="space-y-2">
               <p className="text-sm font-medium">Datasets to merge</p>
+              <p className="text-xs text-muted-foreground">
+                {datasetPaths.length} dataset{datasetPaths.length === 1 ? '' : 's'} selected
+              </p>
               <div className="flex flex-wrap gap-1">
                 {datasetPaths.map((p) => (
                   <Badge key={p} variant="secondary">
@@ -117,9 +141,9 @@ export function SplitMergeDialog({
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Output name</label>
+              <label className="text-sm font-medium">Output path</label>
               <Input
-                placeholder="merged_dataset"
+                placeholder="data/merged_dataset"
                 value={outputName}
                 onChange={(e) => setOutputName(e.target.value)}
               />

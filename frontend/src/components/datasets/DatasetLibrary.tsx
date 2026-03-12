@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react'
 import type { DatasetInfo } from '@/api/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Search, Upload } from 'lucide-react'
+import { Layers2, Search, Upload, X } from 'lucide-react'
 import { DatasetCard } from './DatasetCard'
+import { SplitMergeDialog } from './SplitMergeDialog'
 
 interface DatasetLibraryProps {
   datasets: DatasetInfo[]
@@ -15,6 +17,8 @@ interface DatasetLibraryProps {
 export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: DatasetLibraryProps) {
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('name')
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
+  const [showMerge, setShowMerge] = useState(false)
 
   const filtered = useMemo(() => {
     let result = datasets
@@ -44,6 +48,15 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
       return a.file_path.localeCompare(b.file_path)
     })
   }, [datasets, search, sortBy])
+
+  function toggleSelected(filePath: string, selected: boolean) {
+    setSelectedPaths((prev) => {
+      if (selected) {
+        return prev.includes(filePath) ? prev : [...prev, filePath]
+      }
+      return prev.filter((path) => path !== filePath)
+    })
+  }
 
   if (isLoading) {
     return (
@@ -87,6 +100,30 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">
+          {selectedPaths.length} selected
+        </Badge>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowMerge(true)}
+          disabled={selectedPaths.length < 2}
+        >
+          <Layers2 className="h-4 w-4" />
+          Merge Selected
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setSelectedPaths([])}
+          disabled={selectedPaths.length === 0}
+        >
+          <X className="h-4 w-4" />
+          Clear
+        </Button>
+      </div>
+
       {filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-muted-foreground mb-4">No datasets found</p>
@@ -98,10 +135,22 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((dataset) => (
-            <DatasetCard key={dataset.file_path} dataset={dataset} />
+            <DatasetCard
+              key={dataset.file_path}
+              dataset={dataset}
+              selected={selectedPaths.includes(dataset.file_path)}
+              onToggleSelect={toggleSelected}
+            />
           ))}
         </div>
       )}
+
+      <SplitMergeDialog
+        open={showMerge}
+        onClose={() => setShowMerge(false)}
+        mode="merge"
+        datasetPaths={selectedPaths}
+      />
     </div>
   )
 }

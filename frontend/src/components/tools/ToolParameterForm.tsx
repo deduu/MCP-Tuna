@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { JSONSchemaProperty } from '@/api/types'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
+import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 interface ToolParameterFormProps {
   schema: {
@@ -12,6 +14,67 @@ interface ToolParameterFormProps {
   }
   onSubmit: (args: Record<string, unknown>) => void
   isLoading?: boolean
+}
+
+const KNOWN_SELECT_OPTIONS: Record<string, string[]> = {
+  technique: ['sft', 'dpo', 'grpo', 'kto'],
+  target_format: ['sft', 'dpo', 'grpo', 'kto'],
+  difficulty_order: ['easy_first', 'hard_first'],
+  use_case: ['general', 'low_memory', 'speed', 'quality', 'multilingual', 'indonesian'],
+}
+
+function getSelectOptions(name: string, schema: JSONSchemaProperty): string[] | null {
+  if (schema.enum?.length) {
+    return schema.enum.map((option) => String(option))
+  }
+
+  return KNOWN_SELECT_OPTIONS[name.toLowerCase()] ?? null
+}
+
+function isModelField(name: string, schema: JSONSchemaProperty): boolean {
+  if (schema.type !== 'string') return false
+  const normalized = name.toLowerCase()
+  return normalized === 'model_name' || normalized === 'model_path' || normalized === 'base_model'
+}
+
+function isAdapterField(name: string, schema: JSONSchemaProperty): boolean {
+  if (schema.type !== 'string') return false
+  return name.toLowerCase() === 'adapter_path'
+}
+
+function isPathField(name: string, schema: JSONSchemaProperty): boolean {
+  if (schema.type !== 'string') return false
+  if (schema.format === 'path') return true
+  if (isModelField(name, schema) || isAdapterField(name, schema)) return false
+
+  const normalized = name.toLowerCase()
+  return normalized.endsWith('_path') || normalized.endsWith('_dir')
+}
+
+function inferDefaultFileName(value: unknown, placeholder: string): string | undefined {
+  const source = typeof value === 'string' && value.trim()
+    ? value.trim()
+    : placeholder.trim()
+
+  if (!source) return undefined
+
+  const normalized = source.replace(/[\\/]+$/, '')
+  const lastSegment = normalized.split(/[\\/]/).filter(Boolean).at(-1)
+  if (!lastSegment) return undefined
+  if (!lastSegment.includes('.')) return undefined
+  return lastSegment
+}
+
+function renderLabel(name: string, required: boolean, schema: JSONSchemaProperty) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      {name}
+      {required && <Badge variant="destructive" className="text-[10px] py-0">required</Badge>}
+      {schema.type === 'number' || schema.type === 'integer' ? (
+        <Badge variant="outline" className="text-[10px] py-0">{schema.type}</Badge>
+      ) : null}
+    </label>
+  )
 }
 
 function ParameterField({
@@ -27,7 +90,10 @@ function ParameterField({
   value: unknown
   onChange: (val: unknown) => void
 }) {
-  const placeholder = schema.default !== undefined ? `Default: ${JSON.stringify(schema.default)}` : ''
+  const defaultLabel = schema.default !== undefined ? `Default: ${JSON.stringify(schema.default)}` : ''
+  const placeholder = typeof schema.default === 'string' ? schema.default : defaultLabel
+  const selectOptions = getSelectOptions(name, schema)
+  const normalizedName = name.toLowerCase()
 
   if (schema.type === 'boolean') {
     return (
@@ -47,13 +113,10 @@ function ParameterField({
     )
   }
 
-  if (schema.enum) {
+  if (selectOptions) {
     return (
       <div className="space-y-1">
-        <label className="flex items-center gap-2 text-sm">
-          {name}
-          {required && <Badge variant="destructive" className="text-[10px] py-0">required</Badge>}
-        </label>
+        {renderLabel(name, required, schema)}
         {schema.description && (
           <p className="text-xs text-muted-foreground">{schema.description}</p>
         )}
@@ -63,10 +126,73 @@ function ParameterField({
           className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
         >
           <option value="">Select...</option>
-          {schema.enum.map((opt) => (
+          {selectOptions.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
+      </div>
+    )
+  }
+
+  if (isModelField(name, schema)) {
+    return (
+      <div className="space-y-1">
+        {renderLabel(name, required, schema)}
+        {schema.description && (
+          <p className="text-xs text-muted-foreground">{schema.description}</p>
+        )}
+        <ModelPathField
+          value={typeof value === 'string' ? value : ''}
+          onChange={(nextValue) => onChange(nextValue || undefined)}
+          placeholder={placeholder || 'meta-llama/Llama-3.2-3B-Instruct'}
+        />
+      </div>
+    )
+  }
+
+  if (isAdapterField(name, schema)) {
+    return (
+      <div className="space-y-1">
+        {renderLabel(name, required, schema)}
+        {schema.description && (
+          <p className="text-xs text-muted-foreground">{schema.description}</p>
+        )}
+        <ModelPathField
+          value={typeof value === 'string' ? value : ''}
+          onChange={(nextValue) => onChange(nextValue || undefined)}
+          placeholder={placeholder || '/path/to/adapter'}
+          validationPurpose="adapter"
+        />
+      </div>
+    )
+  }
+
+  if (isPathField(name, schema)) {
+    const isDirectoryOnly = normalizedName.endsWith('_dir')
+    const isOutputPath = normalizedName === 'output_path'
+    const helperText = isDirectoryOnly
+      ? 'Browse a backend-visible folder or type a path directly.'
+      : 'Browse backend-visible files and folders or type a path directly.'
+
+    return (
+      <div className="space-y-1">
+        {renderLabel(name, required, schema)}
+        {schema.description && (
+          <p className="text-xs text-muted-foreground">{schema.description}</p>
+        )}
+        <BrowsePathField
+          value={typeof value === 'string' ? value : ''}
+          onChange={(nextValue) => onChange(nextValue || undefined)}
+          placeholder={placeholder || `/${normalizedName}`}
+          helperText={helperText}
+          allowFiles={!isDirectoryOnly}
+          allowDirectories={true}
+          preferredRootIds={normalizedName.startsWith('output_') || normalizedName === 'output_dir'
+            ? ['output', 'workspace', 'uploads', 'hf_cache']
+            : ['workspace', 'output', 'uploads', 'hf_cache']}
+          directorySelectionMode={isOutputPath ? 'append-filename' : 'replace'}
+          defaultFileName={isOutputPath ? inferDefaultFileName(value, placeholder) : undefined}
+        />
       </div>
     )
   }
@@ -101,13 +227,7 @@ function ParameterField({
 
   return (
     <div className="space-y-1">
-      <label className="flex items-center gap-2 text-sm">
-        {name}
-        {required && <Badge variant="destructive" className="text-[10px] py-0">required</Badge>}
-        {schema.type === 'number' || schema.type === 'integer' ? (
-          <Badge variant="outline" className="text-[10px] py-0">{schema.type}</Badge>
-        ) : null}
-      </label>
+      {renderLabel(name, required, schema)}
       {schema.description && (
         <p className="text-xs text-muted-foreground">{schema.description}</p>
       )}

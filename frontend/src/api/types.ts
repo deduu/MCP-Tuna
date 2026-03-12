@@ -12,13 +12,14 @@ export interface JSONSchemaProperty {
   type: string
   description?: string
   default?: unknown
-  enum?: string[]
+  enum?: Array<string | number | boolean>
+  format?: string
   items?: JSONSchemaProperty
   properties?: Record<string, JSONSchemaProperty>
 }
 
 export interface MCPToolResult {
-  success: boolean
+  success?: boolean
   error?: string
   [key: string]: unknown
 }

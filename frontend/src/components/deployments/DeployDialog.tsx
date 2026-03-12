@@ -1,23 +1,41 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Dialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useDeploy } from '@/api/hooks/useDeployments'
 import { toast } from 'sonner'
+import { ModelPathField } from '@/components/pipeline/ModelPathField'
+
+export interface DeployDialogInitialValues {
+  modelPath?: string
+  adapterPath?: string
+  port?: number
+  quantization?: '4bit' | '8bit' | 'none'
+}
 
 interface DeployDialogProps {
   open: boolean
   onClose: () => void
   type: 'mcp' | 'api'
+  initialValues?: DeployDialogInitialValues | null
 }
 
-export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
+export function DeployDialog({ open, onClose, type, initialValues }: DeployDialogProps) {
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
   const [port, setPort] = useState('8001')
   const [quantization, setQuantization] = useState('4bit')
 
   const deployMutation = useDeploy()
+
+  useEffect(() => {
+    if (!open) return
+
+    setModelPath(initialValues?.modelPath ?? '')
+    setAdapterPath(initialValues?.adapterPath ?? '')
+    setPort(String(initialValues?.port ?? 8001))
+    setQuantization(initialValues?.quantization ?? '4bit')
+  }, [open, initialValues, type])
 
   const handleDeploy = () => {
     if (!modelPath.trim()) {
@@ -64,23 +82,30 @@ export function DeployDialog({ open, onClose, type }: DeployDialogProps) {
   const title = type === 'mcp' ? 'Deploy as MCP Server' : 'Deploy as API Endpoint'
 
   return (
-    <Dialog open={open} onClose={onClose} title={title}>
+    <Dialog open={open} onClose={onClose} title={title} className="max-w-2xl">
       <div className="flex flex-col gap-4">
-        {/* Common fields */}
+        <div className="rounded-md border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
+          Base-model-only deployment is supported. For LoRA outputs, set the original base model in Model Path and the trained adapter folder in Adapter Path.
+        </div>
+
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium">Model Path <span className="text-destructive">*</span></label>
-          <Input
-            placeholder="/path/to/model"
+          <ModelPathField
             value={modelPath}
-            onChange={(e) => setModelPath(e.target.value)}
+            onChange={setModelPath}
+            placeholder="meta-llama/Llama-3.2-1B-Instruct or C:/models/base"
+            helperText="Base model folder or Hugging Face model ID."
+            validationPurpose="model"
           />
         </div>
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium">Adapter Path</label>
-          <Input
-            placeholder="/path/to/adapter (optional)"
+          <ModelPathField
             value={adapterPath}
-            onChange={(e) => setAdapterPath(e.target.value)}
+            onChange={setAdapterPath}
+            placeholder="C:/output/my-lora-adapter"
+            helperText="Optional. Leave empty to deploy the base model directly."
+            validationPurpose="adapter"
           />
         </div>
 

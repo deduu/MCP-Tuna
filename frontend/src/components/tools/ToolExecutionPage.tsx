@@ -78,6 +78,7 @@ export function ToolExecutionPage() {
         </CardHeader>
         <CardContent>
           <ToolParameterForm
+            key={toolName}
             schema={tool.inputSchema ?? { properties: {} }}
             isLoading={execution.isPending}
             onSubmit={(args) => {

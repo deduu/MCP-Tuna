@@ -14,9 +14,11 @@ import { SplitMergeDialog } from './SplitMergeDialog'
 
 interface DatasetCardProps {
   dataset: DatasetInfo
+  selected?: boolean
+  onToggleSelect?: (filePath: string, selected: boolean) => void
 }
 
-export function DatasetCard({ dataset }: DatasetCardProps) {
+export function DatasetCard({ dataset, selected = false, onToggleSelect }: DatasetCardProps) {
   const queryClient = useQueryClient()
   const { mutateAsync: executeTool, isPending } = useToolExecution()
   const [showPreview, setShowPreview] = useState(false)
@@ -95,7 +97,20 @@ export function DatasetCard({ dataset }: DatasetCardProps) {
             <h3 className="font-semibold text-sm truncate" title={dataset.file_path}>
               {fileName}
             </h3>
-            <Badge variant="secondary">{dataset.format}</Badge>
+            <div className="flex items-center gap-2 shrink-0">
+              {onToggleSelect && (
+                <label className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={(e) => onToggleSelect(dataset.file_path, e.target.checked)}
+                    className="rounded border-input"
+                  />
+                  Merge
+                </label>
+              )}
+              <Badge variant="secondary">{dataset.format}</Badge>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">

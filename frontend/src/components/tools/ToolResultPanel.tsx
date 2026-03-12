@@ -81,6 +81,9 @@ function JsonNode({ data, depth = 0 }: { data: unknown; depth?: number }) {
 
 export function ToolResultPanel({ result, executionTime }: ToolResultPanelProps) {
   const [copied, setCopied] = useState(false)
+  const isError = result.success === false || (typeof result.error === 'string' && result.error.trim().length > 0)
+  const statusLabel = isError ? 'Error' : 'Success'
+  const statusVariant = isError ? 'error' : 'success'
 
   const handleCopy = () => {
     navigator.clipboard.writeText(JSON.stringify(result, null, 2))
@@ -93,8 +96,8 @@ export function ToolResultPanel({ result, executionTime }: ToolResultPanelProps)
       <CardHeader className="flex flex-row items-center justify-between py-3">
         <div className="flex items-center gap-2">
           <CardTitle className="text-sm">Result</CardTitle>
-          <Badge variant={result.success ? 'success' : 'error'}>
-            {result.success ? 'Success' : 'Error'}
+          <Badge variant={statusVariant}>
+            {statusLabel}
           </Badge>
           {executionTime !== undefined && (
             <span className="text-xs text-muted-foreground font-mono">

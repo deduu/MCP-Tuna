@@ -16,24 +16,49 @@ interface NewTrainingPanelProps {
   open: boolean
   onToggle: () => void
   onSubmit: () => void
+  modelPath: string
+  onModelPathChange: (value: string) => void
 }
 
-type Technique = 'sft' | 'dpo' | 'grpo' | 'kto'
+type Technique = 'sft' | 'dpo' | 'grpo' | 'kto' | 'curriculum'
 
 const TECHNIQUES: { value: Technique; label: string }[] = [
   { value: 'sft', label: 'SFT' },
   { value: 'dpo', label: 'DPO' },
   { value: 'grpo', label: 'GRPO' },
   { value: 'kto', label: 'KTO' },
+  { value: 'curriculum', label: 'Curriculum' },
 ]
 
-export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTrainingPanelProps) {
+function buildDefaultOutputDir(technique: Technique, sequential: boolean): string {
+  const now = new Date()
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('')
+  const prefix = sequential ? `sequential_${technique}` : technique
+
+  return `./output/${prefix}_${stamp}`
+}
+
+export function NewTrainingPanel({
+  open,
+  onToggle: _onToggle,
+  onSubmit,
+  modelPath,
+  onModelPathChange,
+}: NewTrainingPanelProps) {
   const [technique, setTechnique] = useState<Technique>('sft')
   const [sequential, setSequential] = useState(false)
-  const [modelPath, setModelPath] = useState('')
   const [datasetPath, setDatasetPath] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [outputDir, setOutputDir] = useState('./output')
+  const [outputDir, setOutputDir] = useState(() => buildDefaultOutputDir('sft', false))
+  const [outputDirCustomized, setOutputDirCustomized] = useState(false)
   const [quantization, setQuantization] = useState<'4bit' | 'none'>('4bit')
 
   // Hyperparameters
@@ -48,6 +73,9 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
   const [weightDecay, setWeightDecay] = useState('0.01')
   const [gradAccum, setGradAccum] = useState('1')
   const [maxSeqLength, setMaxSeqLength] = useState('2048')
+  const [numStages, setNumStages] = useState('3')
+  const [scoreColumn, setScoreColumn] = useState('weighted_score')
+  const [difficultyOrder, setDifficultyOrder] = useState<'easy_first' | 'hard_first'>('easy_first')
 
   // Validation badges
   const [schemaValid, setSchemaValid] = useState<'pass' | 'warn' | null>(null)
@@ -58,6 +86,8 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
   const { data: datasets = [] } = useDatasets()
   const startTraining = useStartTraining()
   const autoSuggest = useAutoSuggestModel()
+  const validationTechnique = technique === 'curriculum' ? 'sft' : technique
+  const schemaTechniqueLabel = technique === 'curriculum' ? 'CURRICULUM (SFT schema)' : technique.toUpperCase()
 
   // Debounced pre-validation — uses mcpCall directly to avoid mutation state issues
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -72,7 +102,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       mcpCall<{ success: boolean; technique_detected?: string; missing_columns?: string[] }>(
-        'validate.schema', { dataset_path: datasetPath, technique },
+        'validate.schema', { dataset_path: datasetPath, technique: validationTechnique },
       )
         .then((res) => {
           setSchemaValid(res.success ? 'pass' : 'warn')
@@ -81,7 +111,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
               ? `${res.technique_detected.toUpperCase()} format`
               : 'unknown format'
             toast.warning(
-              `Dataset is ${detected} — missing ${(res.missing_columns ?? []).join(', ')} for ${technique.toUpperCase()}`,
+              `Dataset is ${detected} - missing ${(res.missing_columns ?? []).join(', ')} for ${schemaTechniqueLabel}`,
             )
           }
         })
@@ -95,7 +125,19 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [datasetPath, technique])
+  }, [datasetPath, validationTechnique, schemaTechniqueLabel])
+
+  useEffect(() => {
+    if (!outputDirCustomized) {
+      setOutputDir(buildDefaultOutputDir(technique, sequential))
+    }
+  }, [technique, sequential, outputDirCustomized])
+
+  useEffect(() => {
+    if (technique === 'curriculum' && sequential) {
+      setSequential(false)
+    }
+  }, [technique, sequential])
 
   function handleSubmit() {
     if (!modelPath || !datasetPath) {
@@ -112,12 +154,13 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
     const parsedGradAccum = parseInt(gradAccum, 10)
     const parsedMaxSeqLength = parseInt(maxSeqLength, 10)
     const parsedLearningRate = parseFloat(learningRate)
+    const parsedNumStages = parseInt(numStages, 10)
+    const resolvedOutputDir = outputDir.trim() || buildDefaultOutputDir(technique, sequential)
 
     const commonArgs: Record<string, unknown> = {
-      output_dir: outputDir.trim() || './output',
+      output_dir: resolvedOutputDir,
       base_model: modelPath.trim(),
       dataset_path: datasetPath.trim(),
-      num_epochs: parsedEpochs,
       load_in_4bit: quantization === '4bit',
     }
 
@@ -135,17 +178,35 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
         gradient_accumulation_steps: parsedGradAccum,
         max_seq_length: parsedMaxSeqLength,
       }
+    } else if (technique === 'curriculum') {
+      args = {
+        ...commonArgs,
+        num_stages: parsedNumStages,
+        num_epochs_per_stage: parsedEpochs,
+        score_column: scoreColumn.trim() || 'weighted_score',
+        difficulty_order: difficultyOrder,
+        use_lora: true,
+        lora_r: parsedLoraR,
+        lora_alpha: parsedLoraAlpha,
+      }
     } else if (technique === 'dpo') {
       args = {
         ...commonArgs,
+        num_epochs: parsedEpochs,
         use_lora: true,
         lora_r: parsedLoraR,
       }
     } else if (technique === 'kto') {
       args = {
         ...commonArgs,
+        num_epochs: parsedEpochs,
         use_lora: true,
         lora_r: parsedLoraR,
+      }
+    } else {
+      args = {
+        ...commonArgs,
+        num_epochs: parsedEpochs,
       }
     }
 
@@ -176,7 +237,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
       }
 
       args = {
-        output_dir: outputDir.trim() || './output',
+        output_dir: resolvedOutputDir,
         base_model: modelPath.trim(),
         stages: JSON.stringify([sequentialStage]),
       }
@@ -189,6 +250,8 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
       {
         onSuccess: () => {
           toast.success('Training job started')
+          setOutputDir(buildDefaultOutputDir(technique, sequential))
+          setOutputDirCustomized(false)
           onSubmit()
         },
         onError: (err) => {
@@ -235,9 +298,15 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
             checked={sequential}
             onChange={(e) => setSequential(e.target.checked)}
             className="rounded border-input"
+            disabled={technique === 'curriculum'}
           />
           Sequential Training
         </label>
+        {technique === 'curriculum' && (
+          <p className="text-xs text-muted-foreground">
+            Curriculum already runs stage-by-stage, so sequential chaining is disabled here.
+          </p>
+        )}
 
         {/* Model path */}
         <div className="space-y-2">
@@ -251,7 +320,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
               disabled={!datasetPath || autoSuggest.isPending}
               onClick={() => {
                 autoSuggest.mutate(
-                  { dataset_path: datasetPath, technique, use_case: 'general' },
+                  { dataset_path: datasetPath, technique: validationTechnique, use_case: 'general' },
                   {
                     onSuccess: (data) => {
                       if (data.technique_warning) {
@@ -273,7 +342,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
               {autoSuggest.isPending ? 'Analyzing...' : 'Suggest Model'}
             </Button>
           </div>
-          <ModelBrowser value={modelPath} onChange={setModelPath} />
+          <ModelBrowser value={modelPath} onChange={onModelPathChange} />
           {suggestions.length > 0 && (
             <div className="space-y-1 rounded-md border border-border p-2">
               <p className="text-xs font-medium text-muted-foreground">Suggested models</p>
@@ -283,7 +352,7 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
                   type="button"
                   className="w-full cursor-pointer rounded px-2 py-1.5 text-left hover:bg-accent transition-colors"
                   onClick={() => {
-                    setModelPath(s.model_id)
+                    onModelPathChange(s.model_id)
                     const cfg = s.prescribe_config?.config ?? {}
                     if (cfg.learning_rate) setLearningRate(String(cfg.learning_rate))
                     if (cfg.num_epochs) setEpochs(String(cfg.num_epochs))
@@ -349,27 +418,70 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
         <div className="space-y-2">
           <label className="text-sm font-medium">Hyperparameters</label>
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">learning_rate</label>
-              <Input value={learningRate} onChange={(e) => setLearningRate(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">epochs</label>
-              <Input type="number" value={epochs} onChange={(e) => setEpochs(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">batch_size</label>
-              <Input type="number" value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">lora_r</label>
-              <Input type="number" value={loraR} onChange={(e) => setLoraR(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">lora_alpha</label>
-              <Input type="number" value={loraAlpha} onChange={(e) => setLoraAlpha(e.target.value)} />
-            </div>
+            {technique === 'curriculum' ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">num_stages</label>
+                  <Input type="number" min="2" value={numStages} onChange={(e) => setNumStages(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">epochs_per_stage</label>
+                  <Input type="number" value={epochs} onChange={(e) => setEpochs(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">difficulty_order</label>
+                  <select
+                    value={difficultyOrder}
+                    onChange={(e) => setDifficultyOrder(e.target.value === 'hard_first' ? 'hard_first' : 'easy_first')}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="easy_first">easy_first</option>
+                    <option value="hard_first">hard_first</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">score_column</label>
+                  <Input value={scoreColumn} onChange={(e) => setScoreColumn(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">lora_r</label>
+                  <Input type="number" value={loraR} onChange={(e) => setLoraR(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">lora_alpha</label>
+                  <Input type="number" value={loraAlpha} onChange={(e) => setLoraAlpha(e.target.value)} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">learning_rate</label>
+                  <Input value={learningRate} onChange={(e) => setLearningRate(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">epochs</label>
+                  <Input type="number" value={epochs} onChange={(e) => setEpochs(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">batch_size</label>
+                  <Input type="number" value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">lora_r</label>
+                  <Input type="number" value={loraR} onChange={(e) => setLoraR(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">lora_alpha</label>
+                  <Input type="number" value={loraAlpha} onChange={(e) => setLoraAlpha(e.target.value)} />
+                </div>
+              </>
+            )}
           </div>
+          {technique === 'curriculum' && (
+            <p className="text-xs text-muted-foreground">
+              Leave `score_column` as `weighted_score` for pre-scored datasets, or point it to another field such as `complexity`. If that column is missing, the backend will try to auto-score the dataset through the evaluator pipeline, which requires the evaluator stack and provider credentials.
+            </p>
+          )}
         </div>
 
         {/* Advanced section */}
@@ -388,7 +500,13 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
             <div className="grid grid-cols-2 gap-3 mt-3">
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">output_dir</label>
-                <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} />
+                <Input
+                  value={outputDir}
+                  onChange={(e) => {
+                    setOutputDir(e.target.value)
+                    setOutputDirCustomized(true)
+                  }}
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">quantization</label>
@@ -401,24 +519,30 @@ export function NewTrainingPanel({ open, onToggle: _onToggle, onSubmit }: NewTra
                   <option value="none">None (full precision)</option>
                 </select>
               </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">warmup_ratio</label>
-                <Input value={warmupRatio} onChange={(e) => setWarmupRatio(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">weight_decay</label>
-                <Input value={weightDecay} onChange={(e) => setWeightDecay(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">gradient_accumulation_steps</label>
-                <Input type="number" value={gradAccum} onChange={(e) => setGradAccum(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">max_seq_length</label>
-                <Input type="number" value={maxSeqLength} onChange={(e) => setMaxSeqLength(e.target.value)} />
-              </div>
+              {technique !== 'curriculum' && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">warmup_ratio</label>
+                    <Input value={warmupRatio} onChange={(e) => setWarmupRatio(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">weight_decay</label>
+                    <Input value={weightDecay} onChange={(e) => setWeightDecay(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">gradient_accumulation_steps</label>
+                    <Input type="number" value={gradAccum} onChange={(e) => setGradAccum(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">max_seq_length</label>
+                    <Input type="number" value={maxSeqLength} onChange={(e) => setMaxSeqLength(e.target.value)} />
+                  </div>
+                </>
+              )}
               <p className="col-span-2 text-xs text-muted-foreground">
-                4-bit loading reduces memory usage during training. Use full precision only if you have enough VRAM/RAM.
+                {technique === 'curriculum'
+                  ? 'Curriculum async training currently exposes stage and scoring controls, plus LoRA and quantization.'
+                  : '4-bit loading reduces memory usage during training. Use full precision only if you have enough VRAM/RAM.'}
               </p>
             </div>
           )}
