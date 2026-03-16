@@ -3,7 +3,7 @@
 <!-- mcp-name: io.github.deduu/mcp-tuna -->
 
 <p align="center">
-  <img src="docs/assets/mcp-tuna-logo.svg" alt="MCP Tuna" width="760">
+  <img src="./docs/assets/mcp-tuna-logo.svg?raw=1" alt="MCP Tuna" width="760">
 </p>
 
 <p align="center">
