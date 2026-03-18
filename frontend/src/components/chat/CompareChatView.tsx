@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { ImagePlus, Plus, Square, Trash2, X } from 'lucide-react'
+import { Bot, ChevronDown, ChevronUp, ImagePlus, PencilLine, Plus, Server, Square, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useDeployments } from '@/api/hooks/useDeployments'
 import type { Deployment } from '@/api/types'
@@ -13,6 +13,7 @@ import {
   extractTextFromChatContent,
   type ChatImageBlock,
 } from '@/lib/chat-content'
+import { resolveCompareTarget, shortDeploymentLabel } from '@/lib/compare-targets'
 import { uploadAsset } from '@/lib/uploads'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -68,6 +69,7 @@ export function CompareChatView() {
   const [input, setInput] = useState('')
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
+  const [isSetupCollapsed, setIsSetupCollapsed] = useState(false)
   const { data: deployments = [] } = useDeployments()
 
   const runningDeployments = useMemo(
@@ -83,23 +85,44 @@ export function CompareChatView() {
     addTarget(createAgentTarget(1))
   }, [addTarget, sessions.length])
 
-  const isRunning = sessions.some((session) => session.status === 'streaming')
-  const anyMessages = sessions.some((session) => session.messages.length > 0)
+  const resolvedSessions = useMemo(
+    () =>
+      sessions.map((session) => ({
+        ...session,
+        target: resolveCompareTarget(session.target, runningDeployments),
+      })),
+    [runningDeployments, sessions],
+  )
+
+  const isRunning = resolvedSessions.some((session) => session.status === 'streaming')
+  const anyMessages = resolvedSessions.some((session) => session.messages.length > 0)
   const allTargetsSupportImages =
-    sessions.length > 0 &&
-    sessions.every(
+    resolvedSessions.length > 0 &&
+    resolvedSessions.every(
       (session) =>
         session.target.kind === 'agent' || session.target.deploymentModality === 'vision-language',
     )
+  const allTargetsConfigured =
+    resolvedSessions.length > 0 &&
+    resolvedSessions.every((session) =>
+      session.target.kind === 'agent' ? Boolean(session.target.model) : Boolean(session.target.deploymentId),
+    )
+
+  useEffect(() => {
+    if (allTargetsConfigured) {
+      setIsSetupCollapsed(true)
+    }
+  }, [allTargetsConfigured])
 
   const gridClassName = useMemo(() => {
     if (sessions.length <= 1) return 'grid-cols-1'
     if (sessions.length === 2) return 'grid-cols-1 xl:grid-cols-2'
     if (sessions.length === 3) return 'grid-cols-1 md:grid-cols-2 2xl:grid-cols-3'
     return 'grid-cols-1 md:grid-cols-2 2xl:grid-cols-4'
-  }, [sessions.length])
+  }, [resolvedSessions.length])
 
-  const baselineSession = sessions.find((session) => session.target.id === baselineTargetId) ?? null
+  const baselineSession =
+    resolvedSessions.find((session) => session.target.id === baselineTargetId) ?? null
   const baselineMetrics = getLatestAssistantMetrics(baselineSession?.messages ?? [])
 
   async function handleSubmit() {
@@ -107,7 +130,7 @@ export function CompareChatView() {
     if ((!trimmed && imageBlocks.length === 0) || isRunning || isUploadingImage) {
       return
     }
-    if (sessions.length === 0) {
+    if (resolvedSessions.length === 0) {
       toast.error('Add at least one compare target first')
       return
     }
@@ -119,7 +142,7 @@ export function CompareChatView() {
     const payload = buildUserChatContent(trimmed, imageBlocks)
     const userText = extractTextFromChatContent(payload)
 
-    for (const session of sessions) {
+    for (const session of resolvedSessions) {
       if (session.target.kind === 'agent' && !session.target.model) {
         toast.error(`Select a model for ${session.target.label}`)
         return
@@ -130,7 +153,7 @@ export function CompareChatView() {
       }
     }
 
-    for (const session of sessions) {
+    for (const session of resolvedSessions) {
       addUserMessage(session.target.id, {
         content: userText,
         parts: Array.isArray(payload) ? payload : undefined,
@@ -210,7 +233,7 @@ export function CompareChatView() {
   }
 
   function handleStop() {
-    for (const session of sessions) {
+    for (const session of resolvedSessions) {
       session.abortController?.abort()
     }
   }
@@ -263,78 +286,137 @@ export function CompareChatView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-1">
-              <h2 className="text-lg font-semibold">Compare Mode</h2>
-              <p className="text-sm text-muted-foreground">
-                Send one prompt across multiple agent or deployment targets, then compare outputs, latency,
-                token usage, tool activity, and estimated cost side by side.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => addTarget(createAgentTarget(sessions.length))}>
-                <Plus className="h-4 w-4" />
-                Add agent
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleAddDeploymentTarget}>
-                <Plus className="h-4 w-4" />
-                Add deployment
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clearAllMessages} disabled={isRunning || !anyMessages}>
-                <Trash2 className="h-4 w-4" />
-                Clear all
-              </Button>
-              <Button variant="destructive" size="sm" onClick={handleStop} disabled={!isRunning}>
-                <Square className="h-4 w-4" />
-                Stop
-              </Button>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        <div className="rounded-2xl border bg-card/95">
+          <div className="px-5 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Compare Mode</h2>
+                <p className="text-sm text-muted-foreground">
+                  Compare multiple agents or deployments side by side, then judge quality against a
+                  baseline with latency, token, and cost deltas inline.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => addTarget(createAgentTarget(sessions.length))}>
+                  <Plus className="h-4 w-4" />
+                  Add agent
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleAddDeploymentTarget}>
+                  <Plus className="h-4 w-4" />
+                  Add deployment
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsSetupCollapsed((current) => !current)}
+                  disabled={resolvedSessions.length === 0}
+                >
+                  {isSetupCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                  {isSetupCollapsed ? 'Edit targets' : 'Minimize setup'}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={clearAllMessages} disabled={isRunning || !anyMessages}>
+                  <Trash2 className="h-4 w-4" />
+                  Clear all
+                </Button>
+                <Button variant="destructive" size="sm" onClick={handleStop} disabled={!isRunning}>
+                  <Square className="h-4 w-4" />
+                  Stop
+                </Button>
+              </div>
             </div>
           </div>
+
+          {isSetupCollapsed ? (
+            <div className="border-t px-5 py-4">
+              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {resolvedSessions.map((session, index) => (
+                  <button
+                    key={session.target.id}
+                    type="button"
+                    onClick={() => setIsSetupCollapsed(false)}
+                    className="rounded-xl border border-border/70 bg-secondary/15 px-4 py-3 text-left transition-colors hover:bg-secondary/25"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      {session.target.kind === 'agent' ? (
+                        <Bot className="h-4 w-4 text-primary" />
+                      ) : (
+                        <Server className="h-4 w-4 text-amber-400" />
+                      )}
+                      <span className="truncate">{session.target.label}</span>
+                      {session.target.id === baselineTargetId && <Badge variant="success">Baseline</Badge>}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>Target {index + 1}</span>
+                      <span className="rounded-full bg-background px-2 py-0.5">
+                        {session.target.kind === 'agent'
+                          ? session.target.model
+                          : session.target.deploymentLabel ?? session.target.deploymentId ?? 'Not selected'}
+                      </span>
+                      {session.target.kind === 'deployment' &&
+                        session.target.deploymentModality === 'vision-language' && (
+                          <Badge variant="warning">VLM</Badge>
+                        )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="border-t p-4">
+              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {sessions.map((session, index) => (
+                  <CompareTargetConfigurator
+                    key={session.target.id}
+                    session={session}
+                    index={index}
+                    baselineTargetId={baselineTargetId}
+                    runningDeployments={runningDeployments}
+                    onSetBaseline={setBaselineTargetId}
+                    onUpdate={updateTarget}
+                    onRemove={removeTarget}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="grid gap-3 p-4 md:grid-cols-2 2xl:grid-cols-3">
-          {sessions.map((session, index) => (
-            <CompareTargetConfigurator
+        <div className={cn('grid gap-4', gridClassName)}>
+          {resolvedSessions.map((session) => (
+            <ComparePane
               key={session.target.id}
               session={session}
-              index={index}
-              baselineTargetId={baselineTargetId}
-              runningDeployments={runningDeployments}
-              onSetBaseline={setBaselineTargetId}
-              onUpdate={updateTarget}
-              onRemove={removeTarget}
+              baselineSession={baselineSession}
+              baselineMetrics={baselineMetrics}
+              isBaseline={session.target.id === baselineTargetId}
+              onClear={() => clearTargetMessages(session.target.id)}
+              disabled={isRunning}
             />
           ))}
         </div>
       </div>
 
-      <div className={cn('grid min-h-0 flex-1 gap-4', gridClassName)}>
-        {sessions.map((session) => (
-          <ComparePane
-            key={session.target.id}
-            session={session}
-            baselineMetrics={baselineMetrics}
-            isBaseline={session.target.id === baselineTargetId}
-            onClear={() => clearTargetMessages(session.target.id)}
-            disabled={isRunning}
-          />
-        ))}
-      </div>
-
-      <div className="rounded-xl border bg-card p-4">
-        <div className="space-y-3">
+      <div className="mx-auto w-full max-w-5xl rounded-2xl border bg-card/95 p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{sessions.length} targets</Badge>
+            <Badge variant="outline">{resolvedSessions.length} targets</Badge>
             <Badge variant={allTargetsSupportImages ? 'success' : 'secondary'}>
               {allTargetsSupportImages ? 'Images supported' : 'Text compare only'}
             </Badge>
-            <p className="text-xs text-muted-foreground">
-              Use baseline selection above to measure latency, token, and tool deltas per pane.
-            </p>
+            {isSetupCollapsed && (
+              <Button variant="ghost" size="sm" onClick={() => setIsSetupCollapsed(false)}>
+                <PencilLine className="h-4 w-4" />
+                Edit targets
+              </Button>
+            )}
           </div>
+          <p className="text-xs text-muted-foreground">
+            Use baseline selection above to measure latency, token, and tool deltas per pane.
+          </p>
+        </div>
 
+        <div className="mt-3 space-y-3">
           {imageBlocks.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {imageBlocks.map((block, index) => (
@@ -366,53 +448,54 @@ export function CompareChatView() {
             </div>
           )}
 
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               rows={1}
-              disabled={isRunning || isUploadingImage || sessions.length === 0}
+              disabled={isRunning || isUploadingImage || resolvedSessions.length === 0}
               placeholder="Send one prompt to every selected compare target..."
-              className="min-h-[88px] flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-[74px] flex-1 resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             />
-            {allTargetsSupportImages && (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => document.getElementById('compare-image-input')?.click()}
-                  disabled={isRunning || isUploadingImage || sessions.length === 0}
-                  className="self-end"
-                  title="Attach images"
-                >
-                  <ImagePlus className="h-4 w-4" />
-                </Button>
-                <input
-                  id="compare-image-input"
-                  type="file"
-                  className="hidden"
-                  accept="image/*"
-                  multiple
-                  onChange={handlePickImage}
-                  disabled={isRunning || isUploadingImage}
-                />
-              </>
-            )}
-            <Button
-              onClick={() => void handleSubmit()}
-              disabled={
-                (!input.trim() && imageBlocks.length === 0) ||
-                sessions.length === 0 ||
-                isRunning ||
-                isUploadingImage ||
-                (imageBlocks.length > 0 && !allTargetsSupportImages)
-              }
-              className="self-end"
-            >
-              Compare
-            </Button>
+            <div className="flex shrink-0 items-end gap-2">
+              {allTargetsSupportImages && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => document.getElementById('compare-image-input')?.click()}
+                    disabled={isRunning || isUploadingImage || resolvedSessions.length === 0}
+                    title="Attach images"
+                  >
+                    <ImagePlus className="h-4 w-4" />
+                  </Button>
+                  <input
+                    id="compare-image-input"
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    multiple
+                    onChange={handlePickImage}
+                    disabled={isRunning || isUploadingImage}
+                  />
+                </>
+              )}
+              <Button
+                onClick={() => void handleSubmit()}
+                disabled={
+                  (!input.trim() && imageBlocks.length === 0) ||
+                  resolvedSessions.length === 0 ||
+                  isRunning ||
+                  isUploadingImage ||
+                  (imageBlocks.length > 0 && !allTargetsSupportImages)
+                }
+                className="min-w-[112px]"
+              >
+                Compare
+              </Button>
+            </div>
           </div>
 
           <div className="flex items-center justify-between gap-3">
@@ -440,10 +523,4 @@ function getLatestAssistantMetrics(
     .reverse()
     .find((message) => message.role === 'assistant' && !message.isStreaming && message.metrics)
   return lastAssistant?.metrics ?? null
-}
-
-function shortDeploymentLabel(modelPath: string) {
-  const normalized = modelPath.replace(/\\/g, '/')
-  const parts = normalized.split('/')
-  return parts[parts.length - 1] || modelPath
 }

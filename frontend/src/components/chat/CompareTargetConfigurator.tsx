@@ -1,5 +1,6 @@
 import { Trash2 } from 'lucide-react'
 import type { Deployment } from '@/api/types'
+import { resolveCompareDeploymentTarget, shortDeploymentLabel } from '@/lib/compare-targets'
 import { AVAILABLE_CHAT_MODELS } from './chat-model-options'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -24,9 +25,8 @@ export function CompareTargetConfigurator({
   onUpdate,
   onRemove,
 }: CompareTargetConfiguratorProps) {
-  const selectedDeployment = runningDeployments.find(
-    (deployment) => deployment.deployment_id === session.target.deploymentId,
-  )
+  const selectedDeployment = resolveCompareDeploymentTarget(session.target, runningDeployments)
+  const deploymentSelectValue = selectedDeployment?.deployment_id ?? ''
 
   return (
     <Card className="border-border/80">
@@ -104,7 +104,7 @@ export function CompareTargetConfigurator({
             </select>
           ) : (
             <select
-              value={session.target.deploymentId ?? ''}
+              value={deploymentSelectValue}
               onChange={(event) => {
                 const deployment = runningDeployments.find(
                   (candidate) => candidate.deployment_id === event.target.value,
@@ -119,16 +119,17 @@ export function CompareTargetConfigurator({
               disabled={runningDeployments.length === 0}
               className="h-9 rounded-md border border-input bg-background px-3 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {runningDeployments.length === 0 ? (
-                <option value="">No running deployments</option>
-              ) : (
-                runningDeployments.map((deployment) => (
-                  <option key={deployment.deployment_id} value={deployment.deployment_id}>
-                    {shortDeploymentLabel(deployment.model_path)}
-                    {deployment.modality === 'vision-language' ? ' (VLM)' : ''}
-                  </option>
-                ))
+              {!selectedDeployment && (
+                <option value="">
+                  {runningDeployments.length === 0 ? 'No running deployments' : 'Select a running deployment'}
+                </option>
               )}
+              {runningDeployments.map((deployment) => (
+                <option key={deployment.deployment_id} value={deployment.deployment_id}>
+                  {shortDeploymentLabel(deployment.model_path)}
+                  {deployment.modality === 'vision-language' ? ' (VLM)' : ''}
+                </option>
+              ))}
             </select>
           )}
         </div>
@@ -161,10 +162,4 @@ export function CompareTargetConfigurator({
       </CardContent>
     </Card>
   )
-}
-
-function shortDeploymentLabel(modelPath: string) {
-  const normalized = modelPath.replace(/\\/g, '/')
-  const parts = normalized.split('/')
-  return parts[parts.length - 1] || modelPath
 }

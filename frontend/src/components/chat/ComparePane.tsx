@@ -1,17 +1,21 @@
-import { Bot, Server, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Bot, Scale, Server, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { judgeAgainstBaseline } from '@/lib/compare-judging'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { MarkdownContent } from './MarkdownContent'
+import { CompareJudgementCard } from './CompareJudgementCard'
 import { MessageBlocks } from './MessageBlocks'
 import { ReflectionBlock } from './ReflectionBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { CompareMetricsSummary, InlineMetricRow } from './CompareMetricsSummary'
-import type { CompareMessage, CompareMetrics, CompareSession } from '@/stores/chatCompare'
+import { useChatCompareStore, type CompareMessage, type CompareMetrics, type CompareSession } from '@/stores/chatCompare'
 
 interface ComparePaneProps {
   session: CompareSession
+  baselineSession: CompareSession | null
   baselineMetrics: CompareMetrics | null
   isBaseline: boolean
   onClear: () => void
@@ -20,15 +24,57 @@ interface ComparePaneProps {
 
 export function ComparePane({
   session,
+  baselineSession,
   baselineMetrics,
   isBaseline,
   onClear,
   disabled,
 }: ComparePaneProps) {
+  const setMessageJudgement = useChatCompareStore((state) => state.setMessageJudgement)
+  const [judgingIds, setJudgingIds] = useState<Record<string, boolean>>({})
   const latestMetrics = getLatestAssistantMetrics(session.messages)
+  const comparableAssistantIds = useMemo(
+    () => buildComparableAssistantIds(session.messages, baselineSession?.messages ?? []),
+    [baselineSession?.messages, session.messages],
+  )
+
+  async function handleJudgeMessage(message: CompareMessage) {
+    if (isBaseline || !baselineSession) {
+      return
+    }
+    const comparable = comparableAssistantIds[message.id]
+    if (!comparable) {
+      return
+    }
+
+    setJudgingIds((current) => ({ ...current, [message.id]: true }))
+    try {
+      const judgement = await judgeAgainstBaseline({
+        promptText: comparable.userMessage.content,
+        promptParts: comparable.userMessage.parts,
+        baselineResponse: comparable.baselineAssistant.content,
+        targetResponse: message.content,
+      })
+      setMessageJudgement(session.target.id, message.id, judgement)
+    } catch (error) {
+      setMessageJudgement(session.target.id, message.id, {
+        winner: 'tie',
+        confidence: null,
+        rationale: error instanceof Error ? error.message : 'Judging failed',
+        toolName: 'judge',
+        judgedAt: new Date().toISOString(),
+      })
+    } finally {
+      setJudgingIds((current) => {
+        const next = { ...current }
+        delete next[message.id]
+        return next
+      })
+    }
+  }
 
   return (
-    <div className="min-h-0 rounded-xl border bg-card">
+    <div className="flex min-h-[420px] flex-col overflow-hidden rounded-2xl border bg-card">
       <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -72,7 +118,7 @@ export function ComparePane({
         <CompareMetricsSummary metrics={latestMetrics} baselineMetrics={baselineMetrics} isBaseline={isBaseline} />
       </div>
 
-      <div className="h-[calc(100%-9.5rem)] overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {session.messages.length === 0 ? (
           <div className="flex h-full items-center justify-center text-center">
             <p className="max-w-sm text-sm text-muted-foreground">
@@ -80,12 +126,20 @@ export function ComparePane({
             </p>
           </div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
             {session.messages.map((message) =>
               message.role === 'user' ? (
                 <CompareUserMessage key={message.id} message={message} />
               ) : (
-                <CompareAssistantMessage key={message.id} message={message} />
+                <CompareAssistantMessage
+                  key={message.id}
+                  message={message}
+                  targetLabel={session.target.label}
+                  isBaseline={isBaseline}
+                  canJudge={Boolean(comparableAssistantIds[message.id])}
+                  isJudging={Boolean(judgingIds[message.id])}
+                  onJudge={() => void handleJudgeMessage(message)}
+                />
               ),
             )}
           </div>
@@ -102,7 +156,7 @@ function CompareUserMessage({ message }: { message: CompareMessage }) {
       {message.parts ? (
         <MessageBlocks blocks={message.parts} />
       ) : (
-        <div className="whitespace-pre-wrap rounded-lg border border-border/70 bg-secondary/20 px-3 py-2 text-sm">
+        <div className="whitespace-pre-wrap rounded-xl border border-border/70 bg-secondary/20 px-4 py-3 text-sm leading-6">
           {message.content}
         </div>
       )}
@@ -110,7 +164,21 @@ function CompareUserMessage({ message }: { message: CompareMessage }) {
   )
 }
 
-function CompareAssistantMessage({ message }: { message: CompareMessage }) {
+function CompareAssistantMessage({
+  message,
+  targetLabel,
+  isBaseline,
+  canJudge,
+  isJudging,
+  onJudge,
+}: {
+  message: CompareMessage
+  targetLabel: string
+  isBaseline: boolean
+  canJudge: boolean
+  isJudging: boolean
+  onJudge: () => void
+}) {
   const runningTools = new Set(
     message.toolCalls.filter((toolCall) => toolCall.durationMs === undefined).map((toolCall) => toolCall.tool),
   )
@@ -118,7 +186,7 @@ function CompareAssistantMessage({ message }: { message: CompareMessage }) {
     message.thinking.length > 0 || message.toolCalls.length > 0 || message.reflections.length > 0
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         <span>Response</span>
         {message.modelId && (
@@ -146,7 +214,7 @@ function CompareAssistantMessage({ message }: { message: CompareMessage }) {
 
       <div
         className={cn(
-          'rounded-lg border px-3 py-2',
+          'min-h-[120px] rounded-xl border px-4 py-3',
           message.error ? 'border-destructive/50 bg-destructive/5' : 'border-border/70',
         )}
       >
@@ -163,6 +231,20 @@ function CompareAssistantMessage({ message }: { message: CompareMessage }) {
       </div>
 
       {message.metrics && <InlineMetricRow metrics={message.metrics} />}
+      {!isBaseline && !message.isStreaming && !message.error && message.content && canJudge && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onJudge} disabled={isJudging}>
+            <Scale className="h-4 w-4" />
+            {isJudging ? 'Judging...' : 'Judge Vs Baseline'}
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            Uses text or multimodal judge automatically based on the original prompt.
+          </span>
+        </div>
+      )}
+      {message.judgement && (
+        <CompareJudgementCard judgement={message.judgement} targetLabel={targetLabel} />
+      )}
     </div>
   )
 }
@@ -172,4 +254,35 @@ function getLatestAssistantMetrics(messages: CompareMessage[]) {
     .reverse()
     .find((message) => message.role === 'assistant' && !message.isStreaming && message.metrics)
   return lastAssistant?.metrics ?? null
+}
+
+function buildComparableAssistantIds(
+  targetMessages: CompareMessage[],
+  baselineMessages: CompareMessage[],
+) {
+  const targetRounds = buildRounds(targetMessages)
+  const baselineRounds = buildRounds(baselineMessages)
+  const comparable: Record<string, { userMessage: CompareMessage; baselineAssistant: CompareMessage }> = {}
+
+  for (let index = 0; index < targetRounds.length; index += 1) {
+    const targetRound = targetRounds[index]
+    const baselineRound = baselineRounds[index]
+    if (!targetRound?.assistant || !baselineRound?.assistant) {
+      continue
+    }
+    comparable[targetRound.assistant.id] = {
+      userMessage: targetRound.user,
+      baselineAssistant: baselineRound.assistant,
+    }
+  }
+  return comparable
+}
+
+function buildRounds(messages: CompareMessage[]) {
+  const users = messages.filter((message) => message.role === 'user')
+  const assistants = messages.filter((message) => message.role === 'assistant')
+  return users.map((user, index) => ({
+    user,
+    assistant: assistants[index],
+  }))
 }

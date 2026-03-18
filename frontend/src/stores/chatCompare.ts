@@ -19,6 +19,14 @@ export interface CompareMetrics {
   tool_names?: string[]
 }
 
+export interface CompareJudgement {
+  winner: 'baseline' | 'target' | 'tie'
+  confidence?: number | null
+  rationale?: string | null
+  toolName: string
+  judgedAt: string
+}
+
 export interface CompareTargetConfig {
   id: string
   kind: CompareTargetKind
@@ -38,6 +46,7 @@ export interface CompareMessage {
   toolCalls: ToolCallEvent[]
   reflections: ReflectionEvent[]
   metrics?: CompareMetrics | null
+  judgement?: CompareJudgement | null
   isStreaming?: boolean
   error?: string | null
   modelId?: string | null
@@ -66,6 +75,7 @@ interface CompareStore {
   addToolEnd: (targetId: string, messageId: string, tool: string, durationMs: number) => void
   addReflection: (targetId: string, messageId: string, isReady: boolean, explanation: string) => void
   setMessageMetrics: (targetId: string, messageId: string, metrics: CompareMetrics) => void
+  setMessageJudgement: (targetId: string, messageId: string, judgement: CompareJudgement | null) => void
   finishAssistantMessage: (targetId: string, messageId: string, patch?: Partial<CompareMessage>) => void
   failAssistantMessage: (targetId: string, messageId: string, error: string) => void
   setConversationId: (targetId: string, conversationId: string | null) => void
@@ -163,6 +173,7 @@ export const useChatCompareStore = create<CompareStore>((set) => ({
                   toolCalls: [],
                   reflections: [],
                   metrics: null,
+                  judgement: null,
                 },
               ],
             }
@@ -188,6 +199,7 @@ export const useChatCompareStore = create<CompareStore>((set) => ({
                   toolCalls: [],
                   reflections: [],
                   metrics: null,
+                  judgement: null,
                   isStreaming: true,
                 },
               ],
@@ -286,6 +298,21 @@ export const useChatCompareStore = create<CompareStore>((set) => ({
               messages: updateMessage(session.messages, messageId, (message) => ({
                 ...message,
                 metrics: { ...(message.metrics ?? {}), ...metrics },
+              })),
+            }
+          : session,
+      ),
+    })),
+
+  setMessageJudgement: (targetId, messageId, judgement) =>
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        session.target.id === targetId
+          ? {
+              ...session,
+              messages: updateMessage(session.messages, messageId, (message) => ({
+                ...message,
+                judgement,
               })),
             }
           : session,
