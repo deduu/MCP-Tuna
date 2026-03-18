@@ -86,6 +86,7 @@ class HostingConfig(BaseModel):
     port: int = 8001
     transport: str = "http"  # http | stdio
     quantization: Optional[str] = None  # None | "4bit" | "8bit"
+    modality: str = "text"  # text | vision-language
 
 
 class ChatConfig(BaseModel):
@@ -96,3 +97,5 @@ class ChatConfig(BaseModel):
     temperature: float = 0.7
     system_prompt: Optional[str] = None
     streaming: bool = True
+    modality: str = "text"  # text | vision-language
+    api_path: Optional[str] = None

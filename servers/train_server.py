@@ -124,6 +124,31 @@ class TrainServer:
             )
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(
+            name="finetune.train_vlm",
+            description="Fine-tune a vision-language model with canonical multimodal messages",
+        )
+        async def train_vlm(
+            dataset_path: str, output_dir: str, base_model: Optional[str] = None,
+            num_epochs: int = 3, use_lora: bool = True, lora_r: int = 8, lora_alpha: int = 16,
+            max_seq_length: int = 2048, per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4, learning_rate: float = 2e-4,
+            load_in_4bit: bool = True,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_vlm_model(
+                dataset=load_result["dataset_object"], dataset_path=dataset_path,
+                output_dir=output_dir, base_model=base_model, num_epochs=num_epochs,
+                use_lora=use_lora, lora_r=lora_r, lora_alpha=lora_alpha,
+                max_seq_length=max_seq_length,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                learning_rate=learning_rate, load_in_4bit=load_in_4bit,
+            )
+            return json.dumps(result, indent=2)
+
         @self.mcp.tool(name="finetune.load_dataset", description="Load a dataset from file")
         async def load_dataset(file_path: str, format: str = "jsonl") -> str:
             result = await self.finetuner.load_dataset_from_file(file_path, format)
@@ -172,6 +197,17 @@ class TrainServer:
                 prompts=prompts, base_model_path=base_model_path,
                 finetuned_adapter_path=finetuned_adapter_path,
                 max_new_tokens=max_new_tokens,
+            ), indent=2)
+
+        @self.mcp.tool(name="test.vlm_inference",
+                       description="Run multimodal inference on structured messages using a local VLM")
+        async def run_vlm_inference(
+            messages: List[Dict[str, Any]], model_path: str,
+            adapter_path: Optional[str] = None, max_new_tokens: int = 512,
+        ) -> str:
+            return json.dumps(await self.finetuner.run_vlm_inference(
+                messages=messages, model_path=model_path,
+                adapter_path=adapter_path, max_new_tokens=max_new_tokens,
             ), indent=2)
 
     def _register_validate_tools(self):

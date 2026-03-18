@@ -235,6 +235,91 @@ class TestEvaluateBatch:
         assert result["success"] is True
 
 
+class TestEvaluateVLM:
+    @pytest.mark.asyncio
+    async def test_vlm_single_evaluation(self):
+        svc = AdvancedJudgeService()
+        mock_llm = _make_mock_llm(POINTWISE_RESPONSE)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_path", "image_path": "uploads/images/example.png"},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ]
+
+        with patch.object(svc, "_get_llm", return_value=mock_llm):
+            result = await svc.evaluate_vlm_single(
+                messages=messages,
+                generated="The image shows a cat.",
+                reference="A cat is visible.",
+            )
+
+        assert result["success"] is True
+        assert result["image_count"] == 1
+        assert result["result"]["judge_type"] == "pointwise"
+        sent_messages = mock_llm.chat.await_args.args[0]
+        assert sent_messages[1]["content"][1]["type"] == "text"
+        assert sent_messages[1]["content"][2]["type"] == "image_path"
+
+    @pytest.mark.asyncio
+    async def test_vlm_pairwise_comparison(self):
+        svc = AdvancedJudgeService()
+        mock_llm = _make_mock_llm(PAIRWISE_RESPONSE)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_path", "image_path": "uploads/images/example.png"},
+                    {"type": "text", "text": "What is happening?"},
+                ],
+            }
+        ]
+
+        with patch.object(svc, "_get_llm", return_value=mock_llm):
+            result = await svc.compare_vlm(
+                messages=messages,
+                generated_a="Response A",
+                generated_b="Response B",
+            )
+
+        assert result["success"] is True
+        assert result["result"]["winner"] == "A"
+        assert result["image_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_vlm_batch_evaluation(self):
+        svc = AdvancedJudgeService()
+        mock_llm = _make_mock_llm(POINTWISE_RESPONSE)
+        test_data = [
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_path", "image_path": "uploads/images/example.png"},
+                            {"type": "text", "text": "Describe this image."},
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "A cat on a chair."}],
+                    },
+                ],
+                "generated": "A cat on a chair.",
+            }
+        ]
+
+        with patch.object(svc, "_get_llm", return_value=mock_llm):
+            result = await svc.evaluate_vlm_batch(test_data=test_data)
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["summary"]["successful_rows"] == 1
+
+
 # ── List judge types ──────────────────────────────────
 
 

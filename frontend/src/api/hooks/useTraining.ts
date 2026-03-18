@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { mcpCall } from '../client'
+import { mcpCall, mcpListTools } from '../client'
 import type {
+  MCPTool,
   TrainingJob,
   HFSearchResult,
   RecommendResult,
@@ -8,7 +9,11 @@ import type {
   LocalModelCandidate,
   DeploymentBrowseRoot,
   DeploymentBrowseResult,
+  ModelModality,
+  TrainingCapabilitySummary,
+  TrainingTechnique,
 } from '../types'
+import { inferModelModality } from '@/lib/training-capabilities'
 
 function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): TrainingJob {
   const trainerType = typeof job.trainer_type === 'string' ? job.trainer_type : undefined
@@ -69,7 +74,13 @@ export function useLocalModelCandidates(query: string = '') {
     queryKey: ['training', 'models', 'candidates', query],
     queryFn: async () => {
       const result = await mcpCall<{
-        models: Array<string | { id: string; model_path?: string; usable_for?: string[] }>
+        models: Array<string | {
+          id: string
+          model_path?: string
+          usable_for?: string[]
+          modality?: ModelModality
+          supported_techniques?: TrainingTechnique[]
+        }>
       }>('validate.list_models', query.trim() ? { query } : {})
 
       return (result.models ?? []).map((item) => {
@@ -77,14 +88,55 @@ export function useLocalModelCandidates(query: string = '') {
           return { id: item, model_path: item }
         }
 
-        return {
-          id: item.id,
-          model_path: item.model_path ?? item.id,
-          usable_for: item.usable_for,
+          return {
+            id: item.id,
+            model_path: item.model_path ?? item.id,
+            usable_for: item.usable_for,
+            supported_techniques: item.supported_techniques,
+            modality: inferModelModality(item.model_path ?? item.id, item as {
+              id?: string
+              model_path?: string
+              usable_for?: string[]
+              modality?: ModelModality
+          }),
         }
       })
     },
     staleTime: 30_000,
+  })
+}
+
+export function useTrainingCapabilities() {
+  return useQuery<TrainingCapabilitySummary>({
+    queryKey: ['training', 'capabilities'],
+    queryFn: async () => {
+      const tools = await mcpListTools() as MCPTool[]
+      const toolNames = new Set((tools ?? []).map((tool) => tool.name))
+      const validationTool = tools.find((tool) => tool.name === 'validate.schema')
+      const validationEnum = validationTool?.inputSchema?.properties?.technique?.enum
+
+      const availableTechniques: TrainingTechnique[] = []
+
+      if (toolNames.has('finetune.train_async')) availableTechniques.push('sft')
+      if (toolNames.has('finetune.train_dpo_async')) availableTechniques.push('dpo')
+      if (toolNames.has('finetune.train_grpo_async')) availableTechniques.push('grpo')
+      if (toolNames.has('finetune.train_kto_async')) availableTechniques.push('kto')
+      if (toolNames.has('finetune.train_curriculum_async')) availableTechniques.push('curriculum')
+      if (toolNames.has('finetune.train_vlm_async')) availableTechniques.push('vlm_sft')
+      if (toolNames.has('finetune.sequential_train_async')) availableTechniques.push('sequential')
+      const fallbackValidationTechniques = availableTechniques.filter(
+        (value) => value !== 'curriculum' && value !== 'sequential',
+      )
+
+      return {
+        available_techniques: availableTechniques,
+        supports_vlm_sft: toolNames.has('finetune.train_vlm_async'),
+        supported_validation_techniques: Array.isArray(validationEnum)
+          ? validationEnum.map((value) => String(value))
+          : fallbackValidationTechniques,
+      }
+    },
+    staleTime: 60_000,
   })
 }
 
@@ -109,24 +161,31 @@ export function useDeploymentBrowseDir(rootId: string, path: string, enabled: bo
 }
 
 type TrainParams = {
-  technique: 'sft' | 'dpo' | 'grpo' | 'kto' | 'curriculum' | 'sequential'
+  technique: TrainingTechnique
   args: Record<string, unknown>
 }
 
-const TECHNIQUE_TOOLS: Record<string, string> = {
+const TECHNIQUE_TOOLS: Partial<Record<TrainingTechnique, string>> = {
   sft: 'finetune.train_async',
   dpo: 'finetune.train_dpo_async',
   grpo: 'finetune.train_grpo_async',
   kto: 'finetune.train_kto_async',
   curriculum: 'finetune.train_curriculum_async',
+  vlm_sft: 'finetune.train_vlm_async',
   sequential: 'finetune.sequential_train_async',
 }
 
 export function useStartTraining() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ technique, args }: TrainParams) =>
-      mcpCall(TECHNIQUE_TOOLS[technique], args),
+    mutationFn: ({ technique, args }: TrainParams) => {
+      const toolName = TECHNIQUE_TOOLS[technique]
+      if (!toolName) {
+        throw new Error(`Training technique '${technique}' is not available in this build`)
+      }
+
+      return mcpCall(toolName, args)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
     },

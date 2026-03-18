@@ -17,7 +17,7 @@ interface ToolParameterFormProps {
 }
 
 const KNOWN_SELECT_OPTIONS: Record<string, string[]> = {
-  technique: ['sft', 'dpo', 'grpo', 'kto'],
+  technique: ['sft', 'vlm_sft', 'dpo', 'grpo', 'kto'],
   target_format: ['sft', 'dpo', 'grpo', 'kto'],
   difficulty_order: ['easy_first', 'hard_first'],
   use_case: ['general', 'low_memory', 'speed', 'quality', 'multilingual', 'indonesian'],
@@ -63,6 +63,13 @@ function inferDefaultFileName(value: unknown, placeholder: string): string | und
   if (!lastSegment) return undefined
   if (!lastSegment.includes('.')) return undefined
   return lastSegment
+}
+
+function getJsonPlaceholder(name: string, schema: JSONSchemaProperty): string {
+  if (name.toLowerCase() === 'messages') {
+    return '[{"role":"user","content":[{"type":"image_path","image_path":"uploads/images/example.png"},{"type":"text","text":"Describe this image."}]}]'
+  }
+  return `Enter ${schema.type} as JSON`
 }
 
 function renderLabel(name: string, required: boolean, schema: JSONSchemaProperty) {
@@ -198,6 +205,7 @@ function ParameterField({
   }
 
   if (schema.type === 'object' || schema.type === 'array') {
+    const isMessagesField = normalizedName === 'messages'
     return (
       <div className="space-y-1">
         <label className="flex items-center gap-2 text-sm">
@@ -208,6 +216,11 @@ function ParameterField({
         {schema.description && (
           <p className="text-xs text-muted-foreground">{schema.description}</p>
         )}
+        {isMessagesField && (
+          <p className="text-xs text-muted-foreground">
+            Use canonical multimodal message blocks. Upload images first, then reference the returned `image_path`.
+          </p>
+        )}
         <textarea
           value={typeof value === 'string' ? value : value ? JSON.stringify(value, null, 2) : ''}
           onChange={(e) => {
@@ -217,7 +230,7 @@ function ParameterField({
               onChange(e.target.value)
             }
           }}
-          placeholder={placeholder || `Enter ${schema.type} as JSON`}
+          placeholder={placeholder || getJsonPlaceholder(name, schema)}
           rows={3}
           className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono resize-y"
         />

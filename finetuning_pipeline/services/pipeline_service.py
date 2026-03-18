@@ -100,6 +100,9 @@ class FineTuningService:
     async def train_model(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_training().train_model(*a, **kw)
 
+    async def train_vlm_model(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_training().train_vlm_model(*a, **kw)
+
     async def train_dpo_model(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_training().train_dpo_model(*a, **kw)
 
@@ -118,6 +121,9 @@ class FineTuningService:
     # ---- Inference ----
     async def run_inference(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_inference().run_inference(*a, **kw)
+
+    async def run_vlm_inference(self, *a, **kw) -> Dict[str, Any]:
+        return await self._ensure_inference().run_vlm_inference(*a, **kw)
 
     async def compare_models(self, *a, **kw) -> Dict[str, Any]:
         return await self._ensure_inference().compare_models(*a, **kw)

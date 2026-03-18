@@ -123,6 +123,7 @@ class TestHostingServiceVRAMLeak:
         svc._deployments[dep_id] = {
             "id": dep_id,
             "type": "api",
+            "modality": "text",
             "model_path": "test/model",
             "adapter_path": "./adapter",
             "transport": "http",
@@ -130,6 +131,7 @@ class TestHostingServiceVRAMLeak:
             "port": 8080,
             "thread": thread,
             "task": MagicMock(),
+            "routes": ["/generate", "/health"],
         }
 
         result = await svc.list_deployments()
@@ -141,9 +143,11 @@ class TestHostingServiceVRAMLeak:
             "model_path": "test/model",
             "adapter_path": "./adapter",
             "type": "api",
+            "modality": "text",
             "transport": "http",
             "status": "running",
             "endpoint": "http://127.0.0.1:8080",
+            "routes": ["/generate", "/health"],
         }
 
     async def test_list_deployments_normalizes_wildcard_host_endpoint(self):
@@ -156,6 +160,7 @@ class TestHostingServiceVRAMLeak:
         svc._deployments[dep_id] = {
             "id": dep_id,
             "type": "api",
+            "modality": "text",
             "model_path": "test/model",
             "adapter_path": None,
             "transport": "http",
@@ -180,6 +185,7 @@ class TestHostingServiceVRAMLeak:
         svc._deployments[dep_id] = {
             "id": dep_id,
             "type": "api",
+            "modality": "vision-language",
             "model_path": "test/model",
             "adapter_path": None,
             "transport": "http",
@@ -188,6 +194,7 @@ class TestHostingServiceVRAMLeak:
             "thread": thread,
             "task": MagicMock(),
             "server": object(),
+            "routes": ["/generate_vlm", "/health"],
         }
 
         client = AsyncMock()
@@ -205,4 +212,31 @@ class TestHostingServiceVRAMLeak:
 
         client.get.assert_awaited_once_with("http://127.0.0.1:8001/health")
         assert result["endpoint"] == "http://127.0.0.1:8001"
+        assert result["modality"] == "vision-language"
         assert result["health_response"] == {"status": "ok"}
+
+    async def test_list_deployments_includes_vlm_metadata(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-vlm-001"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "type": "api",
+            "modality": "vision-language",
+            "model_path": "test/vlm",
+            "adapter_path": "./adapter",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8090,
+            "thread": thread,
+            "task": MagicMock(),
+            "routes": ["/generate_vlm", "/health"],
+        }
+
+        result = await svc.list_deployments()
+
+        assert result["deployments"][0]["modality"] == "vision-language"
+        assert result["deployments"][0]["routes"] == ["/generate_vlm", "/health"]

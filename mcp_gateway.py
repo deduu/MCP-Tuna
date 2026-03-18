@@ -40,6 +40,7 @@ from shared.config import (
 )
 
 TechniqueName = Literal["sft", "dpo", "grpo", "kto"]
+SchemaTechniqueName = Literal["sft", "dpo", "grpo", "kto", "vlm_sft"]
 DifficultyOrder = Literal["easy_first", "hard_first"]
 ResourceQuantization = Literal["4bit", "8bit", "none", "fp16", "bf16", "fp32"]
 GGUFQuantization = Literal["q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16"]
@@ -515,8 +516,13 @@ class TunaGateway:
         )
         if config is None:
             return None
-        result = await self.hoster.deploy_as_mcp(config)
-        if result.get("success"):
+        deployer = (
+            self.hoster.deploy_vlm_as_mcp
+            if config.modality == "vision-language"
+            else self.hoster.deploy_as_mcp
+        )
+        result = await deployer(config)
+        if result.get("success") and config.modality == "text":
             endpoint = result.get("endpoint", "")
             result["chat_command"] = (
                 f"python scripts/chat_cli.py --endpoint {endpoint}"
@@ -547,6 +553,13 @@ class TunaGateway:
 
         return True
 
+    @staticmethod
+    def _training_modality(train_result: Dict[str, Any]) -> str:
+        config = train_result.get("config")
+        if isinstance(config, dict) and config.get("trainer") == "vlm_sft":
+            return "vision-language"
+        return "text"
+
     def _build_hosting_config_for_training_result(
         self,
         *,
@@ -566,6 +579,7 @@ class TunaGateway:
                 adapter_path=model_path,
                 port=deploy_port,
                 quantization=quantization,
+                modality=self._training_modality(train_result),
             )
 
         return HostingConfig(
@@ -573,6 +587,7 @@ class TunaGateway:
             adapter_path=None,
             port=deploy_port,
             quantization=quantization,
+            modality=self._training_modality(train_result),
         )
 
     @staticmethod
@@ -1964,6 +1979,48 @@ class TunaGateway:
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(
+            name="finetune.train_vlm",
+            description=(
+                "Fine-tune a vision-language model using a multimodal dataset manifest. "
+                "Dataset rows must include canonical 'messages' with image blocks and assistant text. "
+                "This path is additive and does not replace the existing text SFT trainer."
+            ),
+        )
+        async def train_vlm(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+            learning_rate: float = 2e-4,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            max_seq_length: int = 2048,
+            load_in_4bit: bool = True,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+            result = await self.finetuner.train_vlm_model(
+                dataset=load_result["dataset_object"],
+                dataset_path=dataset_path,
+                output_dir=output_dir,
+                base_model=base_model,
+                num_epochs=num_epochs,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                max_seq_length=max_seq_length,
+                load_in_4bit=load_in_4bit,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
             name="finetune.train_dpo",
             description=(
                 "Fine-tune a model with DPO (Direct Preference Optimization) -- "
@@ -2323,6 +2380,72 @@ class TunaGateway:
                 "job_id": job.job_id,
                 "status": "running",
                 "message": "Training started. Use finetune.job_status to monitor progress.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="finetune.train_vlm_async",
+            description=(
+                "Start VLM supervised fine-tuning in the background and return a job_id immediately. "
+                "Dataset rows must use the canonical multimodal 'messages' schema."
+            ),
+        )
+        async def train_vlm_async(
+            dataset_path: str,
+            output_dir: str,
+            base_model: Optional[str] = None,
+            num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = 8,
+            lora_alpha: int = 16,
+            learning_rate: float = 2e-4,
+            per_device_train_batch_size: int = 1,
+            gradient_accumulation_steps: int = 4,
+            max_seq_length: int = 2048,
+            load_in_4bit: bool = True,
+        ) -> str:
+            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
+            if not load_result["success"]:
+                return json.dumps(load_result, indent=2)
+
+            resolved_base = base_model or self.finetuner.config.base_model
+            job = self.job_manager.create_job(
+                trainer_type="vlm_sft",
+                base_model=resolved_base,
+                output_dir=output_dir,
+                config_summary={
+                    "num_epochs": num_epochs,
+                    "lora_r": lora_r,
+                    "batch_size": per_device_train_batch_size,
+                    "learning_rate": learning_rate,
+                    "load_in_4bit": load_in_4bit,
+                },
+            )
+            dataset_obj = load_result["dataset_object"]
+
+            async def _run_training(extra_callbacks=None):
+                return await self.finetuner.train_vlm_model(
+                    dataset=dataset_obj,
+                    dataset_path=dataset_path,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    learning_rate=learning_rate,
+                    per_device_train_batch_size=per_device_train_batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
+                    max_seq_length=max_seq_length,
+                    load_in_4bit=load_in_4bit,
+                    extra_callbacks=extra_callbacks,
+                )
+
+            await self.job_manager.start_job(job.job_id, _run_training)
+            return json.dumps({
+                "success": True,
+                "job_id": job.job_id,
+                "status": "running",
+                "message": "VLM training started. Use finetune.job_status to monitor progress.",
             }, indent=2)
 
         @self.mcp.tool(
@@ -2721,6 +2844,24 @@ class TunaGateway:
             )
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(
+            name="test.vlm_inference",
+            description="Run multimodal inference on structured messages using a local VLM.",
+        )
+        async def run_vlm_inference(
+            messages: List[Dict[str, Any]],
+            model_path: str,
+            adapter_path: Optional[str] = None,
+            max_new_tokens: int = 512,
+        ) -> str:
+            result = await self.finetuner.run_vlm_inference(
+                messages=messages,
+                model_path=model_path,
+                adapter_path=adapter_path,
+                max_new_tokens=max_new_tokens,
+            )
+            return json.dumps(result, indent=2)
+
     # -- Validate --
     def _register_validate_tools(self):
         @self.mcp.tool(name="validate.model_info",
@@ -2771,13 +2912,13 @@ class TunaGateway:
             name="validate.schema",
             description=(
                 "Validate that a dataset file has the correct columns for a "
-                "training technique (sft, dpo, grpo, kto). Returns success, "
+                "training technique (sft, dpo, grpo, kto, vlm_sft). Returns success, "
                 "detected technique, expected columns, and any mismatches."
             ),
         )
         async def validate_schema(
             dataset_path: str,
-            technique: TechniqueName = "sft",
+            technique: SchemaTechniqueName = "sft",
         ) -> str:
             meta = await self.dataset_service.info(dataset_path)
             if not meta.get("success"):
@@ -2791,6 +2932,7 @@ class TunaGateway:
                 "dpo": {"prompt", "chosen", "rejected"},
                 "grpo": {"prompt", "responses", "rewards"},
                 "kto": {"prompt", "completion", "label"},
+                "vlm_sft": {"messages"},
             }
             required = expected.get(technique, set())
             col_set = set(columns)
@@ -2857,6 +2999,26 @@ class TunaGateway:
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
 
         @self.mcp.tool(
+            name="host.deploy_vlm_mcp",
+            description=(
+                "Deploy a vision-language model as an MCP tool server. "
+                "Returns deployment_id and endpoint URL."
+            ),
+        )
+        async def deploy_vlm_mcp(
+            model_path: str,
+            adapter_path: Optional[str] = None,
+            port: int = 8001,
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                port=port,
+                modality="vision-language",
+            )
+            return json.dumps(await self.hoster.deploy_vlm_as_mcp(config), indent=2)
+
+        @self.mcp.tool(
             name="host.deploy_api",
             description=(
                 "Deploy a fine-tuned model as a REST API with /generate endpoint. "
@@ -2874,6 +3036,26 @@ class TunaGateway:
                 port=port, quantization=quantization,
             )
             return json.dumps(await self.hoster.deploy_as_api(config), indent=2)
+
+        @self.mcp.tool(
+            name="host.deploy_vlm_api",
+            description=(
+                "Deploy a vision-language model as a REST API with a /generate_vlm endpoint. "
+                "Returns deployment_id and endpoint URL."
+            ),
+        )
+        async def deploy_vlm_api(
+            model_path: str,
+            adapter_path: Optional[str] = None,
+            port: int = 8001,
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                port=port,
+                modality="vision-language",
+            )
+            return json.dumps(await self.hoster.deploy_vlm_as_api(config), indent=2)
 
         @self.mcp.tool(name="host.list_deployments",
                        description="List running model deployments")
@@ -2895,7 +3077,7 @@ class TunaGateway:
         @self.mcp.tool(
             name="host.chat",
             description=(
-                "Chat with a deployed or local fine-tuned model. "
+                "Chat with a deployed or local text fine-tuned model. "
                 "IMPORTANT: After any finetune.train* with deploy=True succeeds, "
                 "offer to use this tool so the user can test the model interactively. "
                 "Pass deployment_id to use an active deployment directly, or pass the endpoint "
@@ -2920,11 +3102,23 @@ class TunaGateway:
 
             if cid in self._chat_sessions:
                 session = self._chat_sessions[cid]
+                if session.get_info().get("modality") != "text":
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": "Conversation is multimodal. Use host.chat_vlm for this conversation.",
+                            "conversation_id": cid,
+                        },
+                        indent=2,
+                    )
             else:
                 provider = None
+                inference_service = None
                 resolved_endpoint = endpoint
                 resolved_model_path = model_path
                 resolved_adapter_path = adapter_path
+                resolved_api_path = "/generate"
+                modality = "text"
 
                 if deployment_id:
                     deployment = self.hoster.get_deployment(deployment_id)
@@ -2941,12 +3135,23 @@ class TunaGateway:
                         if deployment.get("transport") == "http"
                         else None
                     )
+                    modality = deployment.get("modality", "text")
+                    if modality != "text":
+                        return json.dumps(
+                            {
+                                "success": False,
+                                "error": "Deployment is vision-language. Use host.chat_vlm instead.",
+                            },
+                            indent=2,
+                        )
                     if deployment.get("type") == "api" and deployment_endpoint:
                         resolved_endpoint = deployment_endpoint
+                        resolved_api_path = deployment.get("api_path") or "/generate"
                     else:
                         resolved_model_path = deployment.get("model_path")
                         resolved_adapter_path = deployment.get("adapter_path")
                         provider = deployment.get("provider")
+                        inference_service = deployment.get("inference_service")
 
                 config = ChatConfig(
                     endpoint=resolved_endpoint,
@@ -2954,8 +3159,14 @@ class TunaGateway:
                     adapter_path=resolved_adapter_path,
                     max_new_tokens=max_new_tokens,
                     system_prompt=system_prompt,
+                    modality=modality,
+                    api_path=resolved_api_path,
                 )
-                session = ChatSession(config, provider=provider)
+                session = ChatSession(
+                    config,
+                    provider=provider,
+                    inference_service=inference_service,
+                )
                 await session.initialize()
                 self._chat_sessions[cid] = session
 
@@ -2967,6 +3178,118 @@ class TunaGateway:
                     "deployment_id": deployment_id,
                     "response": response,
                     "turns": session.get_info()["turns"],
+                },
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="host.chat_vlm",
+            description=(
+                "Chat with a deployed or local vision-language model using structured multimodal messages. "
+                "Pass deployment_id to reuse an active VLM deployment, or pass endpoint/model_path directly. "
+                "Use conversation_id to maintain multi-turn context across calls."
+            ),
+        )
+        async def chat_with_vlm(
+            messages: Union[str, List[Dict[str, Any]]],
+            deployment_id: Optional[str] = None,
+            endpoint: Optional[str] = None,
+            model_path: Optional[str] = None,
+            adapter_path: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            max_new_tokens: int = 512,
+            system_prompt: Optional[str] = None,
+        ) -> str:
+            from hosting_pipeline.services.chat_service import ChatSession
+
+            parsed_messages = messages
+            if isinstance(parsed_messages, str):
+                parsed_messages = json.loads(parsed_messages)
+            if not isinstance(parsed_messages, list) or not parsed_messages:
+                return json.dumps(
+                    {"success": False, "error": "messages must be a non-empty list"},
+                    indent=2,
+                )
+
+            cid = conversation_id or str(uuid.uuid4())[:8]
+
+            if cid in self._chat_sessions:
+                session = self._chat_sessions[cid]
+                if session.get_info().get("modality") != "vision-language":
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": "Conversation is text-only. Use host.chat for this conversation.",
+                            "conversation_id": cid,
+                        },
+                        indent=2,
+                    )
+            else:
+                provider = None
+                inference_service = None
+                resolved_endpoint = endpoint
+                resolved_model_path = model_path
+                resolved_adapter_path = adapter_path
+                resolved_api_path = "/generate_vlm"
+
+                if deployment_id:
+                    deployment = self.hoster.get_deployment(deployment_id)
+                    if deployment is None:
+                        return json.dumps(
+                            {"success": False, "error": f"Deployment {deployment_id} not found"},
+                            indent=2,
+                        )
+                    deployment_host = deployment.get("host")
+                    if deployment_host in {"0.0.0.0", "::"}:
+                        deployment_host = "127.0.0.1"
+                    deployment_endpoint = (
+                        f"http://{deployment_host}:{deployment['port']}"
+                        if deployment.get("transport") == "http"
+                        else None
+                    )
+                    if deployment.get("modality") != "vision-language":
+                        return json.dumps(
+                            {
+                                "success": False,
+                                "error": "Deployment is text-only. Use host.chat instead.",
+                            },
+                            indent=2,
+                        )
+                    if deployment.get("type") == "api" and deployment_endpoint:
+                        resolved_endpoint = deployment_endpoint
+                        resolved_api_path = deployment.get("api_path") or "/generate_vlm"
+                    else:
+                        resolved_model_path = deployment.get("model_path")
+                        resolved_adapter_path = deployment.get("adapter_path")
+                        inference_service = deployment.get("inference_service")
+                        provider = deployment.get("provider")
+
+                config = ChatConfig(
+                    endpoint=resolved_endpoint,
+                    model_path=resolved_model_path,
+                    adapter_path=resolved_adapter_path,
+                    max_new_tokens=max_new_tokens,
+                    system_prompt=system_prompt,
+                    modality="vision-language",
+                    api_path=resolved_api_path,
+                )
+                session = ChatSession(
+                    config,
+                    provider=provider,
+                    inference_service=inference_service,
+                )
+                await session.initialize()
+                self._chat_sessions[cid] = session
+
+            response = await session.send_messages(parsed_messages)
+            return json.dumps(
+                {
+                    "success": True,
+                    "conversation_id": cid,
+                    "deployment_id": deployment_id,
+                    "response": response,
+                    "turns": session.get_info()["turns"],
+                    "modality": "vision-language",
                 },
                 indent=2,
             )
@@ -3588,6 +3911,68 @@ class TunaGateway:
                 judges=judges,
                 criteria=criteria,
                 aggregation="mean",
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.evaluate_vlm",
+            description="Run a single multimodal judge evaluation using text and image message blocks.",
+        )
+        async def judge_evaluate_vlm(
+            messages: List[Dict[str, Any]],
+            generated: str,
+            reference: Optional[str] = None,
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+        ) -> str:
+            result = await self.advanced_judge.evaluate_vlm_single(
+                messages=messages,
+                generated=generated,
+                reference=reference,
+                judge_model=judge_model,
+                criteria=criteria,
+                rubric=rubric,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.compare_vlm",
+            description="Compare two candidate answers against the same multimodal input.",
+        )
+        async def judge_compare_vlm(
+            messages: List[Dict[str, Any]],
+            generated_a: str,
+            generated_b: str,
+            reference: Optional[str] = None,
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+        ) -> str:
+            result = await self.advanced_judge.compare_vlm(
+                messages=messages,
+                generated_a=generated_a,
+                generated_b=generated_b,
+                reference=reference,
+                judge_model=judge_model,
+                criteria=criteria,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="judge.evaluate_vlm_batch",
+            description="Run batch multimodal judge evaluation on rows with canonical messages plus generated outputs.",
+        )
+        async def judge_evaluate_vlm_batch(
+            test_data: List[Dict],
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+        ) -> str:
+            result = await self.advanced_judge.evaluate_vlm_batch(
+                test_data=test_data,
+                judge_model=judge_model,
+                criteria=criteria,
+                rubric=rubric,
             )
             return json.dumps(result, indent=2)
 

@@ -17,6 +17,7 @@ export function DashboardPage() {
       toolsByNamespace[ns] = (toolsByNamespace[ns] ?? 0) + 1
     }
   }
+  const vlmToolCount = tools?.filter((tool) => tool.name.includes('vlm')).length ?? 0
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -25,9 +26,12 @@ export function DashboardPage() {
         <div>
           <h2 className="text-xl font-bold">MCP Tuna</h2>
           <p className="text-sm text-muted-foreground">
-            End-to-end LLM fine-tuning platform
+            Text and vision-language fine-tuning, deployment, and evaluation platform
           </p>
         </div>
+        {vlmToolCount > 0 && (
+          <Badge variant="outline">VLM-ready: {vlmToolCount} tools</Badge>
+        )}
         {tools && (
           <Badge variant="secondary" className="ml-auto">
             <Wrench className="h-3 w-3 mr-1" />

@@ -11,6 +11,7 @@ export interface DeployDialogInitialValues {
   adapterPath?: string
   port?: number
   quantization?: '4bit' | '8bit' | 'none'
+  modality?: 'text' | 'vision-language'
 }
 
 interface DeployDialogProps {
@@ -25,6 +26,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
   const [adapterPath, setAdapterPath] = useState('')
   const [port, setPort] = useState('8001')
   const [quantization, setQuantization] = useState('4bit')
+  const [modality, setModality] = useState<'text' | 'vision-language'>('text')
 
   const deployMutation = useDeploy()
 
@@ -35,6 +37,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
     setAdapterPath(initialValues?.adapterPath ?? '')
     setPort(String(initialValues?.port ?? 8001))
     setQuantization(initialValues?.quantization ?? '4bit')
+    setModality(initialValues?.modality ?? 'text')
   }, [open, initialValues, type])
 
   const handleDeploy = () => {
@@ -53,15 +56,15 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
 
     args.port = parseInt(port, 10)
 
-    if (quantization !== "none") {
+    if (modality === 'text' && quantization !== "none") {
       args.quantization = quantization
     }
 
     deployMutation.mutate(
-      { type, args },
+      { type, modality, args },
       {
         onSuccess: () => {
-          toast.success(`Model deployed as ${type === 'mcp' ? 'MCP server' : 'API endpoint'}`)
+          toast.success(`${modality === 'vision-language' ? 'Vision-language' : 'Text'} model deployed as ${type === 'mcp' ? 'MCP server' : 'API endpoint'}`)
           resetForm()
           onClose()
         },
@@ -77,6 +80,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
     setAdapterPath('')
     setPort('8001')
     setQuantization('4bit')
+    setModality('text')
   }
 
   const title = type === 'mcp' ? 'Deploy as MCP Server' : 'Deploy as API Endpoint'
@@ -89,12 +93,48 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
         </div>
 
         <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Modality</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setModality('text')}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                modality === 'text'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-input text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Text
+            </button>
+            <button
+              type="button"
+              onClick={() => setModality('vision-language')}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                modality === 'vision-language'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-input text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Vision-Language
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium">Model Path <span className="text-destructive">*</span></label>
           <ModelPathField
             value={modelPath}
             onChange={setModelPath}
-            placeholder="meta-llama/Llama-3.2-1B-Instruct or C:/models/base"
-            helperText="Base model folder or Hugging Face model ID."
+            placeholder={
+              modality === 'vision-language'
+                ? 'Qwen/Qwen2.5-VL-3B-Instruct or C:/models/vlm-base'
+                : 'meta-llama/Llama-3.2-1B-Instruct or C:/models/base'
+            }
+            helperText={
+              modality === 'vision-language'
+                ? 'Vision-language base model folder or Hugging Face model ID.'
+                : 'Base model folder or Hugging Face model ID.'
+            }
             validationPurpose="model"
           />
         </div>
@@ -124,6 +164,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           <select
             value={quantization}
             onChange={(e) => setQuantization(e.target.value)}
+            disabled={modality === 'vision-language'}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="4bit">4-bit (recommended, saves memory)</option>
@@ -131,7 +172,9 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
             <option value="none">None (full precision)</option>
           </select>
           <p className="text-xs text-muted-foreground">
-            4-bit quantization significantly reduces memory usage. Use &quot;None&quot; only if you have enough VRAM/RAM.
+            {modality === 'vision-language'
+              ? 'Current VLM deployment uses the multimodal inference path and ignores quantization overrides for now.'
+              : '4-bit quantization significantly reduces memory usage. Use "None" only if you have enough VRAM/RAM.'}
           </p>
         </div>
 
@@ -139,8 +182,12 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           <label className="text-sm font-medium">Runtime Details</label>
           <p className="rounded-md border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
             {type === 'mcp'
-              ? 'MCP deployments expose a hosted MCP server on the selected port.'
-              : 'API deployments expose fixed routes: /generate and /health.'}
+              ? modality === 'vision-language'
+                ? 'VLM MCP deployments expose a hosted MCP server with a generate_vlm tool.'
+                : 'MCP deployments expose a hosted MCP server on the selected port.'
+              : modality === 'vision-language'
+                ? 'VLM API deployments expose /generate_vlm and /health.'
+                : 'API deployments expose fixed routes: /generate and /health.'}
           </p>
         </div>
 

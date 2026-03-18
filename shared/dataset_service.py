@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.dataset_models import DatasetConfig, DatasetMetadata
+from shared.multimodal_models import (
+    extract_text_from_content,
+    is_vlm_sample,
+)
 
 
 class DatasetService:
@@ -68,13 +72,14 @@ class DatasetService:
 
         columns = list(data_points[0].keys()) if data_points else []
         stat = path.stat() if path.exists() else None
+        sample_row = data_points[0] if data_points else None
         meta = DatasetMetadata(
             dataset_id=path.stem,
             file_path=str(path.resolve()),
             format=format,
             row_count=len(data_points),
             columns=columns,
-            technique=self._detect_technique(columns),
+            technique=self._detect_technique(columns, sample_row),
             size_bytes=stat.st_size if stat else 0,
             modified_at=(
                 datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
@@ -120,7 +125,7 @@ class DatasetService:
             "data_points": data_points,
             "row_count": len(data_points),
             "columns": columns,
-            "technique": self._detect_technique(columns),
+            "technique": self._detect_technique(columns, data_points[0] if data_points else None),
         }
 
     # ------------------------------------------------------------------
@@ -174,13 +179,14 @@ class DatasetService:
 
         # Determine row count and columns efficiently
         if ext == ".jsonl":
-            row_count, columns = await asyncio.to_thread(self._inspect_jsonl, path)
+            row_count, columns, sample_row = await asyncio.to_thread(self._inspect_jsonl, path)
         else:
             full = await self.load(file_path)
             if not full["success"]:
                 return full
             row_count = full["row_count"]
             columns = full["columns"]
+            sample_row = full["data_points"][0] if full["data_points"] else None
 
         meta = DatasetMetadata(
             dataset_id=path.stem,
@@ -188,7 +194,7 @@ class DatasetService:
             format=fmt,
             row_count=row_count,
             columns=columns,
-            technique=self._detect_technique(columns),
+            technique=self._detect_technique(columns, sample_row),
             size_bytes=path.stat().st_size,
             modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         )
@@ -422,8 +428,13 @@ class DatasetService:
     # ---- technique detection ----
 
     @staticmethod
-    def _detect_technique(columns: List[str]) -> Optional[str]:
+    def _detect_technique(
+        columns: List[str],
+        sample_row: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         cols = set(columns)
+        if sample_row and is_vlm_sample(sample_row):
+            return "vlm_sft"
         if {"instruction", "output"}.issubset(cols):
             return "sft"
         if {"prompt", "chosen", "rejected"}.issubset(cols):
@@ -545,10 +556,11 @@ class DatasetService:
         return rows, total
 
     @staticmethod
-    def _inspect_jsonl(path: Path) -> tuple[int, List[str]]:
-        """Count rows and extract columns from first row."""
+    def _inspect_jsonl(path: Path) -> tuple[int, List[str], Optional[Dict[str, Any]]]:
+        """Count rows and extract columns and the first row."""
         columns: List[str] = []
         count = 0
+        sample_row: Optional[Dict[str, Any]] = None
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -556,8 +568,9 @@ class DatasetService:
                     continue
                 count += 1
                 if count == 1:
-                    columns = list(json.loads(line).keys())
-        return count, columns
+                    sample_row = json.loads(line)
+                    columns = list(sample_row.keys())
+        return count, columns, sample_row
 
     async def sample_text_stats(
         self,
@@ -600,6 +613,13 @@ class DatasetService:
                         for k in _TEXT_FIELDS
                         if k in row
                     )
+                    messages = row.get("messages")
+                    if isinstance(messages, list):
+                        total += sum(
+                            len(extract_text_from_content(message.get("content")))
+                            for message in messages
+                            if isinstance(message, dict)
+                        )
                     if total > 0:
                         lengths.append(total)
             return lengths

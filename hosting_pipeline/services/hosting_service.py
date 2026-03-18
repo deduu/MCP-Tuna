@@ -6,7 +6,7 @@ import socket
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, List
 
 from shared.config import HostingConfig
 from shared.gpu_lock import GPULock
@@ -172,11 +172,14 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "type": "mcp",
+                "modality": config.modality,
                 "model_path": config.model_path,
                 "adapter_path": config.adapter_path,
                 "transport": config.transport,
                 "host": config.host,
                 "port": config.port,
+                "api_path": None,
+                "routes": [],
                 "task": runtime.get("task"),
                 "loop": runtime.get("loop"),
                 "thread": runtime.get("thread"),
@@ -190,6 +193,7 @@ class HostingService:
                 "type": "mcp",
                 "status": "running",
                 "model_path": config.model_path,
+                "modality": config.modality,
                 "transport": config.transport,
                 "endpoint": (
                     f"http://{_client_endpoint_host(config.host)}:{config.port}"
@@ -233,7 +237,11 @@ class HostingService:
 
             @app.get("/health")
             async def health():
-                return {"status": "ok", "model": config.model_path}
+                return {
+                    "status": "ok",
+                    "model": config.model_path,
+                    "modality": config.modality,
+                }
 
             deployment_id = str(uuid.uuid4())[:8]
 
@@ -263,11 +271,14 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "type": "api",
+                "modality": config.modality,
                 "model_path": config.model_path,
                 "adapter_path": config.adapter_path,
                 "transport": "http",
                 "host": config.host,
                 "port": config.port,
+                "api_path": "/generate",
+                "routes": ["/generate", "/health"],
                 "task": runtime.get("task"),
                 "loop": runtime.get("loop"),
                 "thread": runtime.get("thread"),
@@ -281,8 +292,202 @@ class HostingService:
                 "type": "api",
                 "status": "running",
                 "model_path": config.model_path,
+                "modality": config.modality,
                 "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
                 "routes": ["/generate", "/health"],
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def deploy_vlm_as_mcp(self, config: HostingConfig) -> Dict[str, Any]:
+        """Deploy a VLM as an MCP tool server with a multimodal inference tool."""
+        try:
+            from agentsoul.server import MCPServer, HTTPTransport, StdioTransport
+
+            from finetuning_pipeline.services.inference_service import InferenceService
+
+            inference = InferenceService()
+            mcp = MCPServer(f"hosted-vlm-{config.port}", "1.0.0")
+
+            @mcp.tool(
+                name="generate_vlm",
+                description=f"Run multimodal generation with VLM at {config.model_path}",
+            )
+            async def generate_vlm(
+                messages: List[Dict[str, Any]],
+                max_new_tokens: int = 512,
+            ) -> str:
+                result = await inference.run_vlm_inference(
+                    messages=messages,
+                    model_path=config.model_path,
+                    adapter_path=config.adapter_path,
+                    max_new_tokens=max_new_tokens,
+                )
+                if not result.get("success"):
+                    raise RuntimeError(result.get("error", "VLM generation failed"))
+                return result.get("response", "")
+
+            deployment_id = str(uuid.uuid4())[:8]
+
+            if config.transport == "http":
+                transport = HTTPTransport(host=config.host, port=config.port)
+            else:
+                transport = StdioTransport()
+
+            runtime = self._start_background_runtime(
+                lambda: transport.start(mcp),
+                name=f"hosted-vlm-mcp-{config.port}",
+            )
+            if runtime.get("error") is not None:
+                raise runtime["error"]
+
+            if config.transport == "http":
+                started = await self._wait_for_port(config.host, config.port)
+                if not started:
+                    task = runtime.get("task")
+                    if task is not None and task.done():
+                        try:
+                            exc = task.exception()
+                        except Exception:
+                            exc = None
+                        if exc is not None:
+                            raise exc
+                    raise TimeoutError(
+                        f"Hosted VLM MCP server did not start listening on port {config.port}"
+                    )
+
+            self._deployments[deployment_id] = {
+                "id": deployment_id,
+                "type": "mcp",
+                "modality": "vision-language",
+                "model_path": config.model_path,
+                "adapter_path": config.adapter_path,
+                "transport": config.transport,
+                "host": config.host,
+                "port": config.port,
+                "api_path": None,
+                "routes": [],
+                "task": runtime.get("task"),
+                "loop": runtime.get("loop"),
+                "thread": runtime.get("thread"),
+                "mcp": mcp,
+                "provider": None,
+                "inference_service": inference,
+            }
+
+            return {
+                "success": True,
+                "deployment_id": deployment_id,
+                "type": "mcp",
+                "modality": "vision-language",
+                "status": "running",
+                "model_path": config.model_path,
+                "transport": config.transport,
+                "endpoint": (
+                    f"http://{_client_endpoint_host(config.host)}:{config.port}"
+                    if config.transport == "http"
+                    else "stdio"
+                ),
+                "tools": ["generate_vlm"],
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def deploy_vlm_as_api(self, config: HostingConfig) -> Dict[str, Any]:
+        """Deploy a VLM as a FastAPI endpoint with a /generate_vlm route."""
+        try:
+            from fastapi import FastAPI, HTTPException
+            import uvicorn
+
+            from finetuning_pipeline.services.inference_service import InferenceService
+
+            inference = InferenceService()
+            app = FastAPI(title=f"MCP Tuna VLM: {config.model_path}")
+
+            @app.post("/generate_vlm")
+            async def generate_vlm(payload: Dict[str, Any]):
+                messages = payload.get("messages")
+                if not isinstance(messages, list) or not messages:
+                    raise HTTPException(status_code=400, detail="Payload requires non-empty 'messages'")
+
+                result = await inference.run_vlm_inference(
+                    messages=messages,
+                    model_path=config.model_path,
+                    adapter_path=config.adapter_path,
+                    max_new_tokens=int(payload.get("max_new_tokens", 512)),
+                    temperature=float(payload.get("temperature", 0.7)),
+                )
+                if not result.get("success"):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=result.get("error", "VLM generation failed"),
+                    )
+                return {
+                    "response": result.get("response", ""),
+                    "details": result,
+                }
+
+            @app.get("/health")
+            async def health():
+                return {
+                    "status": "ok",
+                    "model": config.model_path,
+                    "modality": "vision-language",
+                }
+
+            deployment_id = str(uuid.uuid4())[:8]
+
+            server_config = uvicorn.Config(app, host=config.host, port=config.port, log_level="info")
+            server = uvicorn.Server(server_config)
+            runtime = self._start_background_runtime(
+                server.serve,
+                name=f"hosted-vlm-api-{config.port}",
+            )
+            if runtime.get("error") is not None:
+                raise runtime["error"]
+
+            started = await self._wait_for_port(config.host, config.port)
+            if not started:
+                task = runtime.get("task")
+                if task is not None and task.done():
+                    try:
+                        exc = task.exception()
+                    except Exception:
+                        exc = None
+                    if exc is not None:
+                        raise exc
+                raise TimeoutError(
+                    f"Hosted VLM API server did not start listening on port {config.port}"
+                )
+
+            self._deployments[deployment_id] = {
+                "id": deployment_id,
+                "type": "api",
+                "modality": "vision-language",
+                "model_path": config.model_path,
+                "adapter_path": config.adapter_path,
+                "transport": "http",
+                "host": config.host,
+                "port": config.port,
+                "api_path": "/generate_vlm",
+                "routes": ["/generate_vlm", "/health"],
+                "task": runtime.get("task"),
+                "loop": runtime.get("loop"),
+                "thread": runtime.get("thread"),
+                "server": server,
+                "provider": None,
+                "inference_service": inference,
+            }
+
+            return {
+                "success": True,
+                "deployment_id": deployment_id,
+                "type": "api",
+                "modality": "vision-language",
+                "status": "running",
+                "model_path": config.model_path,
+                "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
+                "routes": ["/generate_vlm", "/health"],
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -305,11 +510,12 @@ class HostingService:
         """List currently running model deployments."""
         deployments = []
         for dep_id, dep in self._deployments.items():
-            deployments.append({
+            deployment = {
                 "deployment_id": dep_id,
                 "model_path": dep["model_path"],
                 "adapter_path": dep.get("adapter_path"),
                 "type": dep.get("type", "mcp"),
+                "modality": dep.get("modality", "text"),
                 "transport": dep["transport"],
                 "status": self._deployment_status(dep),
                 "endpoint": (
@@ -317,7 +523,11 @@ class HostingService:
                     if dep["transport"] == "http"
                     else "stdio"
                 ),
-            })
+            }
+            routes = dep.get("routes")
+            if routes:
+                deployment["routes"] = routes
+            deployments.append(deployment)
         return {"success": True, "deployments": deployments, "count": len(deployments)}
 
     async def stop_deployment(self, deployment_id: str) -> Dict[str, Any]:
@@ -367,6 +577,7 @@ class HostingService:
             "success": True,
             "deployment_id": deployment_id,
             "type": dep.get("type", "mcp"),
+            "modality": dep.get("modality", "text"),
             "transport": dep.get("transport"),
             "status": "running" if is_alive else "stopped",
             "model_path": dep.get("model_path"),
@@ -377,6 +588,8 @@ class HostingService:
                 else "stdio"
             ),
         }
+        if dep.get("routes"):
+            result["routes"] = dep["routes"]
 
         # For API deployments, try hitting the /health endpoint
         if is_alive and dep.get("server"):

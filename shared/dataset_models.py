@@ -24,7 +24,7 @@ class DatasetMetadata(BaseModel):
     format: str
     row_count: int
     columns: List[str]
-    technique: Optional[str] = None  # sft | dpo | grpo | kto | None
+    technique: Optional[str] = None  # sft | dpo | grpo | kto | vlm_sft | None
     size_bytes: int = 0
     modified_at: Optional[str] = None
 

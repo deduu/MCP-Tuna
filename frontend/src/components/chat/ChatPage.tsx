@@ -2,8 +2,11 @@ import { useEffect, useRef } from 'react'
 import { User } from 'lucide-react'
 import { useChatStore } from '@/stores/chat'
 import { useToolCount } from '@/api/hooks/useToolRegistry'
+import { useDeployments } from '@/api/hooks/useDeployments'
+import type { ChatContentBlock } from '@/lib/chat-content'
 import { AssistantMessage } from './AssistantMessage'
 import { ChatInput } from './ChatInput'
+import { MessageBlocks } from './MessageBlocks'
 import { Button } from '@/components/ui/button'
 import { Trash2 } from 'lucide-react'
 
@@ -14,7 +17,9 @@ export function ChatPage() {
   const selectedDeploymentId = useChatStore((s) => s.selectedDeploymentId)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const { toolCount } = useToolCount()
+  const { data: deployments = [] } = useDeployments()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const selectedDeployment = deployments.find((deployment) => deployment.deployment_id === selectedDeploymentId) ?? null
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -51,13 +56,18 @@ export function ChatPage() {
           <EmptyState
             chatMode={chatMode}
             selectedDeploymentId={selectedDeploymentId}
+            selectedDeploymentModality={selectedDeployment?.modality ?? 'text'}
             toolCount={toolCount}
           />
         ) : (
           <div className="max-w-3xl mx-auto py-6 px-4 space-y-6">
             {messages.map((msg) =>
               msg.role === 'user' ? (
-                <UserMessage key={msg.id} content={msg.content} />
+                msg.parts ? (
+                  <UserMessageWithParts key={msg.id} parts={msg.parts} />
+                ) : (
+                  <UserMessage key={msg.id} content={msg.content} />
+                )
               ) : (
                 <AssistantMessage key={msg.id} message={msg} />
               ),
@@ -87,13 +97,28 @@ function UserMessage({ content }: { content: string }) {
   )
 }
 
+function UserMessageWithParts({ parts }: { parts: ChatContentBlock[] }) {
+  return (
+    <div className="flex gap-3 max-w-3xl">
+      <div className="shrink-0 mt-1">
+        <div className="h-7 w-7 rounded-full bg-secondary flex items-center justify-center">
+          <User className="h-4 w-4 text-muted-foreground" />
+        </div>
+      </div>
+      <MessageBlocks blocks={parts} className="pt-1" />
+    </div>
+  )
+}
+
 function EmptyState({
   chatMode,
   selectedDeploymentId,
+  selectedDeploymentModality,
   toolCount,
 }: {
   chatMode: 'agent' | 'deployment'
   selectedDeploymentId: string | null
+  selectedDeploymentModality: 'text' | 'vision-language' | 'unknown'
   toolCount: number
 }) {
   const title = chatMode === 'agent' ? 'Agent Chat' : 'Deployed Local Chat'
@@ -101,11 +126,13 @@ function EmptyState({
     chatMode === 'agent'
       ? `Chat with the MCP Tuna agent. It can use any of the ${toolCount || 'available'} tools to generate data, train models, deploy endpoints, and more.`
       : selectedDeploymentId
-        ? 'Chat directly with the selected deployed model. This mode does not use MCP tools or agent planning.'
+        ? selectedDeploymentModality === 'vision-language'
+          ? 'Chat directly with the selected deployed vision-language model. You can attach images and text together in this mode.'
+          : 'Chat directly with the selected deployed model. This mode does not use MCP tools or agent planning.'
         : 'Select a running deployment below to chat directly with a local model without MCP tool use.'
   const detail =
     chatMode === 'agent'
-      ? "You'll see the agent's thinking, tool calls, and decisions in real time."
+      ? "You'll see the agent's thinking, tool calls, and decisions in real time. Images are forwarded as structured multimodal message blocks."
       : 'Use this mode when you want a manually deployed local model to stay fully under your own resource control.'
 
   return (

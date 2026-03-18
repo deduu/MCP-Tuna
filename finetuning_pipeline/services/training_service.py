@@ -16,6 +16,13 @@ from typing import Any, Dict, List, Optional, Union
 from shared.async_utils import run_sync
 from shared.config import FinetuningConfig
 from shared.exceptions import OOMError
+from shared.multimodal_models import is_vlm_sample
+
+from .vlm_utils import (
+    build_vlm_prompt_and_images,
+    get_processor_tokenizer,
+    resolve_dataset_base_dir,
+)
 
 
 class TrainingService:
@@ -189,6 +196,32 @@ class TrainingService:
         except Exception:
             return False
 
+    def _build_quantization_config(self, load_in_4bit: bool, torch_module: Any) -> Any:
+        """Build a BitsAndBytes config when 4-bit loading is requested and available."""
+        if not load_in_4bit:
+            return None
+
+        logger = logging.getLogger(__name__)
+        if not self._preflight_bnb_check():
+            logger.warning(
+                "bitsandbytes preflight failed - falling back to "
+                "float16/bfloat16 without 4-bit quantization"
+            )
+            return None
+
+        try:
+            import bitsandbytes  # noqa: F401
+            from transformers import BitsAndBytesConfig
+
+            return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_module.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+        except Exception:
+            return None
+
     def _load_model_and_tokenizer(
         self, model_name: str, kwargs: dict
     ) -> tuple[Any, Any]:
@@ -294,6 +327,70 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
+
+    def _load_vlm_model_and_processor(
+        self, model_name: str, kwargs: dict
+    ) -> tuple[Any, Any]:
+        """Load a processor-backed VLM model with optional 4-bit quantization."""
+        import torch
+        from transformers import AutoProcessor
+
+        logger = logging.getLogger(__name__)
+        resolved_model_name = self._resolve_model_path(model_name)
+        local_files_only = bool(kwargs.pop("local_files_only", False))
+        load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
+        cuda_available, bf16_supported = self._detect_precision()
+        model_dtype = (
+            torch.bfloat16
+            if bf16_supported
+            else (torch.float16 if cuda_available else torch.float32)
+        )
+
+        processor = AutoProcessor.from_pretrained(
+            resolved_model_name,
+            local_files_only=local_files_only,
+        )
+        tokenizer_like = get_processor_tokenizer(processor)
+        if getattr(tokenizer_like, "pad_token", None) is None and getattr(tokenizer_like, "eos_token", None) is not None:
+            tokenizer_like.pad_token = tokenizer_like.eos_token
+
+        quantization_config = self._build_quantization_config(load_in_4bit, torch)
+        common_kwargs = {
+            "device_map": "auto",
+            "quantization_config": quantization_config,
+            "local_files_only": local_files_only,
+            "low_cpu_mem_usage": True,
+        }
+        if quantization_config is None:
+            common_kwargs["torch_dtype"] = model_dtype
+
+        errors: List[str] = []
+        model = None
+        for loader_name in ("AutoModelForVision2Seq", "AutoModelForImageTextToText"):
+            try:
+                transformers_mod = __import__("transformers", fromlist=[loader_name])
+                loader = getattr(transformers_mod, loader_name)
+                model = loader.from_pretrained(resolved_model_name, **common_kwargs)
+                break
+            except Exception as exc:
+                errors.append(f"{loader_name}: {exc}")
+
+        if model is None:
+            raise RuntimeError(
+                "Unable to load a VLM-compatible model class. "
+                + " | ".join(errors[-2:])
+            )
+
+        if quantization_config is not None:
+            try:
+                from peft import prepare_model_for_kbit_training
+
+                model = prepare_model_for_kbit_training(model)
+            except ImportError:
+                pass
+
+        logger.info("Loaded VLM model and processor from %s", resolved_model_name)
+        return model, processor
 
     def _save_on_interrupt(
         self, trainer: Any, tokenizer: Any, output_dir: str
@@ -684,6 +781,195 @@ class TrainingService:
             if hub_url:
                 result["hub_url"] = hub_url
             return result
+        except Exception as e:
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "error": str(e),
+                "output_dir": output_dir,
+                "base_model": model_name,
+            }
+
+    async def train_vlm_model(
+        self,
+        dataset: Any,
+        output_dir: str,
+        base_model: Optional[str] = None,
+        dataset_path: Optional[str] = None,
+        num_epochs: int = 3,
+        use_lora: bool = True,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.05,
+        extra_callbacks: Optional[List] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Train a vision-language model with multimodal SFT."""
+        start_time = time.time()
+        model_name = base_model or self.config.base_model
+
+        try:
+            from datasets import Dataset
+            from transformers import Trainer, TrainingArguments
+        except ModuleNotFoundError as e:
+            missing = getattr(e, "name", None) or "a required dependency"
+            return {
+                "success": False,
+                "error": (
+                    f"Missing dependency: {missing}. "
+                    "Install training deps (torch, transformers, peft, datasets, pillow)."
+                ),
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+
+        try:
+            if isinstance(dataset, list):
+                dataset = Dataset.from_list(dataset)
+
+            if "messages" not in dataset.column_names:
+                return {
+                    "success": False,
+                    "error": "VLM dataset must contain a 'messages' column",
+                    "columns": list(getattr(dataset, "column_names", [])),
+                }
+
+            sample = dataset[0] if len(dataset) > 0 else None
+            if sample is None or not is_vlm_sample(sample):
+                return {
+                    "success": False,
+                    "error": (
+                        "Dataset does not match the canonical VLM SFT schema. "
+                        "Each row needs multimodal 'messages' with at least one image block "
+                        "and an assistant text response."
+                    ),
+                    "columns": list(getattr(dataset, "column_names", [])),
+                }
+
+            model_kwargs = dict(kwargs)
+            model, processor = await asyncio.to_thread(
+                self._load_vlm_model_and_processor, model_name, model_kwargs
+            )
+
+            if use_lora:
+                from peft import get_peft_model
+
+                peft_config = self._build_lora_config(model_kwargs, lora_r, lora_alpha, lora_dropout)
+                model = get_peft_model(model, peft_config)
+
+            cuda_available, bf16_supported = self._detect_precision()
+            training_kwargs = self._pop_training_kwargs(model_kwargs, cuda_available, bf16_supported)
+            max_seq_length = int(model_kwargs.pop("max_seq_length", 2048))
+            training_args = self._build_config(
+                TrainingArguments,
+                output_dir=output_dir,
+                num_epochs=num_epochs,
+                has_eval=False,
+                save_best_model=False,
+                training_kwargs=training_kwargs,
+                extra_kwargs={"remove_unused_columns": False},
+            )
+
+            dataset_base_dir = resolve_dataset_base_dir(dataset_path)
+            tokenizer_like = get_processor_tokenizer(processor)
+
+            def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, Any]:
+                texts: List[str] = []
+                images_payload: List[Any] = []
+                has_images = False
+
+                for example in examples:
+                    prompt_text, images = build_vlm_prompt_and_images(
+                        example.get("messages", []),
+                        processor=processor,
+                        base_dir=dataset_base_dir,
+                        add_generation_prompt=False,
+                    )
+                    texts.append(prompt_text)
+                    images_payload.append(images if len(images) != 1 else images[0])
+                    has_images = has_images or bool(images)
+
+                processor_kwargs: Dict[str, Any] = {
+                    "text": texts,
+                    "return_tensors": "pt",
+                    "padding": True,
+                    "truncation": True,
+                    "max_length": max_seq_length,
+                }
+                if has_images:
+                    processor_kwargs["images"] = images_payload
+
+                model_inputs = processor(**processor_kwargs)
+                input_ids = model_inputs.get("input_ids")
+                if input_ids is None:
+                    raise ValueError("VLM processor did not return input_ids")
+
+                labels = input_ids.clone()
+                pad_token_id = getattr(tokenizer_like, "pad_token_id", None)
+                if pad_token_id is not None:
+                    labels[labels == pad_token_id] = -100
+                model_inputs["labels"] = labels
+                return model_inputs
+
+            trainer_kwargs: Dict[str, Any] = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": dataset,
+                "data_collator": collate_fn,
+            }
+            if extra_callbacks:
+                trainer_kwargs["callbacks"] = extra_callbacks
+
+            trainer = Trainer(**trainer_kwargs)
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+            def _train_sync() -> bool:
+                interrupted = False
+                try:
+                    trainer.train()
+                except KeyboardInterrupt:
+                    interrupted = True
+                    trainer.save_model(output_dir)
+                    processor.save_pretrained(output_dir)
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        self._cleanup(trainer, model)
+                        raise OOMError(
+                            "CUDA OOM during VLM training. Reduce batch_size, "
+                            "image count, or max_seq_length."
+                        ) from exc
+                    raise
+                return interrupted
+
+            interrupted = await asyncio.to_thread(_train_sync)
+            if not interrupted:
+                await asyncio.to_thread(self._save_model_artifacts, trainer, processor, output_dir)
+
+            await asyncio.to_thread(self._cleanup, trainer, model)
+
+            return {
+                "success": True,
+                "interrupted": interrupted,
+                "model_path": output_dir,
+                "base_model": model_name,
+                "training_time_seconds": time.time() - start_time,
+                "config": {
+                    "trainer": "vlm_sft",
+                    "num_epochs": num_epochs,
+                    "use_lora": use_lora,
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "dataset_path": dataset_path,
+                },
+                "num_training_examples": len(dataset),
+            }
         except Exception as e:
             try:
                 import torch

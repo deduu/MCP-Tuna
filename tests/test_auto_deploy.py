@@ -157,3 +157,31 @@ async def test_auto_deploy_uses_trained_model_directly_when_lora_disabled():
     config = gw._hosting_svc.deploy_as_mcp.call_args.args[0]
     assert config.model_path == "/output/full-model"
     assert config.adapter_path is None
+
+
+@pytest.mark.asyncio
+async def test_auto_deploy_uses_vlm_deployer_for_vlm_training():
+    from mcp_gateway import TunaGateway
+
+    gw = TunaGateway.__new__(TunaGateway)
+    gw._finetuning_svc = MagicMock()
+    gw._finetuning_svc.config.base_model = "fake-vlm-base"
+    gw._hosting_svc = AsyncMock()
+    gw._hosting_svc.deploy_as_mcp = AsyncMock(return_value={"success": True})
+    gw._hosting_svc.deploy_vlm_as_mcp = AsyncMock(return_value={"success": True})
+
+    train_result = {
+        "success": True,
+        "model_path": "/output/vlm-adapter",
+        "config": {"trainer": "vlm_sft", "use_lora": True},
+    }
+    await gw._auto_deploy_if_requested(
+        train_result, deploy=True, deploy_port=8101, base_model="Qwen/Qwen2.5-VL-3B-Instruct"
+    )
+
+    gw._hosting_svc.deploy_vlm_as_mcp.assert_called_once()
+    gw._hosting_svc.deploy_as_mcp.assert_not_called()
+    config = gw._hosting_svc.deploy_vlm_as_mcp.call_args.args[0]
+    assert config.modality == "vision-language"
+    assert config.model_path == "Qwen/Qwen2.5-VL-3B-Instruct"
+    assert config.adapter_path == "/output/vlm-adapter"

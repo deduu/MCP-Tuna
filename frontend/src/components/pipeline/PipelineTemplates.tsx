@@ -121,6 +121,9 @@ export function PipelineTemplates() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="rounded-md border border-dashed border-border/70 px-3 py-2 text-xs text-muted-foreground">
+            Full Pipeline remains document-first and text-only. For `vlm_sft`, use the Custom Pipeline below with a VLM dataset manifest built from the Datasets page.
+          </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground block">Document Source</label>
             <div className="flex flex-wrap gap-2">

@@ -40,15 +40,19 @@ export function trainingUsesAdapter(result: unknown): boolean {
 export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialValues | null {
   const outputPath = getTrainingOutputPath(job).trim()
   if (!outputPath) return null
+  const config = isRecord(job.result) && isRecord(job.result.config) ? job.result.config : null
+  const modality = config?.trainer === 'vlm_sft' ? 'vision-language' : 'text'
 
   if (trainingUsesAdapter(job.result)) {
     return {
       modelPath: job.base_model,
       adapterPath: outputPath,
+      modality,
     }
   }
 
   return {
     modelPath: outputPath,
+    modality,
   }
 }

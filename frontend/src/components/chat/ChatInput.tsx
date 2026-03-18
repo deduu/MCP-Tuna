@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import { Send, Square } from 'lucide-react'
+import { ImagePlus, Send, Square, X } from 'lucide-react'
 import { sendChatMessage } from '@/api/chat-client'
 import { useDeployments } from '@/api/hooks/useDeployments'
+import type { ChatImageBlock } from '@/lib/chat-content'
+import { buildUserChatContent } from '@/lib/chat-content'
+import { uploadAsset } from '@/lib/uploads'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/stores/chat'
+import { toast } from 'sonner'
 
 const AVAILABLE_MODELS = [
   { id: 'gpt-4o', label: 'GPT-4o' },
@@ -14,7 +18,10 @@ const AVAILABLE_MODELS = [
 
 export function ChatInput() {
   const [input, setInput] = useState('')
+  const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
+  const [isUploadingImage, setIsUploadingImage] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
 
   const chatMode = useChatStore((state) => state.chatMode)
   const selectedModel = useChatStore((state) => state.selectedModel)
@@ -59,17 +66,24 @@ export function ChatInput() {
       null,
     [runningDeployments, selectedDeploymentId],
   )
+  const supportsImages =
+    chatMode === 'agent' ||
+    selectedDeployment?.modality === 'vision-language'
 
   const helperText =
     chatMode === 'agent'
-      ? 'Tool Agent uses managed providers and can call MCP tools.'
+      ? supportsImages
+        ? 'Tool Agent uses managed providers, can call MCP tools, and accepts image attachments.'
+        : 'Tool Agent uses managed providers and can call MCP tools.'
       : selectedDeployment
-        ? `Deployed Local chats directly with ${shortDeploymentLabel(selectedDeployment.model_path)}. MCP tools are disabled in this mode.`
+        ? selectedDeployment.modality === 'vision-language'
+          ? `Deployed Local chats directly with ${shortDeploymentLabel(selectedDeployment.model_path)} in multimodal mode. Attach images and text together here.`
+          : `Deployed Local chats directly with ${shortDeploymentLabel(selectedDeployment.model_path)}. MCP tools are disabled in this mode.`
         : 'Deployed Local needs a running deployment. Start one from Deployments first.'
 
   const handleSubmit = useCallback(() => {
     const trimmed = input.trim()
-    if (!trimmed || isStreaming) {
+    if ((!trimmed && imageBlocks.length === 0) || isStreaming || isUploadingImage) {
       return
     }
 
@@ -82,12 +96,20 @@ export function ChatInput() {
       textareaRef.current.style.height = 'auto'
     }
 
-    void sendChatMessage(trimmed, {
+    const payload = buildUserChatContent(trimmed, imageBlocks)
+    void sendChatMessage(payload, {
       source: chatMode,
       model: selectedModel,
       deploymentId: selectedDeploymentId,
+      deploymentModality: selectedDeployment?.modality === 'vision-language' ? 'vision-language' : 'text',
     })
-  }, [chatMode, input, isStreaming, selectedDeploymentId, selectedModel])
+    for (const block of imageBlocks) {
+      if (block.preview_url) {
+        URL.revokeObjectURL(block.preview_url)
+      }
+    }
+    setImageBlocks([])
+  }, [chatMode, imageBlocks, input, isStreaming, isUploadingImage, selectedDeployment, selectedDeploymentId, selectedModel])
 
   const handleStop = useCallback(() => {
     abortController?.abort()
@@ -107,6 +129,43 @@ export function ChatInput() {
     setInput(event.target.value)
     event.target.style.height = 'auto'
     event.target.style.height = `${Math.min(event.target.scrollHeight, 200)}px`
+  }, [])
+
+  const handlePickImage = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? [])
+    if (!files.length) return
+
+    setIsUploadingImage(true)
+    try {
+      const uploadedBlocks: ChatImageBlock[] = []
+      for (const file of files) {
+        const uploaded = await uploadAsset(file, 'images')
+        uploadedBlocks.push({
+          type: 'image_path',
+          image_path: uploaded.filePath,
+          preview_url: uploaded.previewUrl,
+          file_name: uploaded.fileName,
+        })
+      }
+      setImageBlocks((current) => [...current, ...uploadedBlocks])
+      toast.success(`Uploaded ${uploadedBlocks.length} image${uploadedBlocks.length === 1 ? '' : 's'}`)
+    } catch (error) {
+      toast.error(`Image upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setIsUploadingImage(false)
+      event.currentTarget.value = ''
+    }
+  }, [])
+
+  const removeImageBlock = useCallback((index: number) => {
+    setImageBlocks((current) => {
+      const next = [...current]
+      const removed = next.splice(index, 1)[0]
+      if (removed?.preview_url) {
+        URL.revokeObjectURL(removed.preview_url)
+      }
+      return next
+    })
   }, [])
 
   return (
@@ -165,6 +224,7 @@ export function ChatInput() {
                   runningDeployments.map((deployment) => (
                     <option key={deployment.deployment_id} value={deployment.deployment_id}>
                       {shortDeploymentLabel(deployment.model_path)}
+                      {deployment.modality === 'vision-language' ? ' (VLM)' : ''}
                     </option>
                   ))
                 )}
@@ -174,6 +234,37 @@ export function ChatInput() {
           )}
         </div>
 
+        {imageBlocks.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {imageBlocks.map((block, index) => (
+              <div
+                key={`${block.image_path}-${index}`}
+                className="relative overflow-hidden rounded-lg border border-border/70 bg-secondary/20"
+              >
+                {block.preview_url ? (
+                  <img
+                    src={block.preview_url}
+                    alt={block.file_name ?? 'Uploaded image'}
+                    className="h-20 w-20 object-cover"
+                  />
+                ) : (
+                  <div className="flex h-20 w-20 items-center justify-center px-2 text-[11px] text-muted-foreground">
+                    {block.file_name ?? 'Image'}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeImageBlock(index)}
+                  className="absolute right-1 top-1 rounded-full bg-background/90 p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  aria-label="Remove image"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex gap-2">
           <div className="relative flex-1">
             <textarea
@@ -182,17 +273,45 @@ export function ChatInput() {
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               rows={1}
-              disabled={isStreaming || (chatMode === 'deployment' && !selectedDeploymentId)}
+              disabled={isStreaming || isUploadingImage || (chatMode === 'deployment' && !selectedDeploymentId)}
               placeholder={
                 chatMode === 'agent'
-                  ? 'Message MCP Tuna...'
+                  ? supportsImages
+                    ? 'Message MCP Tuna or attach images...'
+                    : 'Message MCP Tuna...'
                   : selectedDeploymentId
-                    ? 'Message the deployed local model...'
+                    ? selectedDeployment?.modality === 'vision-language'
+                      ? 'Message the deployed VLM or attach images...'
+                      : 'Message the deployed local model...'
                     : 'Select a running deployment first...'
               }
               className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
+          {supportsImages && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={isStreaming || isUploadingImage || (chatMode === 'deployment' && !selectedDeploymentId)}
+                className="shrink-0 self-end"
+                title="Attach images"
+              >
+                <ImagePlus className="h-4 w-4" />
+              </Button>
+              <input
+                ref={imageInputRef}
+                type="file"
+                className="hidden"
+                accept="image/*"
+                multiple
+                onChange={handlePickImage}
+                disabled={isStreaming || isUploadingImage}
+              />
+            </>
+          )}
           {isStreaming ? (
             <Button
               variant="destructive"
@@ -207,7 +326,7 @@ export function ChatInput() {
             <Button
               size="icon"
               onClick={handleSubmit}
-              disabled={!input.trim() || (chatMode === 'deployment' && !selectedDeploymentId)}
+              disabled={(!input.trim() && imageBlocks.length === 0) || isUploadingImage || (chatMode === 'deployment' && !selectedDeploymentId)}
               className="shrink-0 self-end"
               title="Send message"
             >
@@ -218,7 +337,9 @@ export function ChatInput() {
 
         <div className="flex items-center justify-between gap-3">
           <p className="text-[11px] text-muted-foreground">{helperText}</p>
-          <p className="text-[10px] text-muted-foreground">Enter to send, Shift+Enter for new line</p>
+          <p className="text-[10px] text-muted-foreground">
+            {supportsImages ? 'Enter to send, Shift+Enter for new line, image button to attach' : 'Enter to send, Shift+Enter for new line'}
+          </p>
         </div>
       </div>
     </div>

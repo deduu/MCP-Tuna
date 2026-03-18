@@ -32,6 +32,19 @@ class HostServer:
             config = HostingConfig(model_path=model_path, adapter_path=adapter_path, port=port)
             return json.dumps(await svc.deploy_as_mcp(config), indent=2)
 
+        @self.mcp.tool(name="host.deploy_vlm_mcp",
+                       description="Deploy a vision-language model as an MCP tool server")
+        async def deploy_vlm_mcp(
+            model_path: str, adapter_path: Optional[str] = None, port: int = 8001,
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                port=port,
+                modality="vision-language",
+            )
+            return json.dumps(await svc.deploy_vlm_as_mcp(config), indent=2)
+
         @self.mcp.tool(name="host.deploy_api",
                        description="Deploy a fine-tuned model as a REST API")
         async def deploy_api(
@@ -39,6 +52,19 @@ class HostServer:
         ) -> str:
             config = HostingConfig(model_path=model_path, adapter_path=adapter_path, port=port)
             return json.dumps(await svc.deploy_as_api(config), indent=2)
+
+        @self.mcp.tool(name="host.deploy_vlm_api",
+                       description="Deploy a vision-language model as a REST API")
+        async def deploy_vlm_api(
+            model_path: str, adapter_path: Optional[str] = None, port: int = 8001,
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                port=port,
+                modality="vision-language",
+            )
+            return json.dumps(await svc.deploy_vlm_as_api(config), indent=2)
 
         @self.mcp.tool(name="host.list_deployments",
                        description="List running model deployments")

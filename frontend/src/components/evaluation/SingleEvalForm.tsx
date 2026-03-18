@@ -2,17 +2,53 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
+import type { ChatImageBlock } from '@/lib/chat-content'
+import { buildEvaluationMessages } from '@/lib/evaluation-multimodal'
 import { toast } from 'sonner'
+import { ImageAttachmentField } from './ImageAttachmentField'
 
 interface SingleEvalFormProps {
   mode: 'single' | 'rubric'
 }
 
 interface EvalResult {
-  score?: number
+  overallScore?: number
   feedback?: string
-  breakdown?: Record<string, unknown>
+  breakdown?: Record<string, number | string>
+  raw?: Record<string, unknown>
   [key: string]: unknown
+}
+
+function normalizeEvalResult(payload: Record<string, unknown>): EvalResult {
+  const result = payload.result && typeof payload.result === 'object'
+    ? (payload.result as Record<string, unknown>)
+    : payload
+  const criteriaScores = Array.isArray(result.criteria_scores)
+    ? (result.criteria_scores as Array<Record<string, unknown>>)
+    : []
+
+  const breakdown: Record<string, number | string> = {}
+  for (const item of criteriaScores) {
+    const criterion = typeof item.criterion === 'string' ? item.criterion : null
+    if (!criterion) continue
+    breakdown[criterion] = typeof item.score === 'number' ? item.score : String(item.score ?? '')
+  }
+
+  return {
+    overallScore: typeof result.overall_score === 'number' ? result.overall_score : undefined,
+    feedback: typeof result.error === 'string' && result.error.trim()
+      ? result.error
+      : criteriaScores
+          .map((item) => {
+            const criterion = typeof item.criterion === 'string' ? item.criterion : ''
+            const reason = typeof item.reason === 'string' ? item.reason.trim() : ''
+            return criterion && reason ? `${criterion}: ${reason}` : ''
+          })
+          .filter(Boolean)
+          .join('\n'),
+    breakdown,
+    raw: result,
+  }
 }
 
 export function SingleEvalForm({ mode }: SingleEvalFormProps) {
@@ -20,12 +56,14 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
   const [generated, setGenerated] = useState('')
   const [reference, setReference] = useState('')
   const [rubric, setRubric] = useState('')
+  const [images, setImages] = useState<ChatImageBlock[]>([])
+  const [isUploadingImages, setIsUploadingImages] = useState(false)
   const [result, setResult] = useState<EvalResult | null>(null)
   const { mutateAsync: executeTool, isPending } = useToolExecution()
 
   async function handleEvaluate() {
-    if (!question.trim() || !generated.trim()) {
-      toast.error('Input and output are required')
+    if ((!question.trim() && images.length === 0) || !generated.trim()) {
+      toast.error('A prompt or image plus an output is required')
       return
     }
 
@@ -50,8 +88,19 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
           return
         }
       }
-      const res = await executeTool({ toolName: 'judge.evaluate', args })
-      setResult(res as EvalResult)
+      const toolName = images.length > 0 ? 'judge.evaluate_vlm' : 'judge.evaluate'
+      const res = await executeTool({
+        toolName,
+        args: images.length > 0
+          ? {
+              messages: buildEvaluationMessages(question, images),
+              generated: generated.trim(),
+              ...(reference.trim() ? { reference: reference.trim() } : {}),
+              ...(mode === 'rubric' ? { rubric: args.rubric } : {}),
+            }
+          : args,
+      })
+      setResult(normalizeEvalResult(res as Record<string, unknown>))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Evaluation failed')
     }
@@ -64,12 +113,18 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
           <div className="space-y-1">
             <label className="text-sm font-medium">Input</label>
             <textarea
-              placeholder="The input/prompt to evaluate against..."
+              placeholder={images.length > 0 ? 'Prompt text to pair with the attached images...' : 'The input/prompt to evaluate against...'}
               className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-24 resize-y"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
             />
           </div>
+          <ImageAttachmentField
+            images={images}
+            onChange={setImages}
+            isUploading={isUploadingImages}
+            onUploadingChange={setIsUploadingImages}
+          />
           <div className="space-y-1">
             <label className="text-sm font-medium">Output</label>
             <textarea
@@ -99,8 +154,8 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
               />
             </div>
           )}
-          <Button onClick={handleEvaluate} disabled={isPending}>
-            {isPending ? 'Evaluating...' : 'Evaluate'}
+          <Button onClick={handleEvaluate} disabled={isPending || isUploadingImages}>
+            {isPending ? 'Evaluating...' : images.length > 0 ? 'Evaluate Multimodal Sample' : 'Evaluate'}
           </Button>
         </CardContent>
       </Card>
@@ -110,12 +165,9 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-3">
               Score
-              {(result.score != null || (result as Record<string, unknown>).overall_score != null) && (
+              {result.overallScore != null && (
                 <span className="text-3xl font-bold text-primary">
-                  {(() => {
-                    const raw = result.score ?? (result as Record<string, unknown>).overall_score
-                    return typeof raw === 'number' ? raw.toFixed(2) : String(raw)
-                  })()}
+                  {result.overallScore.toFixed(2)}
                 </span>
               )}
             </CardTitle>

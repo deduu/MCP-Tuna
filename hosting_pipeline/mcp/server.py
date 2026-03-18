@@ -37,6 +37,25 @@ class HostingMCPServer:
             result = await svc.deploy_as_mcp(config)
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(name="host.deploy_vlm_mcp",
+                       description="Deploy a vision-language model as an MCP tool server")
+        async def deploy_vlm_as_mcp(
+            model_path: str,
+            adapter_path: Optional[str] = None,
+            port: int = 8001,
+            host: str = "0.0.0.0",
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                host=host,
+                port=port,
+                transport="http",
+                modality="vision-language",
+            )
+            result = await svc.deploy_vlm_as_mcp(config)
+            return json.dumps(result, indent=2)
+
         @self.mcp.tool(name="host.deploy_api",
                        description="Deploy a fine-tuned model as a REST API with /generate endpoint")
         async def deploy_as_api(
@@ -53,6 +72,25 @@ class HostingMCPServer:
                 transport="http",
             )
             result = await svc.deploy_as_api(config)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(name="host.deploy_vlm_api",
+                       description="Deploy a vision-language model as a REST API with /generate_vlm endpoint")
+        async def deploy_vlm_as_api(
+            model_path: str,
+            adapter_path: Optional[str] = None,
+            port: int = 8001,
+            host: str = "0.0.0.0",
+        ) -> str:
+            config = HostingConfig(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                host=host,
+                port=port,
+                transport="http",
+                modality="vision-language",
+            )
+            result = await svc.deploy_vlm_as_api(config)
             return json.dumps(result, indent=2)
 
         @self.mcp.tool(name="host.list_deployments",

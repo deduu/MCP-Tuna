@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { useToolRegistry } from '@/api/hooks/useToolRegistry'
 import { NAMESPACES, getNamespaceFromToolName } from '@/lib/tool-registry'
 import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Search } from 'lucide-react'
@@ -34,6 +35,11 @@ export function ToolExplorerPage() {
     )
   }, [search])
 
+  const vlmToolCount = useMemo(
+    () => (tools ?? []).filter((tool) => tool.name.includes('vlm')).length,
+    [tools],
+  )
+
   if (isLoading) {
     return (
       <div className="space-y-4 max-w-5xl">
@@ -49,6 +55,11 @@ export function ToolExplorerPage() {
 
   return (
     <div className="space-y-4 max-w-5xl">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <span>Browse MCP namespaces.</span>
+        {vlmToolCount > 0 && <Badge variant="outline">{vlmToolCount} multimodal tools available</Badge>}
+        <span>Tools with `messages` inputs accept structured text plus image blocks.</span>
+      </div>
       <div className="relative w-72">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input

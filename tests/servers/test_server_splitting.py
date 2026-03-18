@@ -89,6 +89,9 @@ class TestModelEvalServer:
         assert "judge.evaluate_multi" in tool_names
         assert "judge.evaluate_batch" in tool_names
         assert "judge.compare_pair" in tool_names
+        assert "judge.evaluate_vlm" in tool_names
+        assert "judge.compare_vlm" in tool_names
+        assert "judge.evaluate_vlm_batch" in tool_names
         assert "judge.list_types" in tool_names
         assert "judge.export" in tool_names
         assert "judge.create_rubric" in tool_names
@@ -162,7 +165,7 @@ class TestHostServer:
         assert "host.health" in tool_names
 
     def test_tool_count(self, tool_names):
-        assert len(tool_names) == 5
+        assert len(tool_names) == 7
 
 
 # ---------------------------------------------------------------------------

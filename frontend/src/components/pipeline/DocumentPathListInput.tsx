@@ -1,7 +1,7 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Files, Loader2 } from 'lucide-react'
-import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Button } from '@/components/ui/button'
+import { uploadAsset } from '@/lib/uploads'
 import { toast } from 'sonner'
 
 const DOCUMENT_FILE_ACCEPT = '.pdf,.md,.markdown,.txt,.doc,.docx,.json,.jsonl,.csv,.parquet'
@@ -11,27 +11,6 @@ interface DocumentPathListInputProps {
   onChange: (value: string) => void
   disabled?: boolean
   helperText?: string
-}
-
-async function toBase64(file: File): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('Failed to read file'))
-        return
-      }
-
-      const commaIndex = reader.result.indexOf(',')
-      resolve(commaIndex >= 0 ? reader.result.slice(commaIndex + 1) : reader.result)
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function sanitizeSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'upload'
 }
 
 function mergePathLists(current: string, incoming: string[]): string {
@@ -54,7 +33,6 @@ export function DocumentPathListInput({
 }: DocumentPathListInputProps) {
   const filesInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
-  const { mutateAsync: executeTool } = useToolExecution()
   const [isUploading, setIsUploading] = useState(false)
 
   useEffect(() => {
@@ -65,26 +43,8 @@ export function DocumentPathListInput({
   }, [])
 
   async function uploadDocument(file: File): Promise<string> {
-    const relativePath =
-      'webkitRelativePath' in file && typeof file.webkitRelativePath === 'string' && file.webkitRelativePath
-        ? file.webkitRelativePath
-        : file.name
-    const segments = relativePath
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .map(sanitizeSegment)
-    const serverFilename = `documents/${crypto.randomUUID()}_${segments.join('/')}`
-    const contentBase64 = await toBase64(file)
-    const uploaded = await executeTool({
-      toolName: 'file.upload',
-      args: { filename: serverFilename, content_base64: contentBase64 },
-    })
-    const payload = uploaded as Record<string, unknown>
-    const uploadedPath = typeof payload.file_path === 'string' ? payload.file_path : ''
-    if (!uploadedPath.trim()) {
-      throw new Error('Upload succeeded but no server file path was returned')
-    }
-    return uploadedPath
+    const uploaded = await uploadAsset(file, 'documents')
+    return uploaded.filePath
   }
 
   async function handlePickMany(event: ChangeEvent<HTMLInputElement>) {

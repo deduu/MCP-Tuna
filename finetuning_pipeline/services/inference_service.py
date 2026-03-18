@@ -11,6 +11,7 @@ from peft import PeftModel
 
 from shared.gpu_lock import GPULock
 from .gpu_service import GPUService
+from .vlm_utils import build_vlm_prompt_and_images, get_processor_tokenizer
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,40 @@ class InferenceService:
             return model_path
 
         return str(max(snapshot_dirs, key=lambda entry: entry.stat().st_mtime))
+
+    @staticmethod
+    def _load_vlm_model_and_processor(model_path: str):
+        from transformers import AutoProcessor
+
+        resolved_model_path = InferenceService._resolve_model_path(model_path)
+        processor = AutoProcessor.from_pretrained(resolved_model_path)
+
+        errors: List[str] = []
+        model = None
+        for loader_name in ("AutoModelForVision2Seq", "AutoModelForImageTextToText"):
+            try:
+                transformers_mod = __import__("transformers", fromlist=[loader_name])
+                loader = getattr(transformers_mod, loader_name)
+                model = loader.from_pretrained(
+                    resolved_model_path,
+                    device_map="auto",
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=True,
+                )
+                break
+            except Exception as exc:
+                errors.append(f"{loader_name}: {exc}")
+
+        if model is None:
+            raise RuntimeError(
+                "Unable to load a VLM-compatible model class. "
+                + " | ".join(errors[-2:])
+            )
+
+        tokenizer_like = get_processor_tokenizer(processor)
+        if getattr(tokenizer_like, "pad_token", None) is None and getattr(tokenizer_like, "eos_token", None) is not None:
+            tokenizer_like.pad_token = tokenizer_like.eos_token
+        return model, processor
 
     async def run_inference(
         self,
@@ -183,3 +218,69 @@ class InferenceService:
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def run_vlm_inference(
+        self,
+        messages: List[Dict[str, Any]],
+        model_path: str,
+        adapter_path: Optional[str] = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        do_sample: bool = True,
+    ) -> Dict[str, Any]:
+        """Run multimodal inference on a structured chat message payload."""
+        model = None
+        processor = None
+        gpu_lock = GPULock.get()
+        await gpu_lock.acquire("vlm_inference")
+        try:
+            resolved_model_path = self._resolve_model_path(model_path)
+            model, processor = self._load_vlm_model_and_processor(resolved_model_path)
+
+            if adapter_path:
+                model = PeftModel.from_pretrained(model, adapter_path)
+
+            prompt_text, images = build_vlm_prompt_and_images(
+                messages,
+                processor=processor,
+                base_dir=Path.cwd(),
+                add_generation_prompt=True,
+            )
+            processor_kwargs: Dict[str, Any] = {"text": prompt_text, "return_tensors": "pt"}
+            if images:
+                processor_kwargs["images"] = images if len(images) != 1 else images[0]
+
+            start_time = time.time()
+            model_inputs = processor(**processor_kwargs).to(model.device)
+            with torch.no_grad():
+                generated_ids = model.generate(
+                    **model_inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=do_sample,
+                    pad_token_id=getattr(get_processor_tokenizer(processor), "pad_token_id", None),
+                )
+
+            input_ids = model_inputs.get("input_ids")
+            prompt_len = input_ids.shape[-1] if input_ids is not None else 0
+            new_ids = generated_ids[0][prompt_len:]
+            response_text = get_processor_tokenizer(processor).decode(new_ids, skip_special_tokens=True)
+            gen_time = time.time() - start_time
+
+            return {
+                "success": True,
+                "response": response_text,
+                "model_path": model_path,
+                "adapter_path": adapter_path,
+                "image_count": len(images),
+                "generation_time_seconds": gen_time,
+                "tokens_generated": len(new_ids),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "model_path": model_path}
+        finally:
+            del model, processor
+            self.gpu.clear_gpu_memory()
+            gpu_lock.release()

@@ -67,15 +67,20 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
             <div>
               <dt className="text-muted-foreground">Type</dt>
               <dd>
-                <Badge
-                  className={cn(
-                    deployment.type === 'mcp'
-                      ? 'bg-[var(--color-ns-host)]/20 text-[var(--color-ns-host)] border-transparent'
-                      : 'bg-primary/20 text-primary border-transparent',
-                  )}
-                >
-                  {deployment.type === 'mcp' ? 'MCP Server' : 'API Endpoint'}
-                </Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    className={cn(
+                      deployment.type === 'mcp'
+                        ? 'bg-[var(--color-ns-host)]/20 text-[var(--color-ns-host)] border-transparent'
+                        : 'bg-primary/20 text-primary border-transparent',
+                    )}
+                  >
+                    {deployment.type === 'mcp' ? 'MCP Server' : 'API Endpoint'}
+                  </Badge>
+                  <Badge variant="outline">
+                    {deployment.modality === 'vision-language' ? 'Vision-Language' : 'Text'}
+                  </Badge>
+                </div>
               </dd>
             </div>
             <div className="col-span-2">

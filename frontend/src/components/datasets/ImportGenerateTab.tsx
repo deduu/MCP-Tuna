@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { buildDatasetOutputPath, getDefaultDatasetOutputDir } from '@/lib/dataset-output'
 import { FileUp, Sparkles, ChevronDown, ChevronRight, FolderOpen, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { VlmDatasetBuilder } from './VlmDatasetBuilder'
 
 const DOCUMENT_FILE_ACCEPT = '.pdf,.md,.markdown,.txt,.doc,.docx,.json,.jsonl,.csv,.parquet'
 
@@ -532,6 +533,8 @@ export function ImportGenerateTab() {
           </CardContent>
         </Card>
       </div>
+
+      <VlmDatasetBuilder />
 
       {/* Advanced Section */}
       <div>

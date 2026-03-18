@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpCall } from '../client'
-import type { Deployment } from '../types'
+import type { Deployment, ModelModality } from '../types'
 
 function normalizeDeployment(raw: Record<string, unknown>): Deployment {
   const deploymentId =
@@ -27,6 +27,13 @@ function normalizeDeployment(raw: Record<string, unknown>): Deployment {
     type,
     status,
     transport: typeof raw.transport === 'string' ? raw.transport : undefined,
+    modality:
+      raw.modality === 'vision-language' || raw.modality === 'unknown'
+        ? raw.modality
+        : 'text',
+    routes: Array.isArray(raw.routes)
+      ? raw.routes.filter((route): route is string => typeof route === 'string')
+      : undefined,
   }
 }
 
@@ -65,14 +72,25 @@ export function useDeploymentLogs(deploymentId: string, enabled: boolean) {
 
 type DeployParams = {
   type: 'mcp' | 'api'
+  modality?: ModelModality
   args: Record<string, unknown>
 }
 
 export function useDeploy() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ type, args }: DeployParams) =>
-      mcpCall(type === 'mcp' ? 'host.deploy_mcp' : 'host.deploy_api', args),
+    mutationFn: ({ type, modality, args }: DeployParams) => {
+      const resolvedModality = modality === 'vision-language' ? 'vision-language' : 'text'
+      const toolName =
+        type === 'mcp'
+          ? resolvedModality === 'vision-language'
+            ? 'host.deploy_vlm_mcp'
+            : 'host.deploy_mcp'
+          : resolvedModality === 'vision-language'
+            ? 'host.deploy_vlm_api'
+            : 'host.deploy_api'
+      return mcpCall(toolName, args)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deployments'] })
     },

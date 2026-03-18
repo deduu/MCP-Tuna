@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.async_utils import run_sync
+from shared.model_capabilities import build_model_capabilities, infer_model_modality
 
 
 class ModelDiscoveryService:
@@ -149,10 +150,12 @@ class ModelDiscoveryService:
             if not snapshots.exists():
                 continue
             snapshot = sorted(snapshots.iterdir())[-1]
+            modality = infer_model_modality(model_id, file_names=[f.name for f in snapshot.iterdir()])
+            capabilities = build_model_capabilities(modality)
             models.append({
                 "id": model_id,
                 "model_path": str(snapshot),
-                "usable_for": ["training", "inference"],
+                **capabilities,
             })
 
         return {"success": True, "models": models}
@@ -214,12 +217,19 @@ class ModelDiscoveryService:
                         total_size += size
                         files.append({"name": fname, "size_mb": round(size / (1024**2), 2)})
 
+                modality = infer_model_modality(
+                    model_id,
+                    file_names=[file_info["name"] for file_info in files],
+                )
+                capabilities = build_model_capabilities(modality)
                 results.append({
                     "id": model_id,
                     "snapshot": snapshot.name,
                     "path": str(snapshot),
+                    "model_path": str(snapshot),
                     "files": files,
                     "total_size_mb": round(total_size / (1024**2), 2),
+                    **capabilities,
                 })
 
                 if len(results) >= limit:
@@ -241,18 +251,35 @@ class ModelDiscoveryService:
                 return {"success": False, "error": f"Model path not found: {model_path}"}
 
             is_adapter = (path / "adapter_config.json").exists()
+            config = None
+            config_path = path / "config.json"
+            if config_path.exists():
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                except Exception:
+                    config = None
+            file_names = [f.name for f in path.iterdir()]
+            modality = infer_model_modality(str(path), config=config, file_names=file_names)
+            capabilities = build_model_capabilities(modality)
             info = {
                 "success": True,
                 "path": str(path),
                 "exists": True,
                 "is_adapter": is_adapter,
-                "files": [f.name for f in path.iterdir()],
+                "files": file_names,
+                **capabilities,
             }
 
             if is_adapter:
-                with open(path / "adapter_config.json", "r") as f:
+                with open(path / "adapter_config.json", "r", encoding="utf-8") as f:
                     info["adapter_config"] = json.load(f)
 
+            if config is not None:
+                info["config"] = {
+                    "model_type": config.get("model_type"),
+                    "architectures": config.get("architectures"),
+                }
             if (path / "training_args.bin").exists():
                 info["has_training_args"] = True
 

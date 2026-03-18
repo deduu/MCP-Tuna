@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Search, Star, Download, Sparkles } from 'lucide-react'
-import { useAvailableModels, useHFSearch, useRecommendedModels } from '@/api/hooks/useTraining'
+import { useHFSearch, useLocalModelCandidates, useRecommendedModels } from '@/api/hooks/useTraining'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { inferModelModality } from '@/lib/training-capabilities'
 
 type BrowseMode = 'local' | 'hub' | 'recommended'
 
@@ -20,13 +21,9 @@ export function ModelBrowser({ value, onChange }: ModelBrowserProps) {
   const [useCase, setUseCase] = useState('general')
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const { data: models = [], isLoading: localLoading } = useAvailableModels()
+  const { data: models = [], isLoading: localLoading } = useLocalModelCandidates(value)
   const { data: hubResults, isLoading: hubLoading } = useHFSearch(hubQuery, 'text-generation', hubSearchEnabled)
   const { data: recResults, isLoading: recLoading } = useRecommendedModels(useCase)
-
-  const filtered = models.filter((m) =>
-    m.toLowerCase().includes(value.toLowerCase()),
-  )
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -99,19 +96,27 @@ export function ModelBrowser({ value, onChange }: ModelBrowserProps) {
             {mode === 'local' && (
               localLoading ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">Loading models...</div>
-              ) : filtered.length === 0 ? (
+              ) : models.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">No local models found</div>
               ) : (
-                filtered.map((model) => (
-                  <button
-                    key={model}
-                    type="button"
-                    className="w-full cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent transition-colors"
-                    onClick={() => selectModel(model)}
-                  >
-                    {model}
-                  </button>
-                ))
+                models.map((model) => {
+                  const label = model.model_path ?? model.id
+                  const modality = inferModelModality(label, model)
+
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      className="w-full cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent transition-colors"
+                      onClick={() => selectModel(label)}
+                    >
+                      <div className="font-medium">{label}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {modality === 'vision-language' ? 'Vision-language model' : 'Text model'}
+                      </div>
+                    </button>
+                  )
+                })
               )
             )}
 

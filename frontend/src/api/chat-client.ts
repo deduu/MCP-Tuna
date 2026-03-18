@@ -1,6 +1,11 @@
 import { useChatStore } from '@/stores/chat'
 import type { TurnMetrics } from '@/stores/chat'
 import { mcpCall } from '@/api/client'
+import {
+  extractTextFromChatContent,
+  sanitizeChatContentForRequest,
+  type ChatContentBlock,
+} from '@/lib/chat-content'
 
 const CHAT_URL = '/v1/chat/completions'
 
@@ -10,6 +15,7 @@ interface ChatRequestOptions {
   selectedTools?: string[]
   source?: 'agent' | 'deployment'
   deploymentId?: string | null
+  deploymentModality?: 'text' | 'vision-language'
 }
 
 /**
@@ -18,29 +24,61 @@ interface ChatRequestOptions {
  * to the chat store in real time.
  */
 export async function sendChatMessage(
-  userContent: string,
+  userContent: string | ChatContentBlock[],
   options: ChatRequestOptions = {},
 ) {
   const store = useChatStore.getState()
+  const userText = extractTextFromChatContent(userContent)
 
   // Abort any in-flight stream
   store.abortController?.abort()
 
   const abortController = new AbortController()
   store.setStreaming(true, abortController)
-  store.addUserMessage(userContent)
+  store.addUserMessage({
+    content: userText,
+    parts: Array.isArray(userContent) ? userContent : undefined,
+  })
   const msgId = store.startAssistantMessage()
 
   // Build messages array from conversation history
   const messages = useChatStore
     .getState()
     .messages.filter((m) => !m.isStreaming)
-    .map((m) => ({ role: m.role, content: m.content }))
+    .map((m) => ({
+      role: m.role,
+      content: sanitizeChatContentForRequest(m.parts ?? m.content),
+    }))
 
   try {
     if (options.source === 'deployment') {
       if (!options.deploymentId) {
         throw new Error('Select a running deployment before using Deployed Local chat.')
+      }
+
+      if (options.deploymentModality === 'vision-language') {
+        const result = await mcpCall<{
+          success: boolean
+          conversation_id: string
+          response: string
+        }>('host.chat_vlm', {
+          deployment_id: options.deploymentId,
+          messages: [
+            {
+              role: 'user',
+              content: sanitizeChatContentForRequest(userContent),
+            },
+          ],
+          ...(store.deploymentConversationId
+            ? { conversation_id: store.deploymentConversationId }
+            : {}),
+        })
+
+        store.setDeploymentConversationId(result.conversation_id)
+        store.appendToken(msgId, result.response ?? '')
+        store.finishAssistantMessage(msgId)
+        store.setStreaming(false)
+        return
       }
 
       const result = await mcpCall<{
@@ -49,7 +87,7 @@ export async function sendChatMessage(
         response: string
       }>('host.chat', {
         deployment_id: options.deploymentId,
-        message: userContent,
+        message: userText,
         ...(store.deploymentConversationId
           ? { conversation_id: store.deploymentConversationId }
           : {}),

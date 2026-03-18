@@ -24,6 +24,17 @@ export interface MCPToolResult {
   [key: string]: unknown
 }
 
+export type ModelModality = 'text' | 'vision-language' | 'unknown'
+
+export type TrainingTechnique =
+  | 'sft'
+  | 'dpo'
+  | 'grpo'
+  | 'kto'
+  | 'curriculum'
+  | 'vlm_sft'
+  | 'sequential'
+
 export interface GPUInfo {
   index?: number
   available: boolean
@@ -145,6 +156,8 @@ export interface Deployment {
   type: 'mcp' | 'api'
   status: 'running' | 'stopped'
   transport?: string
+  modality?: ModelModality
+  routes?: string[]
 }
 
 export interface DatasetInfo {
@@ -198,6 +211,14 @@ export interface LocalModelCandidate {
   id: string
   model_path: string
   usable_for?: string[]
+  modality?: ModelModality
+  supported_techniques?: TrainingTechnique[]
+}
+
+export interface TrainingCapabilitySummary {
+  available_techniques: TrainingTechnique[]
+  supports_vlm_sft: boolean
+  supported_validation_techniques: string[]
 }
 
 export interface DeploymentBrowseRoot {

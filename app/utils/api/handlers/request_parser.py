@@ -2,11 +2,23 @@ import logging
 import json
 from fastapi import Request
 from ..models.request import ChatRequest
+from shared.multimodal_models import extract_text_from_content
 
 logger = logging.getLogger(__name__)
 
 
 class RequestParser:
+
+    @staticmethod
+    def _extract_user_prompt(messages: list[dict]) -> str:
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+            return extract_text_from_content(content)
+        return ""
 
     @staticmethod
     async def _parse_common_request(body: dict) -> dict:
@@ -39,8 +51,7 @@ class RequestParser:
         common = await RequestParser._parse_common_request(body)
         messages = body.get("messages", [])
         truncated_messages = messages[-10:] if len(messages) > 10 else messages
-        user_prompt = next((m["content"] for m in reversed(
-            truncated_messages) if m["role"] == "user"), "")
+        user_prompt = RequestParser._extract_user_prompt(truncated_messages)
 
         return ChatRequest(
             messages=messages,
@@ -58,7 +69,7 @@ class RequestParser:
         body = await request.json()
         logger.info(f"📥 Response API Request: {json.dumps(body)}")
 
-        common = await RequestParser._parse_common_fields(body)
+        common = await RequestParser._parse_common_request(body)
 
         # Response API uses "input" instead of "messages"
         inputs = body.get("input", [])
@@ -67,14 +78,14 @@ class RequestParser:
         # Convert response-api format → Chat-like normalized structure
         for item in inputs:
             role = item.get("role", "user")
-            text_blocks = [b.get("text") for b in item.get(
-                "content", []) if b.get("type") == "text"]
-            combined_text = "\n".join(text_blocks)
-            messages.append({"role": role, "content": combined_text})
+            content = item.get("content", [])
+            if isinstance(content, list):
+                messages.append({"role": role, "content": content})
+            else:
+                messages.append({"role": role, "content": content})
 
         truncated_messages = messages[-10:] if len(messages) > 10 else messages
-        user_prompt = next((m["content"] for m in reversed(
-            truncated_messages) if m["role"] == "user"), "")
+        user_prompt = RequestParser._extract_user_prompt(truncated_messages)
 
         return ChatRequest(
             messages=messages,

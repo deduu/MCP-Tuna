@@ -12,7 +12,6 @@ import {
   BarChart3,
   Settings,
   PanelLeftClose,
-  PanelLeft,
   Fish,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -36,13 +35,45 @@ export function Sidebar() {
     <aside
       className={cn(
         'flex flex-col h-screen border-r bg-card transition-all duration-200',
-        collapsed ? 'w-16' : 'w-56',
+        collapsed ? 'w-[72px]' : 'w-56',
       )}
     >
-      <div className="flex items-center gap-2 p-4 border-b">
-        <Fish className="h-6 w-6 text-primary shrink-0" />
-        {!collapsed && (
-          <span className="font-bold text-sm tracking-tight">MCP Tuna</span>
+      <div
+        className={cn(
+          'flex items-center border-b',
+          collapsed ? 'justify-center px-2 py-3' : 'justify-between gap-3 p-4',
+        )}
+      >
+        {collapsed ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleSidebar}
+            className="h-9 w-9 text-primary hover:text-primary"
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+          >
+            <Fish className="h-5 w-5 shrink-0" />
+          </Button>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 min-w-0">
+              <Fish className="h-6 w-6 text-primary shrink-0" />
+              <span className="font-bold text-sm tracking-tight truncate">
+                MCP Tuna
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSidebar}
+              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </Button>
+          </>
         )}
       </div>
 
@@ -82,21 +113,6 @@ export function Sidebar() {
           <Settings className="h-4 w-4 shrink-0" />
           {!collapsed && <span>Settings</span>}
         </NavLink>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleSidebar}
-          className={cn('w-full mt-1', collapsed ? '' : 'justify-start px-4')}
-        >
-          {collapsed ? (
-            <PanelLeft className="h-4 w-4" />
-          ) : (
-            <>
-              <PanelLeftClose className="h-4 w-4" />
-              <span className="text-xs text-muted-foreground ml-2">Collapse</span>
-            </>
-          )}
-        </Button>
       </div>
     </aside>
   )

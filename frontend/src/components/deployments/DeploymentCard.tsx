@@ -61,6 +61,9 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUnd
               <Badge variant={deployment.status === 'running' ? 'success' : 'secondary'}>
                 {deployment.status}
               </Badge>
+              <Badge variant="outline">
+                {deployment.modality === 'vision-language' ? 'VLM' : 'Text'}
+              </Badge>
             </div>
             <p className="text-sm font-medium truncate">{modelName}</p>
             <div className="flex items-center gap-1">

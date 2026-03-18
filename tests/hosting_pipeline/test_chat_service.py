@@ -24,6 +24,8 @@ class TestChatConfig:
         assert cfg.temperature == 0.7
         assert cfg.system_prompt is None
         assert cfg.streaming is True
+        assert cfg.modality == "text"
+        assert cfg.api_path is None
 
     def test_api_mode_config(self):
         cfg = ChatConfig(endpoint="http://localhost:8001")
@@ -95,6 +97,8 @@ class TestChatSessionAPIMode:
         assert len(session._history) == 2  # user + assistant
         assert session._history[0]["role"] == "user"
         assert session._history[1]["role"] == "assistant"
+        mock_client.post.assert_awaited_once()
+        assert mock_client.post.await_args.args[0] == "http://localhost:8001/generate"
 
     @pytest.mark.asyncio
     async def test_conversation_history_maintained(self):
@@ -334,3 +338,76 @@ class TestChatSessionCommands:
         await session.shutdown()
 
         session._http_client.aclose.assert_called_once()
+
+
+class TestChatSessionVLM:
+    @pytest.mark.asyncio
+    async def test_send_messages_api_mode_uses_generate_vlm_route(self):
+        cfg = ChatConfig(
+            endpoint="http://localhost:8001",
+            modality="vision-language",
+            api_path="/generate_vlm",
+        )
+        session = ChatSession(cfg)
+        session._mode = "api"
+        session._initialized = True
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"response": "Image summary"}
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        session._http_client = mock_client
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_path", "image_path": "uploads/images/example.png"},
+                    {"type": "text", "text": "Describe the image."},
+                ],
+            }
+        ]
+
+        result = await session.send_messages(messages)
+
+        assert result == "Image summary"
+        mock_client.post.assert_awaited_once()
+        assert mock_client.post.await_args.args[0] == "http://localhost:8001/generate_vlm"
+        assert session._history[-1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_send_messages_direct_mode_uses_inference_service(self):
+        cfg = ChatConfig(model_path="test/vlm", modality="vision-language")
+        inference_service = AsyncMock()
+        inference_service.run_vlm_inference = AsyncMock(
+            return_value={"success": True, "response": "Detected a crack"}
+        )
+        session = ChatSession(cfg, inference_service=inference_service)
+        session._mode = "direct"
+        session._initialized = True
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_path", "image_path": "uploads/images/example.png"},
+                    {"type": "text", "text": "Describe the defect."},
+                ],
+            }
+        ]
+
+        result = await session.send_messages(messages)
+
+        assert result == "Detected a crack"
+        inference_service.run_vlm_inference.assert_awaited_once()
+        assert session._history[-1]["content"][0]["text"] == "Detected a crack"
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_vlm_sessions(self):
+        cfg = ChatConfig(model_path="test/vlm", modality="vision-language")
+        session = ChatSession(cfg)
+        session._mode = "direct"
+        session._initialized = True
+
+        with pytest.raises(ValueError, match="send_message only supports text chats"):
+            await session.send_message("hello")

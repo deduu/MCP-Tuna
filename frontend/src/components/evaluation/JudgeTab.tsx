@@ -11,6 +11,7 @@ import { SingleEvalForm } from './SingleEvalForm'
 import { CompareForm } from './CompareForm'
 import { MetricsTable } from './MetricsTable'
 import { BrowsePathField } from './BrowsePathField'
+import { isVlmDatasetRow } from '@/lib/evaluation-multimodal'
 
 type EvalMode = 'single' | 'rubric' | 'batch' | 'compare'
 
@@ -39,7 +40,10 @@ export function JudgeTab() {
       const testData = Array.isArray(payload.data_points)
         ? (payload.data_points as Array<Record<string, unknown>>)
         : []
-      await executeTool({ toolName: 'judge.evaluate_batch', args: { test_data: testData } })
+      const toolName = testData.some((row) => isVlmDatasetRow(row))
+        ? 'judge.evaluate_vlm_batch'
+        : 'judge.evaluate_batch'
+      await executeTool({ toolName, args: { test_data: testData } })
       toast.success('Batch evaluation complete')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Batch evaluation failed')
@@ -116,7 +120,7 @@ export function JudgeTab() {
                 allowFiles
                 allowDirectories={false}
                 preferredRootIds={['workspace', 'uploads', 'output']}
-                helperText="Browse a dataset file for batch judge evaluation."
+                helperText="Browse a dataset file for batch judge evaluation. VLM rows with canonical messages will use the multimodal judge tool automatically."
               />
             </div>
             <Button onClick={handleBatch} disabled={batchPending}>

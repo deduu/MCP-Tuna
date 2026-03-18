@@ -17,7 +17,8 @@ const PIPELINE_STEPS = [
   'deploy',
 ] as const
 
-const TECHNIQUES = ['sft', 'dpo', 'grpo', 'kto'] as const
+const TECHNIQUES = ['sft', 'dpo', 'grpo', 'kto', 'vlm_sft'] as const
+const VLM_UNSUPPORTED_STEPS = ['extract', 'generate', 'clean', 'normalize', 'evaluate'] as const
 
 interface CustomPipelineFormProps {
   onSubmit: (args: Record<string, unknown>) => void
@@ -56,6 +57,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
   const hasTrain = selectedSteps.has('train')
   const hasDeploy = selectedSteps.has('deploy')
   const deployOnly = hasDeploy && !hasTrain
+  const isVlmTechnique = technique === 'vlm_sft'
   const needsDocumentPath = ['extract', 'generate', 'clean', 'normalize', 'evaluate', 'train'].some((step) =>
     selectedSteps.has(step),
   )
@@ -81,6 +83,17 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
     if (deployOnly && modelValidation?.isAdapter && !adapterPath.trim()) {
       toast.error('That path looks like an adapter folder. Put the base model in Model Path and the adapter folder in Adapter Path.')
       return
+    }
+    if (isVlmTechnique) {
+      const invalidSteps = VLM_UNSUPPORTED_STEPS.filter((step) => selectedSteps.has(step))
+      if (invalidSteps.length > 0) {
+        toast.error(`VLM pipelines currently support dataset-based train/deploy only. Remove: ${invalidSteps.join(', ')}`)
+        return
+      }
+      if (hasTrain && !documentPath.trim()) {
+        toast.error('A VLM dataset path is required for train')
+        return
+      }
     }
 
     let overrides: Record<string, Record<string, unknown>> = {}
@@ -110,7 +123,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
 
     if (selectedSteps.has('generate')) {
       addStep('generate', 'generate.from_document', { technique, file_path: documentPath })
-    } else if (['clean', 'normalize', 'evaluate', 'train'].some((s) => selectedSteps.has(s))) {
+    } else if (!isVlmTechnique && ['clean', 'normalize', 'evaluate', 'train'].some((s) => selectedSteps.has(s))) {
       addStep('load', 'dataset.load', { file_path: documentPath })
     }
 
@@ -124,40 +137,49 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       addStep('evaluate', 'evaluate.dataset', { data_points: '$prev.data_points' })
     }
     if (selectedSteps.has('train')) {
-      addStep('save', 'dataset.save', {
-        data_points: '$prev.data_points',
-        output_path: buildDatasetOutputPath(documentPath, 'custom_pipeline'),
-        format: 'jsonl',
-      })
-      addStep('train', 'finetune.train', {
-        dataset_path: '$prev.file_path',
-        output_dir: './output/custom_pipeline',
-        ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
-        use_lora: effectiveTrainUseLora,
-      })
+      if (isVlmTechnique) {
+        addStep('train', 'finetune.train_vlm_async', {
+          dataset_path: documentPath.trim(),
+          output_dir: './output/custom_pipeline',
+          ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+          use_lora: effectiveTrainUseLora,
+        })
+      } else {
+        addStep('save', 'dataset.save', {
+          data_points: '$prev.data_points',
+          output_path: buildDatasetOutputPath(documentPath, 'custom_pipeline'),
+          format: 'jsonl',
+        })
+        addStep('train', 'finetune.train', {
+          dataset_path: '$prev.file_path',
+          output_dir: './output/custom_pipeline',
+          ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+          use_lora: effectiveTrainUseLora,
+        })
+      }
     }
     if (selectedSteps.has('deploy')) {
       const quantArg = quantization !== 'none' ? { quantization } : {}
       if (selectedSteps.has('train')) {
         addStep(
           'deploy',
-          'host.deploy_mcp',
+          isVlmTechnique ? 'host.deploy_vlm_mcp' : 'host.deploy_mcp',
           effectiveTrainUseLora
             ? {
                 model_path: '$prev.base_model',
                 adapter_path: '$prev.model_path',
-                ...quantArg,
+                ...(isVlmTechnique ? {} : quantArg),
               }
             : {
                 model_path: '$prev.model_path',
-                ...quantArg,
+                ...(isVlmTechnique ? {} : quantArg),
               },
         )
       } else if (modelPath.trim()) {
-        addStep('deploy', 'host.deploy_mcp', {
+        addStep('deploy', isVlmTechnique ? 'host.deploy_vlm_mcp' : 'host.deploy_mcp', {
           model_path: modelPath.trim(),
           ...(adapterPath.trim() ? { adapter_path: adapterPath.trim() } : {}),
-          ...quantArg,
+          ...(isVlmTechnique ? {} : quantArg),
         })
       }
     }
@@ -206,13 +228,19 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       <div className={cn('grid gap-3', needsDocumentPath ? 'sm:grid-cols-2' : 'sm:grid-cols-1')}>
         {needsDocumentPath && (
           <div>
-            <label className="text-sm font-medium text-foreground mb-1 block">Document Path</label>
+            <label className="text-sm font-medium text-foreground mb-1 block">
+              {isVlmTechnique ? 'Dataset Path' : 'Document Path'}
+            </label>
             <DocumentPathInput
               value={documentPath}
               onChange={setDocumentPath}
-              placeholder="/path/to/document-or-dataset"
+              placeholder={isVlmTechnique ? '/path/to/vlm_dataset.jsonl' : '/path/to/document-or-dataset'}
               disabled={isPending}
-              helperText="Browse uploads one document to the backend. For an existing dataset, you can also paste its server path."
+              helperText={
+                isVlmTechnique
+                  ? 'Use a backend-visible VLM dataset manifest path. Build one in Datasets > Build VLM Dataset Row.'
+                  : 'Browse uploads one document to the backend. For an existing dataset, you can also paste its server path.'
+              }
             />
           </div>
         )}
@@ -271,7 +299,9 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
             <option value="none">None (full precision)</option>
           </select>
           <p className="mt-1 text-xs text-muted-foreground">
-            4-bit quantization significantly reduces memory usage. Use &quot;None&quot; only if you have enough VRAM/RAM.
+            {isVlmTechnique
+              ? 'Text deployments honor quantization here. VLM deploy steps currently use the dedicated multimodal runtime without a quantization override.'
+              : '4-bit quantization significantly reduces memory usage. Use "None" only if you have enough VRAM/RAM.'}
           </p>
         </div>
       )}
@@ -297,10 +327,15 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
         >
           {TECHNIQUES.map((t) => (
             <option key={t} value={t}>
-              {t.toUpperCase()}
+              {t === 'vlm_sft' ? 'VLM SFT' : t.toUpperCase()}
             </option>
           ))}
         </select>
+        {isVlmTechnique && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            VLM custom pipelines currently support dataset-based training and deployment. Document extraction and text-only cleanup steps stay disabled for this technique.
+          </p>
+        )}
       </div>
 
       {/* Advanced */}

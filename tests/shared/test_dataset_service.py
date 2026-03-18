@@ -51,6 +51,28 @@ def kto_data() -> list[dict]:
     ]
 
 
+@pytest.fixture
+def vlm_data() -> list[dict]:
+    return [
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_path", "image_path": "uploads/images/sample.png"},
+                        {"type": "text", "text": "Describe the image."},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "A sample description."}],
+                },
+            ],
+            "metadata": {"task": "captioning"},
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # save
 # ---------------------------------------------------------------------------
@@ -217,6 +239,20 @@ async def test_info_detects_grpo_technique(svc: DatasetService, grpo_data: list,
     await svc.save(grpo_data, str(out))
     result = await svc.info(str(out))
     assert result["metadata"]["technique"] == "grpo"
+
+
+async def test_info_detects_vlm_technique(svc: DatasetService, vlm_data: list, tmp_path: Path):
+    out = tmp_path / "vlm.jsonl"
+    await svc.save(vlm_data, str(out))
+    result = await svc.info(str(out))
+    assert result["metadata"]["technique"] == "vlm_sft"
+
+
+async def test_load_reports_vlm_technique(svc: DatasetService, vlm_data: list, tmp_path: Path):
+    out = tmp_path / "vlm.jsonl"
+    await svc.save(vlm_data, str(out))
+    result = await svc.load(str(out))
+    assert result["technique"] == "vlm_sft"
 
 
 async def test_info_detects_kto_technique(svc: DatasetService, kto_data: list, tmp_path: Path):

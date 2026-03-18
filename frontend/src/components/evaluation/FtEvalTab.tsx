@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { toast } from 'sonner'
 import { MetricsTable } from './MetricsTable'
 import { BrowsePathField } from './BrowsePathField'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
+import { extractAssistantText, extractPromptText, isVlmDatasetRow } from '@/lib/evaluation-multimodal'
+
+type EvaluationFlavor = 'text' | 'vlm' | null
 
 export function FtEvalTab() {
   const [modelPath, setModelPath] = useState('')
@@ -15,6 +18,8 @@ export function FtEvalTab() {
   const [evalResult, setEvalResult] = useState<Record<string, unknown> | null>(null)
   const [summaryResult, setSummaryResult] = useState<Record<string, unknown> | null>(null)
   const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null)
+  const [evaluationFlavor, setEvaluationFlavor] = useState<EvaluationFlavor>(null)
+  const [isVlmDataset, setIsVlmDataset] = useState(false)
   const { mutateAsync: executeTool, isPending } = useToolExecution()
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [loadingCompare, setLoadingCompare] = useState(false)
@@ -38,28 +43,61 @@ export function FtEvalTab() {
     }
     try {
       const testData = await loadDataPoints(datasetPath)
-      const rows = [...testData]
+      const rows = testData.map((row) => ({ ...row }))
+      const vlmDataset = rows.some((row) => isVlmDatasetRow(row))
+      setIsVlmDataset(vlmDataset)
+
       if (modelPath.trim() && rows.length > 0) {
-        const prompts = rows.map((r) => String(r.instruction ?? r.prompt ?? ''))
-        const inf = await executeTool({
-          toolName: 'test.inference',
-          args: { prompts, model_path: modelPath.trim() },
-        })
-        const infRows = Array.isArray((inf as Record<string, unknown>).results)
-          ? ((inf as Record<string, unknown>).results as Array<Record<string, unknown>>)
-          : []
-        rows.forEach((row, i) => {
-          row.generated = infRows[i]?.response ?? row.generated ?? ''
-          row.reference = row.reference ?? row.output ?? ''
+        if (vlmDataset) {
+          for (const row of rows) {
+            if (!isVlmDatasetRow(row)) {
+              continue
+            }
+            const rowRecord = row as Record<string, unknown>
+            const inference = await executeTool({
+              toolName: 'test.vlm_inference',
+              args: { messages: rowRecord.messages, model_path: modelPath.trim() },
+            })
+            rowRecord.generated = (inference as Record<string, unknown>).response ?? rowRecord.generated ?? ''
+            rowRecord.reference = rowRecord.reference ?? extractAssistantText(rowRecord.messages)
+          }
+        } else {
+          const prompts = rows.map((r) => String(r.instruction ?? r.prompt ?? ''))
+          const inf = await executeTool({
+            toolName: 'test.inference',
+            args: { prompts, model_path: modelPath.trim() },
+          })
+          const infRows = Array.isArray((inf as Record<string, unknown>).results)
+            ? ((inf as Record<string, unknown>).results as Array<Record<string, unknown>>)
+            : []
+          rows.forEach((row, i) => {
+            row.generated = infRows[i]?.response ?? row.generated ?? ''
+            row.reference = row.reference ?? row.output ?? ''
+          })
+        }
+      }
+
+      if (vlmDataset) {
+        rows.forEach((row) => {
+          if (!isVlmDatasetRow(row)) {
+            return
+          }
+          const rowRecord = row as Record<string, unknown>
+          rowRecord.reference = rowRecord.reference ?? extractAssistantText(rowRecord.messages)
+          rowRecord.prompt = rowRecord.prompt ?? extractPromptText(rowRecord.messages)
         })
       }
 
-      const res = await executeTool({
-        toolName: 'ft_eval.batch',
-        args: { test_data: rows },
-      })
-      setEvalResult(res as Record<string, unknown>)
-      setSummaryResult(null)
+      const toolName = vlmDataset ? 'judge.evaluate_vlm_batch' : 'ft_eval.batch'
+      const res = await executeTool({ toolName, args: { test_data: rows } })
+      const parsed = res as Record<string, unknown>
+      setEvalResult(parsed)
+      setSummaryResult(
+        parsed.summary && typeof parsed.summary === 'object'
+          ? (parsed.summary as Record<string, unknown>)
+          : null,
+      )
+      setEvaluationFlavor(vlmDataset ? 'vlm' : 'text')
       toast.success('Evaluation complete')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Evaluation failed')
@@ -69,6 +107,14 @@ export function FtEvalTab() {
   async function handleSummary() {
     if (!evalResult || !Array.isArray(evalResult.results)) {
       toast.error('Run evaluation first')
+      return
+    }
+    if (evaluationFlavor === 'vlm') {
+      setSummaryResult(
+        evalResult.summary && typeof evalResult.summary === 'object'
+          ? (evalResult.summary as Record<string, unknown>)
+          : null,
+      )
       return
     }
     setLoadingSummary(true)
@@ -86,6 +132,10 @@ export function FtEvalTab() {
   }
 
   async function handleCompare() {
+    if (isVlmDataset) {
+      toast.error('Compare Models currently supports text datasets only')
+      return
+    }
     if (!modelPath.trim() || !compareModelPath.trim() || !datasetPath.trim()) {
       toast.error('Base model, adapter/model path, and dataset path are required')
       return
@@ -119,7 +169,7 @@ export function FtEvalTab() {
     setExporting(true)
     try {
       await executeTool({
-        toolName: 'ft_eval.export',
+        toolName: evaluationFlavor === 'vlm' ? 'judge.export' : 'ft_eval.export',
         args: { results: evalResult.results, output_path: exportPath, format: 'jsonl' },
       })
       toast.success(`Exported to ${exportPath}`)
@@ -152,7 +202,7 @@ export function FtEvalTab() {
               allowFiles
               allowDirectories={false}
               preferredRootIds={['workspace', 'uploads', 'output']}
-              helperText="Browse a dataset file visible to the gateway."
+              helperText="Browse a dataset file visible to the gateway. Canonical VLM rows with messages will automatically use multimodal inference and judging."
             />
           </div>
           <Button onClick={handleEvaluate} disabled={isPending}>
@@ -165,6 +215,11 @@ export function FtEvalTab() {
         <Card>
           <CardHeader>
             <CardTitle>Evaluation Results</CardTitle>
+            {evaluationFlavor === 'vlm' && (
+              <CardDescription>
+                This result came from `test.vlm_inference` plus `judge.evaluate_vlm_batch`.
+              </CardDescription>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
             <MetricsTable data={evalResult} />
@@ -173,9 +228,9 @@ export function FtEvalTab() {
                 variant="outline"
                 size="sm"
                 onClick={handleSummary}
-                disabled={loadingSummary}
+                disabled={loadingSummary || (evaluationFlavor === 'vlm' && !evalResult.summary)}
               >
-                {loadingSummary ? 'Loading...' : 'Compute Summary'}
+                {loadingSummary ? 'Loading...' : evaluationFlavor === 'vlm' ? 'Show Summary' : 'Compute Summary'}
               </Button>
               <BrowsePathField
                 value={exportPath}
@@ -210,6 +265,11 @@ export function FtEvalTab() {
       <Card>
         <CardHeader>
           <CardTitle>Compare Models (test.compare_models)</CardTitle>
+          {isVlmDataset && (
+            <CardDescription>
+              Model-to-model comparison still uses the text inference tool. Use Judge Compare for multimodal side-by-side evaluation.
+            </CardDescription>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1">
@@ -225,7 +285,7 @@ export function FtEvalTab() {
           <Button
             variant="outline"
             onClick={handleCompare}
-            disabled={loadingCompare}
+            disabled={loadingCompare || isVlmDataset}
           >
             {loadingCompare ? 'Comparing...' : 'Compare'}
           </Button>

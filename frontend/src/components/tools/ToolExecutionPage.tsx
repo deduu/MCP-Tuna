@@ -23,6 +23,7 @@ export function ToolExecutionPage() {
     () => tools?.find((t) => t.name === toolName),
     [tools, toolName],
   )
+  const supportsMultimodalMessages = Boolean(tool?.inputSchema?.properties?.messages)
   const nsInfo = namespace ? NAMESPACE_MAP[namespace] : undefined
 
   if (registryLoading) {
@@ -63,6 +64,11 @@ export function ToolExecutionPage() {
 
       {tool.description && (
         <p className="text-sm text-muted-foreground">{tool.description}</p>
+      )}
+      {supportsMultimodalMessages && (
+        <p className="text-xs text-muted-foreground">
+          This tool accepts structured `messages` blocks. For image inputs, upload files first and reference the returned `image_path` values.
+        </p>
       )}
 
       <Card>

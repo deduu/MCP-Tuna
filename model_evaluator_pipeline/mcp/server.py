@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from agentsoul.server import MCPServer
 from shared.async_utils import call_maybe_async
@@ -182,6 +182,74 @@ class ModelEvalMCPServer:
                     question=question, generated=generated_a,
                     reference=reference, generated_b=generated_b,
                     judge_type="pairwise", judges=judges, criteria=criteria,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="judge.evaluate_vlm",
+            description="Run multimodal pointwise judge evaluation with text and image blocks.",
+        )
+        async def judge_evaluate_vlm(
+            messages: List[Dict[str, Any]],
+            generated: str,
+            reference: Optional[str] = None,
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+        ) -> str:
+            return json.dumps(
+                await self.judge_svc.evaluate_vlm_single(
+                    messages=messages,
+                    generated=generated,
+                    reference=reference,
+                    judge_model=judge_model,
+                    criteria=criteria,
+                    rubric=rubric,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="judge.compare_vlm",
+            description="Compare two candidate answers against the same multimodal input.",
+        )
+        async def judge_compare_vlm(
+            messages: List[Dict[str, Any]],
+            generated_a: str,
+            generated_b: str,
+            reference: Optional[str] = None,
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+        ) -> str:
+            return json.dumps(
+                await self.judge_svc.compare_vlm(
+                    messages=messages,
+                    generated_a=generated_a,
+                    generated_b=generated_b,
+                    reference=reference,
+                    judge_model=judge_model,
+                    criteria=criteria,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="judge.evaluate_vlm_batch",
+            description="Batch multimodal judge evaluation for rows with canonical messages.",
+        )
+        async def judge_evaluate_vlm_batch(
+            test_data: List[Dict],
+            judge_model: str = "gpt-4o",
+            criteria: Optional[List[Dict]] = None,
+            rubric: Optional[Dict] = None,
+        ) -> str:
+            return json.dumps(
+                await self.judge_svc.evaluate_vlm_batch(
+                    test_data=test_data,
+                    judge_model=judge_model,
+                    criteria=criteria,
+                    rubric=rubric,
                 ),
                 indent=2,
             )

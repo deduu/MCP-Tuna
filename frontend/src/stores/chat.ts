@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ChatContentBlock } from '@/lib/chat-content'
 
 export interface ToolCallEvent {
   tool: string
@@ -35,6 +36,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  parts?: ChatContentBlock[]
   events: AgentEvent[]
   toolCalls: ToolCallEvent[]
   reflections: ReflectionEvent[]
@@ -53,7 +55,7 @@ interface ChatStore {
   selectedDeploymentId: string | null
   deploymentConversationId: string | null
 
-  addUserMessage: (content: string) => void
+  addUserMessage: (message: { content: string; parts?: ChatContentBlock[] }) => void
   startAssistantMessage: () => string
   appendToken: (id: string, token: string) => void
   addThinking: (id: string, content: string) => void
@@ -86,7 +88,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   selectedDeploymentId: null,
   deploymentConversationId: null,
 
-  addUserMessage: (content) =>
+  addUserMessage: ({ content, parts }) =>
     set((s) => ({
       messages: [
         ...s.messages,
@@ -94,6 +96,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           id: genId(),
           role: 'user',
           content,
+          parts,
           events: [],
           toolCalls: [],
           reflections: [],
