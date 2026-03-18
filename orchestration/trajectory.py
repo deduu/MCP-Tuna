@@ -15,6 +15,7 @@ structured trajectory.
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
+from shared.costing import MODEL_COST_TABLE, estimate_cost_usd
 
 
 @dataclass
@@ -47,10 +48,8 @@ class TrajectoryRecorder:
     """Record structured trajectories from AgentSoul runs."""
 
     COST_TABLE: Dict[str, Dict[str, float]] = {
-        "gpt-4o": {"input": 2.50 / 1e6, "output": 10.0 / 1e6},
-        "gpt-4o-mini": {"input": 0.15 / 1e6, "output": 0.60 / 1e6},
-        "o3-mini": {"input": 1.10 / 1e6, "output": 4.40 / 1e6},
-        "local": {"input": 0.0, "output": 0.0},
+        **MODEL_COST_TABLE,
+        "local": {"input": 0.0 / 1e6, "output": 0.0 / 1e6},
     }
 
     def __init__(self, cost_table: Optional[Dict[str, Dict[str, float]]] = None):
@@ -62,10 +61,8 @@ class TrajectoryRecorder:
         return self.COST_TABLE.get(model_id, self.COST_TABLE["local"])
 
     def _estimate_cost(self, model_id: str, usage: Dict[str, int]) -> float:
-        rates = self._get_cost_rates(model_id)
-        prompt_cost = usage.get("prompt_tokens", 0) * rates["input"]
-        completion_cost = usage.get("completion_tokens", 0) * rates["output"]
-        return prompt_cost + completion_cost
+        estimated = estimate_cost_usd(model_id, usage, unknown_as_zero=True)
+        return float(estimated or 0.0)
 
     async def record(self, agent, user_input: str, **kwargs) -> Trajectory:
         """

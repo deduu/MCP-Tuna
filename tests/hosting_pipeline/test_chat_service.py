@@ -101,6 +101,32 @@ class TestChatSessionAPIMode:
         assert mock_client.post.await_args.args[0] == "http://localhost:8001/generate"
 
     @pytest.mark.asyncio
+    async def test_send_message_result_api_mode_returns_metrics(self):
+        cfg = ChatConfig(endpoint="http://localhost:8001")
+        session = ChatSession(cfg)
+        session._mode = "api"
+        session._initialized = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": "Hello! How can I help?",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "model": "api-model",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        session._http_client = mock_client
+
+        result = await session.send_message_result("Hello")
+
+        assert result["response"] == "Hello! How can I help?"
+        assert result["usage"]["total_tokens"] == 15
+        assert result["model_id"] == "api-model"
+        assert result["metrics"]["latency_ms"] is not None
+
+    @pytest.mark.asyncio
     async def test_conversation_history_maintained(self):
         cfg = ChatConfig(endpoint="http://localhost:8001")
         session = ChatSession(cfg)
@@ -247,6 +273,27 @@ class TestChatSessionDirectMode:
         assert tokens == ["Hello", " world", "!"]
         assert len(session._history) == 2
         assert session._history[1]["content"] == "Hello world!"
+
+    @pytest.mark.asyncio
+    async def test_stream_message_api_mode_falls_back_to_full_response(self):
+        cfg = ChatConfig(endpoint="http://localhost:8001")
+        session = ChatSession(cfg)
+        session._mode = "api"
+        session._initialized = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"response": "Hello from API"}
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        session._http_client = mock_client
+
+        tokens = []
+        async for token in session.stream_message("Hi"):
+            tokens.append(token)
+
+        assert tokens == ["Hello from API"]
+        assert session._history[-1]["content"] == "Hello from API"
 
     @pytest.mark.asyncio
     async def test_shutdown_direct_mode(self):

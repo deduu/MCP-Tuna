@@ -1,6 +1,7 @@
 import { useChatStore } from '@/stores/chat'
 import type { TurnMetrics } from '@/stores/chat'
 import { mcpCall } from '@/api/client'
+import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
 import {
   extractTextFromChatContent,
   sanitizeChatContentForRequest,
@@ -81,22 +82,58 @@ export async function sendChatMessage(
         return
       }
 
-      const result = await mcpCall<{
-        success: boolean
-        conversation_id: string
-        response: string
-      }>('host.chat', {
-        deployment_id: options.deploymentId,
-        message: userText,
-        ...(store.deploymentConversationId
-          ? { conversation_id: store.deploymentConversationId }
-          : {}),
-      })
-
-      store.setDeploymentConversationId(result.conversation_id)
-      store.appendToken(msgId, result.response ?? '')
-      store.finishAssistantMessage(msgId)
-      store.setStreaming(false)
+      let completed = false
+      await streamDeploymentTextChat(
+        {
+          deployment_id: options.deploymentId,
+          message: userText,
+          conversation_id: store.deploymentConversationId,
+          signal: abortController.signal,
+        },
+        {
+          onToken: (token) => {
+            store.appendToken(msgId, token)
+          },
+          onComplete: (result) => {
+            completed = true
+            store.setDeploymentConversationId(result.conversation_id)
+            const usage =
+              result.usage && (
+                result.usage.prompt_tokens !== undefined ||
+                result.usage.completion_tokens !== undefined
+              )
+                ? {
+                    prompt_tokens: result.usage.prompt_tokens ?? 0,
+                    completion_tokens: result.usage.completion_tokens ?? 0,
+                  }
+                : null
+            const totalTokens =
+              result.metrics?.total_tokens ??
+              result.usage?.total_tokens ??
+              (usage
+                ? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+                : null)
+            if (usage || totalTokens || result.metrics?.confidence || result.metrics?.perplexity) {
+              store.addMetrics(msgId, {
+                turn: result.turns ?? 1,
+                confidence: result.metrics?.confidence ?? null,
+                perplexity: result.metrics?.perplexity ?? null,
+                tokens: totalTokens ?? null,
+                usage,
+              })
+            }
+            store.finishAssistantMessage(msgId)
+            store.setStreaming(false)
+          },
+          onError: (message) => {
+            throw new Error(message)
+          },
+        },
+      )
+      if (!completed) {
+        store.finishAssistantMessage(msgId)
+        store.setStreaming(false)
+      }
       return
     }
 

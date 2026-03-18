@@ -1,6 +1,7 @@
 """Hosting service — deploy fine-tuned models as MCP tool servers or REST APIs."""
 
 import asyncio
+import json
 import logging
 import socket
 import threading
@@ -208,6 +209,7 @@ class HostingService:
         """Deploy as a FastAPI endpoint with /generate POST route."""
         try:
             from fastapi import FastAPI
+            from fastapi.responses import StreamingResponse
             import uvicorn
             from agentsoul.providers.hf import HuggingFaceProvider
 
@@ -227,13 +229,125 @@ class HostingService:
 
             app = FastAPI(title=f"MCP Tuna Model: {config.model_path}")
 
+            def _to_ms(value: Any) -> float | None:
+                try:
+                    return round(float(value) * 1000, 1)
+                except (TypeError, ValueError):
+                    return None
+
+            def _to_float(value: Any) -> float | None:
+                try:
+                    return round(float(value), 3)
+                except (TypeError, ValueError):
+                    return None
+
+            def _normalize_usage(
+                usage: Dict[str, Any] | None,
+                provider_metrics: Dict[str, Any],
+            ) -> Dict[str, int]:
+                normalized: Dict[str, int] = {}
+                if isinstance(usage, dict):
+                    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                        value = usage.get(key)
+                        if value is None:
+                            continue
+                        try:
+                            normalized[key] = int(value)
+                        except (TypeError, ValueError):
+                            continue
+
+                if "prompt_tokens" not in normalized and provider_metrics.get("prompt_tokens") is not None:
+                    normalized["prompt_tokens"] = int(provider_metrics["prompt_tokens"])
+                if "completion_tokens" not in normalized and provider_metrics.get("generated_tokens") is not None:
+                    normalized["completion_tokens"] = int(provider_metrics["generated_tokens"])
+                if "total_tokens" not in normalized:
+                    if provider_metrics.get("total_tokens") is not None:
+                        normalized["total_tokens"] = int(provider_metrics["total_tokens"])
+                    else:
+                        normalized["total_tokens"] = (
+                            normalized.get("prompt_tokens", 0) + normalized.get("completion_tokens", 0)
+                        )
+                return normalized
+
+            def _metrics_from_provider(
+                provider_metrics: Dict[str, Any],
+                usage: Dict[str, int],
+            ) -> Dict[str, Any]:
+                return {
+                    "latency_ms": _to_ms(provider_metrics.get("time_total_s")),
+                    "ttft_ms": _to_ms(provider_metrics.get("first_token_latency_s")),
+                    "output_tokens_per_second": _to_float(
+                        provider_metrics.get("decode_tps") or provider_metrics.get("total_tps")
+                    ),
+                    "perplexity": _to_float(provider_metrics.get("perplexity")),
+                    "confidence": provider_metrics.get("confidence_level"),
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                }
+
+            def _format_sse(event: str, payload: Dict[str, Any]) -> str:
+                return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
             @app.post("/generate")
             async def generate(prompt: str, max_new_tokens: int = 512):
                 resp = await provider.chat(
                     messages=[{"role": "user", "content": prompt}],
                     max_new_tokens=max_new_tokens,
                 )
-                return {"response": resp.content or ""}
+                provider_metrics = getattr(provider, "last_metrics", None) or {}
+                usage = _normalize_usage(resp.usage, provider_metrics)
+                return {
+                    "response": resp.content or "",
+                    "model": config.model_path,
+                    "usage": usage,
+                    "metrics": _metrics_from_provider(provider_metrics, usage),
+                }
+
+            @app.post("/generate_stream")
+            async def generate_stream(payload: Dict[str, Any]):
+                prompt = str(payload.get("prompt") or "")
+                max_new_tokens = int(payload.get("max_new_tokens") or 512)
+
+                async def event_generator():
+                    full_response = ""
+                    streamed_usage: Dict[str, Any] | None = None
+                    try:
+                        async for chunk in provider.stream(
+                            messages=[{"role": "user", "content": prompt}],
+                            max_new_tokens=max_new_tokens,
+                        ):
+                            chunk_content = getattr(chunk, "content", None)
+                            if isinstance(chunk_content, str) and chunk_content:
+                                full_response += chunk_content
+                                yield _format_sse("token", {"content": chunk_content})
+
+                            chunk_usage = getattr(chunk, "usage", None)
+                            if isinstance(chunk_usage, dict):
+                                streamed_usage = chunk_usage
+
+                        provider_metrics = getattr(provider, "last_metrics", None) or {}
+                        usage = _normalize_usage(streamed_usage, provider_metrics)
+                        yield _format_sse(
+                            "complete",
+                            {
+                                "response": full_response,
+                                "model_id": config.model_path,
+                                "usage": usage,
+                                "metrics": _metrics_from_provider(provider_metrics, usage),
+                            },
+                        )
+                    except Exception as exc:
+                        yield _format_sse("error", {"error": str(exc)})
+
+                return StreamingResponse(
+                    event_generator(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
 
             @app.get("/health")
             async def health():
@@ -278,7 +392,7 @@ class HostingService:
                 "host": config.host,
                 "port": config.port,
                 "api_path": "/generate",
-                "routes": ["/generate", "/health"],
+                "routes": ["/generate", "/generate_stream", "/health"],
                 "task": runtime.get("task"),
                 "loop": runtime.get("loop"),
                 "thread": runtime.get("thread"),
@@ -294,7 +408,7 @@ class HostingService:
                 "model_path": config.model_path,
                 "modality": config.modality,
                 "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
-                "routes": ["/generate", "/health"],
+                "routes": ["/generate", "/generate_stream", "/health"],
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

@@ -553,6 +553,12 @@ class HTTPTransport(Transport):
                 "tools": len(mcp_server_wrapper._tools)
             }
 
+        configure_http_app = getattr(mcp_server_wrapper, "configure_http_app", None)
+        if callable(configure_http_app):
+            hook_result = configure_http_app(app)
+            if inspect.isawaitable(hook_result):
+                await hook_result
+
         # Run the server
         logger.info(
             "MCP Server running at http://%s:%s | "

@@ -1,6 +1,8 @@
-"""Chat service — manages interactive conversations with deployed or local models."""
+"""Chat service that manages interactive conversations with deployed or local models."""
 from __future__ import annotations
 
+import json
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from shared.config import ChatConfig
@@ -8,14 +10,7 @@ from shared.multimodal_models import extract_text_from_content, normalize_conten
 
 
 class ChatSession:
-    """Manages conversation state and generation for a single chat session.
-
-    Supports two modes:
-    - **API mode** (``config.endpoint`` set): connects to a deployed model's
-      ``/generate`` endpoint via httpx.
-    - **Direct mode** (``config.model_path`` set): loads the model in-process
-      using ``HuggingFaceProvider`` from agentsoul.
-    """
+    """Manages conversation state and generation for a single chat session."""
 
     def __init__(
         self,
@@ -28,25 +23,18 @@ class ChatSession:
         self._mode: Optional[str] = None
         self._initialized: bool = False
 
-        # API mode
         self._http_client: Any = None
-
-        # Direct mode
         self._provider: Any = provider
         self._owns_provider = provider is None
         self._inference_service = inference_service
         self._owns_inference_service = inference_service is None
+        self._last_result: Optional[Dict[str, Any]] = None
 
-        # Seed system prompt into history
         if config.system_prompt:
             self._history.append({"role": "system", "content": config.system_prompt})
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle
-    # ------------------------------------------------------------------ #
-
     async def initialize(self) -> Dict[str, Any]:
-        """Load model or validate endpoint. Returns session info dict."""
+        """Load model or validate endpoint. Returns session info."""
         if self._config.endpoint:
             return await self._init_api()
         if self._config.model_path:
@@ -59,7 +47,6 @@ class ChatSession:
         self._mode = "api"
         self._http_client = httpx.AsyncClient(timeout=30.0)
 
-        # Validate the endpoint is reachable
         resp = await self._http_client.get(f"{self._config.endpoint}/health")
         health = resp.json() if resp.status_code == 200 else {}
 
@@ -113,26 +100,25 @@ class ChatSession:
                 pass
         self._initialized = False
 
-    # ------------------------------------------------------------------ #
-    # Messaging
-    # ------------------------------------------------------------------ #
-
     async def send_message(self, user_input: str) -> str:
-        """Send a message and get the full response. Updates conversation history."""
+        result = await self.send_message_result(user_input)
+        return result["response"]
+
+    async def send_message_result(self, user_input: str) -> Dict[str, Any]:
+        """Send a message and get the full response."""
         if self._config.modality == "vision-language":
             raise ValueError("send_message only supports text chats; use send_messages for VLM")
 
         self._history.append({"role": "user", "content": user_input})
-
-        if self._mode == "api":
-            response = await self._send_api(user_input)
-        else:
-            response = await self._send_direct()
-
-        self._history.append({"role": "assistant", "content": response})
-        return response
+        result = await (self._send_api(user_input) if self._mode == "api" else self._send_direct())
+        self._finalize_text_result(result)
+        return result
 
     async def send_messages(self, messages: List[Dict[str, Any]]) -> str:
+        result = await self.send_messages_result(messages)
+        return result["response"]
+
+    async def send_messages_result(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Send structured multimodal messages and get the full response."""
         if self._config.modality != "vision-language":
             raise ValueError("send_messages is only available for VLM chat sessions")
@@ -140,65 +126,83 @@ class ChatSession:
         normalized_messages = [self._normalize_message(message) for message in messages]
         self._history.extend(normalized_messages)
 
-        if self._mode == "api":
-            response = await self._send_api_messages()
-        else:
-            response = await self._send_direct_messages()
+        result = await (
+            self._send_api_messages() if self._mode == "api" else self._send_direct_messages()
+        )
 
         self._history.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": response}],
+                "content": [{"type": "text", "text": result["response"]}],
             }
         )
-        return response
+        self._last_result = result
+        return result
 
     async def stream_message(self, user_input: str) -> AsyncGenerator[str, None]:
-        """Stream response tokens. Updates history on completion."""
+        """Stream response tokens only."""
+        async for event in self.stream_message_events(user_input):
+            if event.get("type") == "token" and event.get("content"):
+                yield str(event["content"])
+
+    async def stream_message_events(
+        self,
+        user_input: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream structured text chat events."""
+        if self._config.modality == "vision-language":
+            raise ValueError("stream_message_events only supports text chats")
+
         self._history.append({"role": "user", "content": user_input})
 
         if self._mode == "api":
-            # Current /generate endpoint does not support SSE — fall back
-            response = await self._send_api(user_input)
-            self._history.append({"role": "assistant", "content": response})
-            yield response
+            async for event in self._stream_api_events(user_input):
+                yield event
             return
 
-        # Direct mode — stream from provider
-        full_response = ""
-        async for token in self._provider.stream(
-            messages=list(self._history),
-            max_new_tokens=self._config.max_new_tokens,
-        ):
-            full_response += token
-            yield token
+        async for event in self._stream_direct_events():
+            yield event
 
-        self._history.append({"role": "assistant", "content": full_response})
-
-    # ------------------------------------------------------------------ #
-    # Internal send helpers
-    # ------------------------------------------------------------------ #
-
-    async def _send_api(self, user_input: str) -> str:
+    async def _send_api(self, user_input: str) -> Dict[str, Any]:
         """POST to the deployed /generate endpoint."""
         prompt = self._format_history_as_prompt()
+        start_time = time.perf_counter()
         resp = await self._http_client.post(
             f"{self._config.endpoint}{self._config.api_path or '/generate'}",
             params={"prompt": prompt, "max_new_tokens": self._config.max_new_tokens},
         )
         data = resp.json()
-        return data.get("response", "")
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+        metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+        return {
+            "response": data.get("response", ""),
+            "usage": usage,
+            "metrics": {
+                **metrics,
+                "latency_ms": metrics.get("latency_ms", latency_ms),
+            },
+            "model_id": data.get("model_id") or data.get("model") or self._config.model_path,
+        }
 
-    async def _send_direct(self) -> str:
-        """Generate via the in-process HuggingFaceProvider."""
+    async def _send_direct(self) -> Dict[str, Any]:
+        """Generate via the in-process HuggingFace provider."""
         resp = await self._provider.chat(
             messages=list(self._history),
             max_new_tokens=self._config.max_new_tokens,
         )
-        return resp.content or ""
+        provider_metrics = getattr(self._provider, "last_metrics", None) or {}
+        usage = self._normalize_usage(resp.usage, provider_metrics)
+        return {
+            "response": resp.content or "",
+            "usage": usage,
+            "metrics": self._build_text_metrics(provider_metrics, usage),
+            "model_id": getattr(self._provider, "model_id", None) or self._config.model_path,
+        }
 
-    async def _send_api_messages(self) -> str:
+    async def _send_api_messages(self) -> Dict[str, Any]:
         """POST structured multimodal messages to a hosted VLM endpoint."""
+        start_time = time.perf_counter()
         resp = await self._http_client.post(
             f"{self._config.endpoint}{self._config.api_path or '/generate_vlm'}",
             json={
@@ -208,9 +212,24 @@ class ChatSession:
             },
         )
         data = resp.json()
-        return data.get("response", "")
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
+        details = data.get("details", {}) if isinstance(data.get("details"), dict) else {}
+        completion_tokens = details.get("tokens_generated")
+        return {
+            "response": data.get("response", ""),
+            "usage": None,
+            "metrics": {
+                "latency_ms": latency_ms,
+                "output_tokens_per_second": self._safe_rate(
+                    completion_tokens,
+                    details.get("generation_time_seconds"),
+                ),
+                "completion_tokens": completion_tokens,
+            },
+            "model_id": data.get("model") or self._config.model_path,
+        }
 
-    async def _send_direct_messages(self) -> str:
+    async def _send_direct_messages(self) -> Dict[str, Any]:
         """Generate a response using the in-process VLM inference service."""
         result = await self._inference_service.run_vlm_inference(
             messages=list(self._history),
@@ -221,14 +240,154 @@ class ChatSession:
         )
         if not result.get("success"):
             raise RuntimeError(result.get("error", "VLM generation failed"))
-        return result.get("response", "")
+        completion_tokens = result.get("tokens_generated")
+        latency_ms = self._to_ms(result.get("generation_time_seconds"))
+        return {
+            "response": result.get("response", ""),
+            "usage": None,
+            "metrics": {
+                "latency_ms": latency_ms,
+                "output_tokens_per_second": self._safe_rate(
+                    completion_tokens,
+                    result.get("generation_time_seconds"),
+                ),
+                "completion_tokens": completion_tokens,
+            },
+            "model_id": self._config.model_path,
+        }
+
+    async def _stream_api_events(
+        self,
+        user_input: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        prompt = self._format_history_as_prompt()
+        stream_path = self._stream_api_path()
+
+        try:
+            async with self._http_client.stream(
+                "POST",
+                f"{self._config.endpoint}{stream_path}",
+                json={
+                    "prompt": prompt,
+                    "max_new_tokens": self._config.max_new_tokens,
+                    "temperature": self._config.temperature,
+                },
+            ) as response:
+                content_type = response.headers.get("content-type", "").lower()
+                if response.status_code != 200 or "text/event-stream" not in content_type:
+                    result = await self._send_api(user_input)
+                    if result["response"]:
+                        yield {"type": "token", "content": result["response"]}
+                    self._finalize_text_result(result)
+                    yield {"type": "complete", **result}
+                    return
+
+                full_response = ""
+                async for event in self._iter_sse_events(response):
+                    event_type = event.get("event") or "message"
+                    payload = event.get("data")
+                    if not isinstance(payload, dict):
+                        continue
+
+                    if event_type == "token":
+                        content = payload.get("content")
+                        if isinstance(content, str) and content:
+                            full_response += content
+                            yield {"type": "token", "content": content}
+                        continue
+
+                    if event_type == "complete":
+                        result = {
+                            "response": payload.get("response", full_response),
+                            "usage": payload.get("usage"),
+                            "metrics": payload.get("metrics"),
+                            "model_id": payload.get("model_id") or payload.get("model"),
+                        }
+                        self._finalize_text_result(result)
+                        yield {"type": "complete", **result}
+                        return
+
+                    if event_type == "error":
+                        raise RuntimeError(str(payload.get("error", "Streaming request failed")))
+
+                result = {
+                    "response": full_response,
+                    "usage": None,
+                    "metrics": None,
+                    "model_id": self._config.model_path,
+                }
+                self._finalize_text_result(result)
+                yield {"type": "complete", **result}
+        except Exception:
+            result = await self._send_api(user_input)
+            if result["response"]:
+                yield {"type": "token", "content": result["response"]}
+            self._finalize_text_result(result)
+            yield {"type": "complete", **result}
+
+    async def _stream_direct_events(self) -> AsyncGenerator[Dict[str, Any], None]:
+        full_response = ""
+        streamed_usage: Optional[Dict[str, Any]] = None
+
+        async for chunk in self._provider.stream(
+            messages=list(self._history),
+            max_new_tokens=self._config.max_new_tokens,
+        ):
+            content = getattr(chunk, "content", None)
+            if isinstance(content, str) and content:
+                full_response += content
+                yield {"type": "token", "content": content}
+
+            chunk_usage = getattr(chunk, "usage", None)
+            if isinstance(chunk_usage, dict):
+                streamed_usage = chunk_usage
+
+        provider_metrics = getattr(self._provider, "last_metrics", None) or {}
+        usage = self._normalize_usage(streamed_usage, provider_metrics)
+        result = {
+            "response": full_response,
+            "usage": usage,
+            "metrics": self._build_text_metrics(provider_metrics, usage),
+            "model_id": getattr(self._provider, "model_id", None) or self._config.model_path,
+        }
+        self._finalize_text_result(result)
+        yield {"type": "complete", **result}
+
+    def _finalize_text_result(self, result: Dict[str, Any]) -> None:
+        self._history.append({"role": "assistant", "content": result["response"]})
+        self._last_result = result
+
+    def _build_text_metrics(
+        self,
+        provider_metrics: Dict[str, Any],
+        usage: Dict[str, int],
+    ) -> Dict[str, Any]:
+        return {
+            "latency_ms": self._to_ms(provider_metrics.get("time_total_s")),
+            "ttft_ms": self._to_ms(provider_metrics.get("first_token_latency_s")),
+            "output_tokens_per_second": self._to_float(
+                provider_metrics.get("decode_tps") or provider_metrics.get("total_tps")
+            ),
+            "perplexity": self._to_float(provider_metrics.get("perplexity")),
+            "confidence": provider_metrics.get("confidence_level"),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+
+    def _stream_api_path(self) -> str:
+        api_path = (self._config.api_path or "/generate").rstrip("/")
+        if api_path.endswith("_stream"):
+            return api_path
+        return f"{api_path}_stream"
 
     def _format_history_as_prompt(self) -> str:
         """Format conversation history as a flat prompt string for API mode."""
         parts: List[str] = []
         for msg in self._history:
             role = msg["role"].capitalize()
-            parts.append(f"{role}: {extract_text_from_content(msg.get('content')) or msg.get('content', '')}")
+            content = extract_text_from_content(msg.get("content")) or msg.get("content", "")
+            parts.append(f"{role}: {content}")
         return "\n".join(parts)
 
     @staticmethod
@@ -238,21 +397,50 @@ class ChatSession:
             "content": normalize_content_blocks(message.get("content")),
         }
 
-    # ------------------------------------------------------------------ #
-    # Utilities
-    # ------------------------------------------------------------------ #
+    @staticmethod
+    async def _iter_sse_events(response: Any) -> AsyncGenerator[Dict[str, Any], None]:
+        event_type = "message"
+        data_lines: List[str] = []
+
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line:
+                if data_lines:
+                    payload = "\n".join(data_lines)
+                    try:
+                        data = json.loads(payload)
+                    except json.JSONDecodeError:
+                        data = {"raw": payload}
+                    yield {"event": event_type, "data": data}
+                event_type = "message"
+                data_lines = []
+                continue
+
+            if line.startswith("event:"):
+                event_type = line[6:].strip() or "message"
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+
+        if data_lines:
+            payload = "\n".join(data_lines)
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                data = {"raw": payload}
+            yield {"event": event_type, "data": data}
 
     def clear_history(self) -> None:
-        """Reset conversation history (preserves system prompt if set)."""
+        """Reset conversation history and preserve the system prompt."""
         if self._config.system_prompt:
             self._history = [{"role": "system", "content": self._config.system_prompt}]
         else:
             self._history = []
+        self._last_result = None
 
     def get_info(self) -> Dict[str, Any]:
         """Return session metadata."""
-        # Count turns: each user+assistant pair is one turn
-        user_turns = sum(1 for m in self._history if m["role"] == "user")
+        user_turns = sum(1 for message in self._history if message["role"] == "user")
         info: Dict[str, Any] = {
             "mode": self._mode,
             "initialized": self._initialized,
@@ -270,4 +458,64 @@ class ChatSession:
             info["shared_provider"] = not self._owns_provider
         if self._config.system_prompt:
             info["system_prompt"] = self._config.system_prompt
+        if self._last_result:
+            info["last_metrics"] = self._last_result.get("metrics")
         return info
+
+    @staticmethod
+    def _to_ms(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return round(float(value) * 1000, 1)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _safe_rate(tokens: Any, seconds: Any) -> Optional[float]:
+        try:
+            token_count = float(tokens)
+            elapsed = float(seconds)
+        except (TypeError, ValueError):
+            return None
+        if elapsed <= 0:
+            return None
+        return round(token_count / elapsed, 3)
+
+    @staticmethod
+    def _normalize_usage(
+        usage: Optional[Dict[str, Any]],
+        provider_metrics: Dict[str, Any],
+    ) -> Dict[str, int]:
+        normalized: Dict[str, int] = {}
+        if isinstance(usage, dict):
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                value = usage.get(key)
+                if value is None:
+                    continue
+                try:
+                    normalized[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+
+        if "prompt_tokens" not in normalized and provider_metrics.get("prompt_tokens") is not None:
+            normalized["prompt_tokens"] = int(provider_metrics["prompt_tokens"])
+        if "completion_tokens" not in normalized and provider_metrics.get("generated_tokens") is not None:
+            normalized["completion_tokens"] = int(provider_metrics["generated_tokens"])
+        if "total_tokens" not in normalized:
+            if provider_metrics.get("total_tokens") is not None:
+                normalized["total_tokens"] = int(provider_metrics["total_tokens"])
+            else:
+                normalized["total_tokens"] = (
+                    normalized.get("prompt_tokens", 0) + normalized.get("completion_tokens", 0)
+                )
+        return normalized

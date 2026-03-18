@@ -6,6 +6,7 @@ import json
 from ..responses.builder import ResponseBuilder
 from ..utils.exception import AgentExecutionError
 from ..utils.timing import TimingContext
+from shared.costing import estimate_cost_usd
 from shared.diagnostics import (
     emit_agent_event,
     emit_request_end,
@@ -107,7 +108,11 @@ class StreamHandler:
         # Track tool call metadata between turn_metadata and exec events
         _pending_tool_calls: Dict[str, Dict[str, Any]] = {}
         _current_turn = 0
-        _turn_start_time = 0.0
+        _last_confidence = None
+        _last_perplexity = None
+        _tool_call_count = 0
+        _total_tool_time_ms = 0.0
+        _tool_names: list[str] = []
 
         try:
             async for event in agent.run(
@@ -133,22 +138,21 @@ class StreamHandler:
                 # --- Turn metadata (tool calls, confidence, usage) ---
                 elif event_type == "turn_metadata":
                     _current_turn += 1
-                    import time as _time
-                    _turn_start_time = _time.perf_counter()
-
                     tool_calls = event.get("tool_calls", [])
                     for tc in tool_calls:
                         _pending_tool_calls[tc.name] = {
                             "name": tc.name,
                             "arguments": tc.arguments,
                         }
+                    _last_confidence = event.get("confidence_level")
+                    _last_perplexity = event.get("perplexity")
 
                     # Emit per-turn metrics
                     usage = event.get("usage")
                     yield self._make_agent_event("metrics", {
                         "turn": _current_turn,
-                        "confidence": event.get("confidence_level"),
-                        "perplexity": event.get("perplexity"),
+                        "confidence": _last_confidence,
+                        "perplexity": _last_perplexity,
                         "tokens": event.get("total_tokens"),
                         "usage": {
                             "prompt_tokens": usage.prompt_tokens if usage else 0,
@@ -179,6 +183,10 @@ class StreamHandler:
                     import time as _time
                     start = tc_info.get("_start", _time.perf_counter())
                     duration_ms = (_time.perf_counter() - start) * 1000
+                    _tool_call_count += 1
+                    _total_tool_time_ms += duration_ms
+                    if tool_name and tool_name not in _tool_names:
+                        _tool_names.append(tool_name)
 
                     yield self._make_agent_event("tool_end", {
                         "tool": tool_name,
@@ -230,13 +238,40 @@ class StreamHandler:
                 # --- Completion ---
                 elif event_type == "complete":
                     timing.end_inference()
+                    usage = event.get("usage", {}) or {}
+                    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+                    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+                    total_tokens = int(usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens))
+                    decode_seconds = timing.inference_time - timing.first_token_latency
+                    output_tps = (
+                        round(completion_tokens / decode_seconds, 3)
+                        if completion_tokens > 0 and decode_seconds > 0
+                        else None
+                    )
+                    estimated_cost = estimate_cost_usd(getattr(agent, "model_id", model_name), usage)
+                    summary_metrics = {
+                        "prompt_tokens": prompt_tokens or None,
+                        "completion_tokens": completion_tokens or None,
+                        "total_tokens": total_tokens or None,
+                        "latency_ms": round(timing.inference_time * 1000, 1) if timing.inference_time > 0 else None,
+                        "ttft_ms": round(timing.first_token_latency * 1000, 1) if timing.first_token_latency > 0 else None,
+                        "output_tokens_per_second": output_tps,
+                        "estimated_cost_usd": round(estimated_cost, 6) if estimated_cost is not None else None,
+                        "confidence": _last_confidence,
+                        "perplexity": _last_perplexity,
+                        "tool_call_count": _tool_call_count,
+                        "tool_time_ms": round(_total_tool_time_ms, 1) if _total_tool_time_ms > 0 else 0.0,
+                        "tool_names": _tool_names,
+                    }
 
                     # Send final history with full turn details
                     history = event.get("history", [])
                     yield self._make_agent_event("complete", {
                         "turn_count": len(history),
                         "history": history,
-                        "usage": event.get("usage", {}),
+                        "usage": usage,
+                        "metrics": summary_metrics,
+                        "model_id": getattr(agent, "model_id", model_name),
                         "interrupted": event.get("interrupted", False),
                     })
 

@@ -66,6 +66,7 @@ class TunaGateway:
         load_dotenv(override=False)
         config = config or {}
         self.mcp = MCPServer("mcp-tuna-gateway", "1.0.0")
+        self.mcp.configure_http_app = self._configure_http_app
 
         # Lazily-initialized services (avoid heavy imports at gateway startup)
         self._generator_svc = None
@@ -88,6 +89,167 @@ class TunaGateway:
         self._config = config
         self._register_all_tools()
         self._wrap_tools_with_diagnostics()
+
+    @staticmethod
+    def _format_sse(event: str, payload: Dict[str, Any]) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    @staticmethod
+    def _deployment_endpoint(deployment: Dict[str, Any]) -> Optional[str]:
+        deployment_host = deployment.get("host")
+        if deployment_host in {"0.0.0.0", "::"}:
+            deployment_host = "127.0.0.1"
+        if deployment.get("transport") != "http" or not deployment_host:
+            return None
+        return f"http://{deployment_host}:{deployment['port']}"
+
+    async def _get_or_create_text_chat_session(
+        self,
+        *,
+        deployment_id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        model_path: Optional[str] = None,
+        adapter_path: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
+        prefer_runtime_metrics: bool = False,
+    ) -> Dict[str, Any]:
+        from hosting_pipeline.services.chat_service import ChatSession
+
+        cid = conversation_id or str(uuid.uuid4())[:8]
+        if cid in self._chat_sessions:
+            session = self._chat_sessions[cid]
+            if session.get_info().get("modality") != "text":
+                return {
+                    "success": False,
+                    "error": "Conversation is multimodal. Use host.chat_vlm for this conversation.",
+                    "conversation_id": cid,
+                }
+            return {
+                "success": True,
+                "conversation_id": cid,
+                "deployment_id": deployment_id,
+                "session": session,
+            }
+
+        provider = None
+        inference_service = None
+        resolved_endpoint = endpoint
+        resolved_model_path = model_path
+        resolved_adapter_path = adapter_path
+        resolved_api_path = "/generate"
+        modality = "text"
+
+        if deployment_id:
+            deployment = self.hoster.get_deployment(deployment_id)
+            if deployment is None:
+                return {
+                    "success": False,
+                    "error": f"Deployment {deployment_id} not found",
+                }
+
+            deployment_endpoint = self._deployment_endpoint(deployment)
+            modality = deployment.get("modality", "text")
+            if modality != "text":
+                return {
+                    "success": False,
+                    "error": "Deployment is vision-language. Use host.chat_vlm instead.",
+                }
+
+            if deployment.get("type") == "api" and deployment_endpoint and not prefer_runtime_metrics:
+                resolved_endpoint = deployment_endpoint
+                resolved_api_path = deployment.get("api_path") or "/generate"
+            else:
+                resolved_model_path = deployment.get("model_path")
+                resolved_adapter_path = deployment.get("adapter_path")
+                provider = deployment.get("provider")
+                inference_service = deployment.get("inference_service")
+
+        config = ChatConfig(
+            endpoint=resolved_endpoint,
+            model_path=resolved_model_path,
+            adapter_path=resolved_adapter_path,
+            max_new_tokens=max_new_tokens,
+            system_prompt=system_prompt,
+            modality=modality,
+            api_path=resolved_api_path,
+        )
+        session = ChatSession(
+            config,
+            provider=provider,
+            inference_service=inference_service,
+        )
+        await session.initialize()
+        self._chat_sessions[cid] = session
+        return {
+            "success": True,
+            "conversation_id": cid,
+            "deployment_id": deployment_id,
+            "session": session,
+        }
+
+    async def _configure_http_app(self, app: Any) -> None:
+        from fastapi.responses import JSONResponse, StreamingResponse
+
+        @app.post("/mcp/chat/stream")
+        async def stream_host_chat(payload: Dict[str, Any]):
+            message = payload.get("message")
+            if not isinstance(message, str) or not message.strip():
+                return JSONResponse(
+                    {"success": False, "error": "message must be a non-empty string"},
+                    status_code=400,
+                )
+
+            session_result = await self._get_or_create_text_chat_session(
+                deployment_id=payload.get("deployment_id"),
+                endpoint=payload.get("endpoint"),
+                model_path=payload.get("model_path"),
+                adapter_path=payload.get("adapter_path"),
+                conversation_id=payload.get("conversation_id"),
+                max_new_tokens=int(payload.get("max_new_tokens") or 512),
+                system_prompt=payload.get("system_prompt"),
+                prefer_runtime_metrics=bool(payload.get("prefer_runtime_metrics", False)),
+            )
+            if not session_result.get("success"):
+                return JSONResponse(session_result, status_code=400)
+
+            session = session_result["session"]
+            conversation_id = session_result["conversation_id"]
+            deployment_id = session_result.get("deployment_id")
+
+            async def event_generator():
+                try:
+                    async for event in session.stream_message_events(message):
+                        if event.get("type") == "token":
+                            yield self._format_sse("token", {"content": event.get("content", "")})
+                            continue
+
+                        if event.get("type") == "complete":
+                            yield self._format_sse(
+                                "complete",
+                                {
+                                    "success": True,
+                                    "conversation_id": conversation_id,
+                                    "deployment_id": deployment_id,
+                                    "response": event.get("response", ""),
+                                    "turns": session.get_info()["turns"],
+                                    "metrics": event.get("metrics"),
+                                    "usage": event.get("usage"),
+                                    "model_id": event.get("model_id"),
+                                },
+                            )
+                except Exception as exc:
+                    yield self._format_sse("error", {"error": str(exc)})
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     # ------------------------------------------------------------------ #
     # Lazy service accessors
@@ -3095,89 +3257,43 @@ class TunaGateway:
             conversation_id: Optional[str] = None,
             max_new_tokens: int = 512,
             system_prompt: Optional[str] = None,
+            prefer_runtime_metrics: bool = False,
         ) -> str:
-            from hosting_pipeline.services.chat_service import ChatSession
+            session_result = await self._get_or_create_text_chat_session(
+                deployment_id=deployment_id,
+                endpoint=endpoint,
+                model_path=model_path,
+                adapter_path=adapter_path,
+                conversation_id=conversation_id,
+                max_new_tokens=max_new_tokens,
+                system_prompt=system_prompt,
+                prefer_runtime_metrics=prefer_runtime_metrics,
+            )
+            if not session_result.get("success"):
+                return json.dumps(session_result, indent=2)
 
-            cid = conversation_id or str(uuid.uuid4())[:8]
+            cid = session_result["conversation_id"]
+            session = session_result["session"]
 
-            if cid in self._chat_sessions:
-                session = self._chat_sessions[cid]
-                if session.get_info().get("modality") != "text":
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": "Conversation is multimodal. Use host.chat_vlm for this conversation.",
-                            "conversation_id": cid,
-                        },
-                        indent=2,
-                    )
+            if hasattr(session, "send_message_result"):
+                result = await session.send_message_result(message)
             else:
-                provider = None
-                inference_service = None
-                resolved_endpoint = endpoint
-                resolved_model_path = model_path
-                resolved_adapter_path = adapter_path
-                resolved_api_path = "/generate"
-                modality = "text"
-
-                if deployment_id:
-                    deployment = self.hoster.get_deployment(deployment_id)
-                    if deployment is None:
-                        return json.dumps(
-                            {"success": False, "error": f"Deployment {deployment_id} not found"},
-                            indent=2,
-                        )
-                    deployment_host = deployment.get("host")
-                    if deployment_host in {"0.0.0.0", "::"}:
-                        deployment_host = "127.0.0.1"
-                    deployment_endpoint = (
-                        f"http://{deployment_host}:{deployment['port']}"
-                        if deployment.get("transport") == "http"
-                        else None
-                    )
-                    modality = deployment.get("modality", "text")
-                    if modality != "text":
-                        return json.dumps(
-                            {
-                                "success": False,
-                                "error": "Deployment is vision-language. Use host.chat_vlm instead.",
-                            },
-                            indent=2,
-                        )
-                    if deployment.get("type") == "api" and deployment_endpoint:
-                        resolved_endpoint = deployment_endpoint
-                        resolved_api_path = deployment.get("api_path") or "/generate"
-                    else:
-                        resolved_model_path = deployment.get("model_path")
-                        resolved_adapter_path = deployment.get("adapter_path")
-                        provider = deployment.get("provider")
-                        inference_service = deployment.get("inference_service")
-
-                config = ChatConfig(
-                    endpoint=resolved_endpoint,
-                    model_path=resolved_model_path,
-                    adapter_path=resolved_adapter_path,
-                    max_new_tokens=max_new_tokens,
-                    system_prompt=system_prompt,
-                    modality=modality,
-                    api_path=resolved_api_path,
-                )
-                session = ChatSession(
-                    config,
-                    provider=provider,
-                    inference_service=inference_service,
-                )
-                await session.initialize()
-                self._chat_sessions[cid] = session
-
-            response = await session.send_message(message)
+                result = {
+                    "response": await session.send_message(message),
+                    "metrics": None,
+                    "usage": None,
+                    "model_id": None,
+                }
             return json.dumps(
                 {
                     "success": True,
                     "conversation_id": cid,
                     "deployment_id": deployment_id,
-                    "response": response,
+                    "response": result["response"],
                     "turns": session.get_info()["turns"],
+                    "metrics": result.get("metrics"),
+                    "usage": result.get("usage"),
+                    "model_id": result.get("model_id"),
                 },
                 indent=2,
             )
@@ -3199,6 +3315,7 @@ class TunaGateway:
             conversation_id: Optional[str] = None,
             max_new_tokens: int = 512,
             system_prompt: Optional[str] = None,
+            prefer_runtime_metrics: bool = False,
         ) -> str:
             from hosting_pipeline.services.chat_service import ChatSession
 
@@ -3255,7 +3372,11 @@ class TunaGateway:
                             },
                             indent=2,
                         )
-                    if deployment.get("type") == "api" and deployment_endpoint:
+                    if (
+                        deployment.get("type") == "api"
+                        and deployment_endpoint
+                        and not prefer_runtime_metrics
+                    ):
                         resolved_endpoint = deployment_endpoint
                         resolved_api_path = deployment.get("api_path") or "/generate_vlm"
                     else:
@@ -3281,15 +3402,26 @@ class TunaGateway:
                 await session.initialize()
                 self._chat_sessions[cid] = session
 
-            response = await session.send_messages(parsed_messages)
+            if hasattr(session, "send_messages_result"):
+                result = await session.send_messages_result(parsed_messages)
+            else:
+                result = {
+                    "response": await session.send_messages(parsed_messages),
+                    "metrics": None,
+                    "usage": None,
+                    "model_id": None,
+                }
             return json.dumps(
                 {
                     "success": True,
                     "conversation_id": cid,
                     "deployment_id": deployment_id,
-                    "response": response,
+                    "response": result["response"],
                     "turns": session.get_info()["turns"],
                     "modality": "vision-language",
+                    "metrics": result.get("metrics"),
+                    "usage": result.get("usage"),
+                    "model_id": result.get("model_id"),
                 },
                 indent=2,
             )

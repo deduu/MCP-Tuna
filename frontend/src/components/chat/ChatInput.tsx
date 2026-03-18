@@ -9,12 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/stores/chat'
 import { toast } from 'sonner'
-
-const AVAILABLE_MODELS = [
-  { id: 'gpt-4o', label: 'GPT-4o' },
-  { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-  { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-]
+import { AVAILABLE_CHAT_MODELS } from './chat-model-options'
 
 export function ChatInput() {
   const [input, setInput] = useState('')
@@ -202,7 +197,7 @@ export function ChatInput() {
                 onChange={(event) => setSelectedModel(event.target.value)}
                 className="h-9 rounded-md border border-input bg-background px-3 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                {AVAILABLE_MODELS.map((model) => (
+                {AVAILABLE_CHAT_MODELS.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.label}
                   </option>

@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { ImagePlus, Send, Trash2, X } from 'lucide-react'
 import type { Deployment } from '@/api/types'
 import { mcpCall } from '@/api/client'
+import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
 import type { ChatContentBlock, ChatImageBlock } from '@/lib/chat-content'
 import { buildUserChatContent, sanitizeChatContentForRequest } from '@/lib/chat-content'
 import { uploadAsset } from '@/lib/uploads'
@@ -18,6 +19,7 @@ type DeploymentChatMessage = {
   content: string
   parts?: ChatContentBlock[]
   error?: boolean
+  isStreaming?: boolean
 }
 
 type HostChatResult = {
@@ -38,51 +40,30 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [isTextStreaming, setIsTextStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const textAbortControllerRef = useRef<AbortController | null>(null)
 
-  const chatMutation = useMutation<HostChatResult, Error, string>({
-    onMutate: (message) => {
-      const content = buildUserChatContent(message, imageBlocks)
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: message,
-          parts: deployment.modality === 'vision-language' && Array.isArray(content) ? content : undefined,
-        },
-      ])
-    },
-    mutationFn: async (message) => {
-      if (deployment.modality === 'vision-language') {
-        return await mcpCall<HostChatResult>('host.chat_vlm', {
-          deployment_id: deployment.deployment_id,
-          messages: [
-            {
-              role: 'user',
-              content: sanitizeChatContentForRequest(buildUserChatContent(message, imageBlocks)),
-            },
-          ],
-          ...(conversationId ? { conversation_id: conversationId } : {}),
-        })
-      }
-      return await mcpCall<HostChatResult>('host.chat', {
+  const vlmChatMutation = useMutation<HostChatResult, Error, string>({
+    mutationFn: async (message) =>
+      mcpCall<HostChatResult>('host.chat_vlm', {
         deployment_id: deployment.deployment_id,
-        message,
+        messages: [
+          {
+            role: 'user',
+            content: sanitizeChatContentForRequest(buildUserChatContent(message, imageBlocks)),
+          },
+        ],
         ...(conversationId ? { conversation_id: conversationId } : {}),
-      })
-    },
+      }),
     onSuccess: (result) => {
       setConversationId(result.conversation_id)
       setMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: 'assistant', content: result.response },
       ])
-      for (const block of imageBlocks) {
-        if (block.preview_url) URL.revokeObjectURL(block.preview_url)
-      }
-      setImageBlocks([])
+      clearImageBlocks()
     },
     onError: (error) => {
       setMessages((current) => [
@@ -92,28 +73,50 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     },
   })
 
+  const isPending = vlmChatMutation.isPending || isTextStreaming
+
   useEffect(() => {
     const el = scrollRef.current
     if (!el) {
       return
     }
     el.scrollTop = el.scrollHeight
-  }, [messages, chatMutation.isPending])
+  }, [messages, isPending])
 
   useEffect(() => {
+    textAbortControllerRef.current?.abort()
     setMessages([])
     setInput('')
     setConversationId(null)
-    chatMutation.reset()
+    setIsTextStreaming(false)
+    clearImageBlocks()
+    vlmChatMutation.reset()
   }, [deployment.deployment_id])
 
   const handleSubmit = () => {
     const trimmed = input.trim()
-    if ((!trimmed && imageBlocks.length === 0) || chatMutation.isPending || isUploadingImage || deployment.status !== 'running') {
+    if ((!trimmed && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running') {
       return
     }
+
+    const userContent = buildUserChatContent(trimmed, imageBlocks)
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: trimmed,
+        parts: deployment.modality === 'vision-language' && Array.isArray(userContent) ? userContent : undefined,
+      },
+    ])
     setInput('')
-    chatMutation.mutate(trimmed)
+
+    if (deployment.modality === 'vision-language') {
+      vlmChatMutation.mutate(trimmed)
+      return
+    }
+
+    void streamTextDeploymentMessage(trimmed)
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -124,27 +127,97 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   }
 
   const handleClear = () => {
-    if (chatMutation.isPending) {
+    if (isPending) {
       return
-    }
-    for (const block of imageBlocks) {
-      if (block.preview_url) URL.revokeObjectURL(block.preview_url)
     }
     setMessages([])
     setInput('')
-    setImageBlocks([])
     setConversationId(null)
-    chatMutation.reset()
+    clearImageBlocks()
+    vlmChatMutation.reset()
   }
 
   const subtitle =
     deployment.type === 'api'
       ? deployment.modality === 'vision-language'
         ? 'Messages are sent through the deployed VLM API runtime.'
-        : 'Messages are sent through the deployed API runtime.'
+        : 'Messages are streamed through the deployed API runtime.'
       : deployment.modality === 'vision-language'
         ? 'Messages use the live deployed VLM runtime managed by the gateway.'
-        : 'Messages use the live deployed model runtime managed by the gateway.'
+        : 'Messages stream from the live deployed model runtime managed by the gateway.'
+
+  async function streamTextDeploymentMessage(message: string) {
+    const assistantId = crypto.randomUUID()
+    const abortController = new AbortController()
+    textAbortControllerRef.current = abortController
+    setIsTextStreaming(true)
+    setMessages((current) => [
+      ...current,
+      { id: assistantId, role: 'assistant', content: '', isStreaming: true },
+    ])
+
+    try {
+      await streamDeploymentTextChat(
+        {
+          deployment_id: deployment.deployment_id,
+          message,
+          conversation_id: conversationId,
+          signal: abortController.signal,
+        },
+        {
+          onToken: (token) => {
+            setMessages((current) =>
+              current.map((currentMessage) =>
+                currentMessage.id === assistantId
+                  ? {
+                      ...currentMessage,
+                      content: currentMessage.content + token,
+                    }
+                  : currentMessage,
+              ),
+            )
+          },
+          onComplete: (result) => {
+            setConversationId(result.conversation_id)
+            setMessages((current) =>
+              current.map((currentMessage) =>
+                currentMessage.id === assistantId
+                  ? {
+                      ...currentMessage,
+                      content: result.response || currentMessage.content,
+                      isStreaming: false,
+                    }
+                  : currentMessage,
+              ),
+            )
+            clearImageBlocks()
+          },
+          onError: (messageText) => {
+            throw new Error(messageText)
+          },
+        },
+      )
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        const messageText = error instanceof Error ? error.message : 'Deployment chat failed'
+        setMessages((current) =>
+          current.map((currentMessage) =>
+            currentMessage.id === assistantId
+              ? {
+                  ...currentMessage,
+                  content: messageText,
+                  error: true,
+                  isStreaming: false,
+                }
+              : currentMessage,
+          ),
+        )
+      }
+    } finally {
+      textAbortControllerRef.current = null
+      setIsTextStreaming(false)
+    }
+  }
 
   async function handlePickImage(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? [])
@@ -181,6 +254,17 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     })
   }
 
+  function clearImageBlocks() {
+    setImageBlocks((current) => {
+      for (const block of current) {
+        if (block.preview_url) {
+          URL.revokeObjectURL(block.preview_url)
+        }
+      }
+      return []
+    })
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -195,7 +279,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                 {conversationId}
               </Badge>
             )}
-            <Button variant="ghost" size="sm" onClick={handleClear} disabled={chatMutation.isPending}>
+            <Button variant="ghost" size="sm" onClick={handleClear} disabled={isPending}>
               <Trash2 className="h-4 w-4" />
               Clear
             </Button>
@@ -221,20 +305,12 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   {message.parts ? (
                     <MessageBlocks blocks={message.parts} />
                   ) : (
-                    <div className={message.error ? 'text-sm text-destructive whitespace-pre-wrap' : 'text-sm whitespace-pre-wrap'}>
-                      {message.content}
+                    <div className={message.error ? 'text-sm whitespace-pre-wrap text-destructive' : 'text-sm whitespace-pre-wrap'}>
+                      {message.content || (message.isStreaming ? 'Generating response...' : '')}
                     </div>
                   )}
                 </div>
               ))}
-              {chatMutation.isPending && (
-                <div className="space-y-1">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    Assistant
-                  </div>
-                  <div className="text-sm text-muted-foreground">Generating response...</div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -267,7 +343,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
             rows={3}
-            disabled={chatMutation.isPending || isUploadingImage || deployment.status !== 'running'}
+            disabled={isPending || isUploadingImage || deployment.status !== 'running'}
             placeholder={
               deployment.status === 'running'
                 ? deployment.modality === 'vision-language'
@@ -290,7 +366,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     type="button"
                     variant="outline"
                     onClick={() => imageInputRef.current?.click()}
-                    disabled={chatMutation.isPending || isUploadingImage || deployment.status !== 'running'}
+                    disabled={isPending || isUploadingImage || deployment.status !== 'running'}
                   >
                     <ImagePlus className="h-4 w-4" />
                     Attach image
@@ -302,13 +378,16 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     accept="image/*"
                     multiple
                     onChange={handlePickImage}
-                    disabled={chatMutation.isPending || isUploadingImage}
+                    disabled={isPending || isUploadingImage}
                   />
                 </>
               )}
-              <Button onClick={handleSubmit} disabled={(!input.trim() && imageBlocks.length === 0) || chatMutation.isPending || isUploadingImage || deployment.status !== 'running'}>
+              <Button
+                onClick={handleSubmit}
+                disabled={(!input.trim() && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running'}
+              >
                 <Send className="h-4 w-4" />
-                {chatMutation.isPending ? 'Sending...' : 'Send'}
+                {isPending ? 'Sending...' : 'Send'}
               </Button>
             </div>
           </div>
