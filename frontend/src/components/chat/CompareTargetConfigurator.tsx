@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react'
 import type { Deployment } from '@/api/types'
-import { resolveCompareDeploymentTarget, shortDeploymentLabel } from '@/lib/compare-targets'
+import { deploymentDisplayLabel, resolveCompareDeploymentTarget } from '@/lib/compare-targets'
 import { AVAILABLE_CHAT_MODELS } from './chat-model-options'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -69,9 +69,9 @@ export function CompareTargetConfigurator({
               onUpdate(session.target.id, {
                 kind,
                 model: undefined,
-                label: firstDeployment ? shortDeploymentLabel(firstDeployment.model_path) : 'Deployment',
+                label: firstDeployment ? deploymentDisplayLabel(firstDeployment) : 'Deployment',
                 deploymentId: firstDeployment?.deployment_id ?? null,
-                deploymentLabel: firstDeployment ? shortDeploymentLabel(firstDeployment.model_path) : null,
+                deploymentLabel: firstDeployment ? deploymentDisplayLabel(firstDeployment) : null,
                 deploymentModality: firstDeployment?.modality ?? 'text',
               })
             }}
@@ -111,8 +111,8 @@ export function CompareTargetConfigurator({
                 )
                 onUpdate(session.target.id, {
                   deploymentId: event.target.value || null,
-                  label: deployment ? shortDeploymentLabel(deployment.model_path) : session.target.label,
-                  deploymentLabel: deployment ? shortDeploymentLabel(deployment.model_path) : null,
+                  label: deployment ? deploymentDisplayLabel(deployment) : session.target.label,
+                  deploymentLabel: deployment ? deploymentDisplayLabel(deployment) : null,
                   deploymentModality: deployment?.modality ?? 'text',
                 })
               }}
@@ -126,7 +126,7 @@ export function CompareTargetConfigurator({
               )}
               {runningDeployments.map((deployment) => (
                 <option key={deployment.deployment_id} value={deployment.deployment_id}>
-                  {shortDeploymentLabel(deployment.model_path)}
+                  {deploymentDisplayLabel(deployment)}
                   {deployment.modality === 'vision-language' ? ' (VLM)' : ''}
                 </option>
               ))}

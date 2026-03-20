@@ -333,12 +333,12 @@ class ChatSession:
             messages=list(self._history),
             max_new_tokens=self._config.max_new_tokens,
         ):
-            content = getattr(chunk, "content", None)
+            content = chunk if isinstance(chunk, str) else getattr(chunk, "content", None)
             if isinstance(content, str) and content:
                 full_response += content
                 yield {"type": "token", "content": content}
 
-            chunk_usage = getattr(chunk, "usage", None)
+            chunk_usage = None if isinstance(chunk, str) else getattr(chunk, "usage", None)
             if isinstance(chunk_usage, dict):
                 streamed_usage = chunk_usage
 
@@ -437,6 +437,24 @@ class ChatSession:
         else:
             self._history = []
         self._last_result = None
+
+    def restore_history(self, messages: List[Dict[str, Any]]) -> None:
+        """Restore a previously persisted conversation history."""
+        if self._config.system_prompt:
+            self._history = [{"role": "system", "content": self._config.system_prompt}]
+        else:
+            self._history = []
+
+        for message in messages:
+            role = message.get("role", "user")
+            if role == "system":
+                continue
+            self._history.append(
+                {
+                    "role": role,
+                    "content": message.get("content"),
+                }
+            )
 
     def get_info(self) -> Dict[str, Any]:
         """Return session metadata."""

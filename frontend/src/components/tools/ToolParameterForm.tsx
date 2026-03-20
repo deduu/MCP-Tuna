@@ -5,7 +5,9 @@ import { Badge } from '@/components/ui/badge'
 import type { JSONSchemaProperty } from '@/api/types'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
+import { JsonEditorField } from '@/components/shared/JsonEditorField'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
+import { toast } from 'sonner'
 
 interface ToolParameterFormProps {
   schema: {
@@ -90,12 +92,14 @@ function ParameterField({
   required,
   value,
   onChange,
+  onJsonValidityChange,
 }: {
   name: string
   schema: JSONSchemaProperty
   required: boolean
   value: unknown
   onChange: (val: unknown) => void
+  onJsonValidityChange: (name: string, isValid: boolean) => void
 }) {
   const defaultLabel = schema.default !== undefined ? `Default: ${JSON.stringify(schema.default)}` : ''
   const placeholder = typeof schema.default === 'string' ? schema.default : defaultLabel
@@ -208,32 +212,32 @@ function ParameterField({
     const isMessagesField = normalizedName === 'messages'
     return (
       <div className="space-y-1">
-        <label className="flex items-center gap-2 text-sm">
-          {name}
+        <JsonEditorField
+          label={name}
+          description={[
+            schema.description,
+            isMessagesField
+              ? 'Use canonical multimodal message blocks. Upload images first, then reference the returned image_path.'
+              : null,
+          ].filter(Boolean).join(' ')}
+          initialValue={typeof value === 'string' ? null : (value as never)}
+          defaultValue={schema.type === 'array' ? [] : {}}
+          placeholder={placeholder || getJsonPlaceholder(name, schema)}
+          allowEmpty={!required}
+          onChange={({ parsed, isValid }) => {
+            onJsonValidityChange(name, isValid)
+            if (parsed === null) {
+              onChange(undefined)
+              return
+            }
+            onChange(parsed)
+          }}
+          className="pt-1"
+        />
+        <div className="flex items-center gap-2 text-xs">
           <Badge variant="outline" className="text-[10px] py-0">{schema.type}</Badge>
           {required && <Badge variant="destructive" className="text-[10px] py-0">required</Badge>}
-        </label>
-        {schema.description && (
-          <p className="text-xs text-muted-foreground">{schema.description}</p>
-        )}
-        {isMessagesField && (
-          <p className="text-xs text-muted-foreground">
-            Use canonical multimodal message blocks. Upload images first, then reference the returned `image_path`.
-          </p>
-        )}
-        <textarea
-          value={typeof value === 'string' ? value : value ? JSON.stringify(value, null, 2) : ''}
-          onChange={(e) => {
-            try {
-              onChange(JSON.parse(e.target.value))
-            } catch {
-              onChange(e.target.value)
-            }
-          }}
-          placeholder={placeholder || getJsonPlaceholder(name, schema)}
-          rows={3}
-          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono resize-y"
-        />
+        </div>
       </div>
     )
   }
@@ -263,6 +267,7 @@ function ParameterField({
 export function ToolParameterForm({ schema, onSubmit, isLoading }: ToolParameterFormProps) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [jsonValidity, setJsonValidity] = useState<Record<string, boolean>>({})
 
   const required = new Set(schema.required ?? [])
   const entries = Object.entries(schema.properties ?? {})
@@ -281,8 +286,22 @@ export function ToolParameterForm({ schema, onSubmit, isLoading }: ToolParameter
     })
   }, [])
 
+  const handleJsonValidityChange = useCallback((name: string, isValid: boolean) => {
+    setJsonValidity((prev) => ({
+      ...prev,
+      [name]: isValid,
+    }))
+  }, [])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    const invalidJsonFields = Object.entries(jsonValidity)
+      .filter(([, isValid]) => !isValid)
+      .map(([name]) => name)
+    if (invalidJsonFields.length > 0) {
+      toast.error(`Invalid JSON in: ${invalidJsonFields.join(', ')}`)
+      return
+    }
     const args: Record<string, unknown> = {}
     for (const [key, val] of Object.entries(values)) {
       if (val !== undefined && val !== '') {
@@ -304,6 +323,7 @@ export function ToolParameterForm({ schema, onSubmit, isLoading }: ToolParameter
               required={true}
               value={values[name]}
               onChange={(v) => handleChange(name, v)}
+              onJsonValidityChange={handleJsonValidityChange}
             />
           ))}
         </div>
@@ -329,6 +349,7 @@ export function ToolParameterForm({ schema, onSubmit, isLoading }: ToolParameter
                   required={false}
                   value={values[name]}
                   onChange={(v) => handleChange(name, v)}
+                  onJsonValidityChange={handleJsonValidityChange}
                 />
               ))}
             </div>

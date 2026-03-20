@@ -7,6 +7,10 @@ export function shortDeploymentLabel(modelPath: string) {
   return parts[parts.length - 1] || modelPath
 }
 
+export function deploymentDisplayLabel(deployment: Deployment) {
+  return deployment.name?.trim() || shortDeploymentLabel(deployment.model_path)
+}
+
 export function resolveCompareDeploymentTarget(
   target: CompareTargetConfig,
   deployments: Deployment[],
@@ -28,7 +32,7 @@ export function resolveCompareDeploymentTarget(
   }
 
   const matches = deployments.filter(
-    (deployment) => shortDeploymentLabel(deployment.model_path) === targetName,
+    (deployment) => deploymentDisplayLabel(deployment) === targetName,
   )
   return matches.length === 1 ? matches[0] : null
 }
@@ -46,7 +50,7 @@ export function resolveCompareTarget(
     return target
   }
 
-  const label = shortDeploymentLabel(deployment.model_path)
+  const label = deploymentDisplayLabel(deployment)
   const shouldSyncLabel =
     !target.label ||
     target.label === target.deploymentLabel ||

@@ -4,6 +4,9 @@ import base64
 from pathlib import Path
 from typing import Any, Dict
 
+from shared.object_storage import get_object_storage_service
+from shared.persistence import get_persistence_service
+
 
 class FileService:
     """Provides file operations for MCP tool consumption.
@@ -15,6 +18,8 @@ class FileService:
     def __init__(self, root_dir: str):
         self.root = Path(root_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._object_storage = get_object_storage_service()
+        self._persistence = get_persistence_service()
 
     def _safe_path(self, relative_path: str) -> Path:
         """Resolve path safely within root directory."""
@@ -86,9 +91,31 @@ class FileService:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         data = base64.b64decode(content_base64)
         full_path.write_bytes(data)
-        return {
+        normalized_filename = filename.replace("\\", "/")
+        result = {
             "success": True,
             "path": filename,
             "file_path": str(full_path),
             "size": len(data),
         }
+        upload_result = await self._object_storage.upload_file(
+            str(full_path),
+            category="uploads",
+            relative_path=normalized_filename,
+        )
+        if upload_result.get("success"):
+            result["bucket"] = upload_result.get("bucket")
+            result["object_key"] = upload_result.get("object_key")
+            result["object_url"] = upload_result.get("object_url")
+        await self._persistence.upsert_artifact(
+            {
+                "artifact_key": f"upload:{normalized_filename}",
+                "kind": "upload",
+                "local_path": str(full_path),
+                "bucket": result.get("bucket"),
+                "object_key": result.get("object_key"),
+                "object_url": result.get("object_url"),
+                "metadata": {"path": filename, "size": len(data)},
+            }
+        )
+        return result

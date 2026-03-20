@@ -88,6 +88,51 @@ class _FakeStreamingChatSession(_FakeChatSession):
         }
 
 
+class _FakeConversationPersistence:
+    async def list_conversations(self, deployment_id=None, modality=None, limit=20):
+        conversations = [
+            {
+                "conversation_id": "conv-text",
+                "deployment_id": "dep-a",
+                "modality": "text",
+                "message_count": 4,
+                "created_at": "2026-03-19T10:00:00+00:00",
+                "updated_at": "2026-03-19T10:05:00+00:00",
+            },
+            {
+                "conversation_id": "conv-vlm",
+                "deployment_id": "dep-b",
+                "modality": "vision-language",
+                "message_count": 2,
+                "created_at": "2026-03-19T09:00:00+00:00",
+                "updated_at": "2026-03-19T09:01:00+00:00",
+            },
+        ]
+        if deployment_id:
+            conversations = [
+                item for item in conversations if item.get("deployment_id") == deployment_id
+            ]
+        if modality:
+            conversations = [item for item in conversations if item.get("modality") == modality]
+        return conversations[:limit]
+
+    async def get_conversation(self, conversation_id):
+        if conversation_id != "conv-text":
+            return None
+        return {
+            "conversation_id": "conv-text",
+            "deployment_id": "dep-a",
+            "modality": "text",
+            "message_count": 4,
+            "created_at": "2026-03-19T10:00:00+00:00",
+            "updated_at": "2026-03-19T10:05:00+00:00",
+            "messages": [
+                {"sequence": 1, "role": "user", "content": "hello"},
+                {"sequence": 2, "role": "assistant", "content": "world"},
+            ],
+        }
+
+
 @pytest.mark.asyncio
 async def test_host_chat_uses_live_provider_for_mcp_deployment():
     with patch("mcp_gateway.load_dotenv"):
@@ -369,3 +414,25 @@ async def test_host_chat_rejects_vlm_deployments():
 
     assert result["success"] is False
     assert "host.chat_vlm" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_host_conversation_tools_expose_persisted_history():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway._persistence = _FakeConversationPersistence()
+
+    list_conversations = gateway.mcp._tools["host.list_conversations"]["func"]
+    get_conversation = gateway.mcp._tools["host.get_conversation"]["func"]
+
+    listed = json.loads(await list_conversations(deployment_id="dep-a"))
+    loaded = json.loads(await get_conversation(conversation_id="conv-text"))
+
+    assert listed["success"] is True
+    assert listed["count"] == 1
+    assert listed["conversations"][0]["conversation_id"] == "conv-text"
+    assert loaded["success"] is True
+    assert loaded["conversation_id"] == "conv-text"
+    assert loaded["messages"][1]["content"] == "world"

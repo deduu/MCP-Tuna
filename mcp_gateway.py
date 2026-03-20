@@ -38,6 +38,7 @@ from shared.config import (
     OrchestrationConfig,
     ModelEvaluationConfig,
 )
+from shared.persistence import get_persistence_service
 
 TechniqueName = Literal["sft", "dpo", "grpo", "kto"]
 SchemaTechniqueName = Literal["sft", "dpo", "grpo", "kto", "vlm_sft"]
@@ -85,6 +86,7 @@ class TunaGateway:
         self._dataset_svc = None
         self._file_svc = None
         self._chat_sessions: Dict[str, Any] = {}
+        self._persistence = get_persistence_service()
 
         self._config = config
         self._register_all_tools()
@@ -102,6 +104,107 @@ class TunaGateway:
         if deployment.get("transport") != "http" or not deployment_host:
             return None
         return f"http://{deployment_host}:{deployment['port']}"
+
+    @staticmethod
+    def _conversation_title(content: Any) -> Optional[str]:
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"].strip())
+            text = " ".join(part for part in parts if part).strip()
+        else:
+            text = ""
+
+        if not text:
+            return None
+
+        single_line = " ".join(text.split())
+        if len(single_line) <= 72:
+            return single_line
+        return f"{single_line[:69].rstrip()}..."
+
+    async def _persist_conversation_metadata(
+        self,
+        *,
+        conversation_id: str,
+        deployment_id: Optional[str],
+        modality: str,
+        endpoint: Optional[str],
+        model_path: Optional[str],
+        adapter_path: Optional[str],
+        system_prompt: Optional[str],
+    ) -> None:
+        await self._persistence.upsert_conversation(
+            {
+                "conversation_id": conversation_id,
+                "deployment_id": deployment_id,
+                "modality": modality,
+                "endpoint": endpoint,
+                "model_path": model_path,
+                "adapter_path": adapter_path,
+                "system_prompt": system_prompt,
+            }
+        )
+
+    async def _persist_conversation_exchange(
+        self,
+        *,
+        conversation_id: str,
+        user_content: Any,
+        assistant_content: Any,
+    ) -> None:
+        persisted = await self._persistence.get_conversation(conversation_id)
+        if persisted and not (persisted.get("title") or persisted.get("metadata", {}).get("title")):
+            title = self._conversation_title(user_content)
+            if title:
+                metadata = dict(persisted.get("metadata") or {})
+                metadata["title"] = title
+                await self._persistence.upsert_conversation(
+                    {
+                        "conversation_id": conversation_id,
+                        "deployment_id": persisted.get("deployment_id"),
+                        "modality": persisted.get("modality"),
+                        "endpoint": persisted.get("endpoint"),
+                        "model_path": persisted.get("model_path"),
+                        "adapter_path": persisted.get("adapter_path"),
+                        "system_prompt": persisted.get("system_prompt"),
+                        "message_count": persisted.get("message_count"),
+                        "metadata": metadata,
+                    }
+                )
+        await self._persistence.append_conversation_message(
+            conversation_id,
+            role="user",
+            content=user_content,
+        )
+        await self._persistence.append_conversation_message(
+            conversation_id,
+            role="assistant",
+            content=assistant_content,
+        )
+
+    async def _restore_persisted_conversation(
+        self,
+        session: Any,
+        conversation_id: str,
+    ) -> None:
+        persisted = await self._persistence.get_conversation(conversation_id)
+        if not persisted:
+            return
+        restore_history = getattr(session, "restore_history", None)
+        if callable(restore_history):
+            restore_history([
+                {
+                    "role": message.get("role", "user"),
+                    "content": message.get("content"),
+                }
+                for message in persisted.get("messages", [])
+            ])
 
     async def _get_or_create_text_chat_session(
         self,
@@ -140,14 +243,29 @@ class TunaGateway:
         resolved_adapter_path = adapter_path
         resolved_api_path = "/generate"
         modality = "text"
+        persisted_conversation = None
+
+        if conversation_id:
+            persisted_conversation = await self._persistence.get_conversation(cid)
+            if persisted_conversation:
+                deployment_id = deployment_id or persisted_conversation.get("deployment_id")
+                resolved_endpoint = resolved_endpoint or persisted_conversation.get("endpoint")
+                resolved_model_path = resolved_model_path or persisted_conversation.get("model_path")
+                resolved_adapter_path = (
+                    resolved_adapter_path or persisted_conversation.get("adapter_path")
+                )
+                system_prompt = system_prompt or persisted_conversation.get("system_prompt")
+                modality = persisted_conversation.get("modality") or modality
 
         if deployment_id:
             deployment = self.hoster.get_deployment(deployment_id)
             if deployment is None:
-                return {
-                    "success": False,
-                    "error": f"Deployment {deployment_id} not found",
-                }
+                deployment = await self._persistence.get_deployment(deployment_id)
+                if deployment is None:
+                    return {
+                        "success": False,
+                        "error": f"Deployment {deployment_id} not found",
+                    }
 
             deployment_endpoint = self._deployment_endpoint(deployment)
             modality = deployment.get("modality", "text")
@@ -181,7 +299,18 @@ class TunaGateway:
             inference_service=inference_service,
         )
         await session.initialize()
+        if persisted_conversation:
+            await self._restore_persisted_conversation(session, cid)
         self._chat_sessions[cid] = session
+        await self._persist_conversation_metadata(
+            conversation_id=cid,
+            deployment_id=deployment_id,
+            modality=modality,
+            endpoint=resolved_endpoint,
+            model_path=resolved_model_path,
+            adapter_path=resolved_adapter_path,
+            system_prompt=system_prompt,
+        )
         return {
             "success": True,
             "conversation_id": cid,
@@ -226,6 +355,11 @@ class TunaGateway:
                             continue
 
                         if event.get("type") == "complete":
+                            await self._persist_conversation_exchange(
+                                conversation_id=conversation_id,
+                                user_content=message,
+                                assistant_content=event.get("response", ""),
+                            )
                             yield self._format_sse(
                                 "complete",
                                 {
@@ -417,14 +551,14 @@ class TunaGateway:
     def job_manager(self):
         if self._job_manager_instance is None:
             from shared.training_jobs import TrainingJobManager
-            self._job_manager_instance = TrainingJobManager(max_concurrent=1)
+            self._job_manager_instance = TrainingJobManager(max_concurrent=1, namespace="training")
         return self._job_manager_instance
 
     @property
     def workflow_job_manager(self):
         if self._workflow_job_manager_instance is None:
             from shared.training_jobs import TrainingJobManager
-            self._workflow_job_manager_instance = TrainingJobManager(max_concurrent=1)
+            self._workflow_job_manager_instance = TrainingJobManager(max_concurrent=1, namespace="workflow")
         return self._workflow_job_manager_instance
 
     @property
@@ -1391,8 +1525,8 @@ class TunaGateway:
 
             # Active training jobs
             job_manager = self._job_manager_instance
-            jobs = job_manager.list_jobs() if job_manager else []
-            running_jobs = [j for j in jobs if j.get("status") == "running"]
+            jobs = await job_manager.alist_jobs(limit=100) if job_manager else []
+            running_jobs = [j for j in jobs if getattr(j, "status", None) == "running"]
 
             # Active deployments
             deployments_info: dict = {"deployments": [], "count": 0}
@@ -2894,7 +3028,7 @@ class TunaGateway:
             ),
         )
         async def job_status(job_id: str) -> str:
-            job = self.job_manager.get_job(job_id)
+            job = await self.job_manager.aget_job(job_id)
             if job is None:
                 return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
             return json.dumps({"success": True, **job.model_dump()}, indent=2)
@@ -2912,7 +3046,7 @@ class TunaGateway:
         ) -> str:
             from shared.training_jobs import JobStatus as JS
             status_enum = JS(status) if status else None
-            jobs = self.job_manager.list_jobs(status=status_enum, limit=limit)
+            jobs = await self.job_manager.alist_jobs(status=status_enum, limit=limit)
             return json.dumps({
                 "success": True,
                 "count": len(jobs),
@@ -2949,11 +3083,11 @@ class TunaGateway:
         )
         async def get_status(job_id: Optional[str] = None) -> str:
             if job_id:
-                job = self.job_manager.get_job(job_id)
+                job = await self.job_manager.aget_job(job_id)
                 if job is None:
                     return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
                 return json.dumps({"success": True, **job.model_dump()}, indent=2)
-            jobs = self.job_manager.list_jobs(limit=50)
+            jobs = await self.job_manager.alist_jobs(limit=50)
             return json.dumps({
                 "success": True,
                 "jobs": [j.model_dump() for j in jobs],
@@ -3151,11 +3285,13 @@ class TunaGateway:
         )
         async def deploy_mcp(
             model_path: str, adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             quantization: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
+                name=name,
                 port=port, quantization=quantization,
             )
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
@@ -3170,11 +3306,13 @@ class TunaGateway:
         async def deploy_vlm_mcp(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 port=port,
                 modality="vision-language",
             )
@@ -3190,11 +3328,13 @@ class TunaGateway:
         )
         async def deploy_api(
             model_path: str, adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             quantization: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
+                name=name,
                 port=port, quantization=quantization,
             )
             return json.dumps(await self.hoster.deploy_as_api(config), indent=2)
@@ -3209,11 +3349,13 @@ class TunaGateway:
         async def deploy_vlm_api(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 port=port,
                 modality="vision-language",
             )
@@ -3284,6 +3426,11 @@ class TunaGateway:
                     "usage": None,
                     "model_id": None,
                 }
+            await self._persist_conversation_exchange(
+                conversation_id=cid,
+                user_content=message,
+                assistant_content=result["response"],
+            )
             return json.dumps(
                 {
                     "success": True,
@@ -3329,6 +3476,7 @@ class TunaGateway:
                 )
 
             cid = conversation_id or str(uuid.uuid4())[:8]
+            persisted_conversation = None
 
             if cid in self._chat_sessions:
                 session = self._chat_sessions[cid]
@@ -3349,13 +3497,28 @@ class TunaGateway:
                 resolved_adapter_path = adapter_path
                 resolved_api_path = "/generate_vlm"
 
+                if conversation_id:
+                    persisted_conversation = await self._persistence.get_conversation(cid)
+                    if persisted_conversation:
+                        deployment_id = deployment_id or persisted_conversation.get("deployment_id")
+                        resolved_endpoint = resolved_endpoint or persisted_conversation.get("endpoint")
+                        resolved_model_path = (
+                            resolved_model_path or persisted_conversation.get("model_path")
+                        )
+                        resolved_adapter_path = (
+                            resolved_adapter_path or persisted_conversation.get("adapter_path")
+                        )
+                        system_prompt = system_prompt or persisted_conversation.get("system_prompt")
+
                 if deployment_id:
                     deployment = self.hoster.get_deployment(deployment_id)
                     if deployment is None:
-                        return json.dumps(
-                            {"success": False, "error": f"Deployment {deployment_id} not found"},
-                            indent=2,
-                        )
+                        deployment = await self._persistence.get_deployment(deployment_id)
+                        if deployment is None:
+                            return json.dumps(
+                                {"success": False, "error": f"Deployment {deployment_id} not found"},
+                                indent=2,
+                            )
                     deployment_host = deployment.get("host")
                     if deployment_host in {"0.0.0.0", "::"}:
                         deployment_host = "127.0.0.1"
@@ -3400,7 +3563,18 @@ class TunaGateway:
                     inference_service=inference_service,
                 )
                 await session.initialize()
+                if persisted_conversation:
+                    await self._restore_persisted_conversation(session, cid)
                 self._chat_sessions[cid] = session
+                await self._persist_conversation_metadata(
+                    conversation_id=cid,
+                    deployment_id=deployment_id,
+                    modality="vision-language",
+                    endpoint=resolved_endpoint,
+                    model_path=resolved_model_path,
+                    adapter_path=resolved_adapter_path,
+                    system_prompt=system_prompt,
+                )
 
             if hasattr(session, "send_messages_result"):
                 result = await session.send_messages_result(parsed_messages)
@@ -3411,6 +3585,11 @@ class TunaGateway:
                     "usage": None,
                     "model_id": None,
                 }
+            await self._persist_conversation_exchange(
+                conversation_id=cid,
+                user_content=parsed_messages,
+                assistant_content=result["response"],
+            )
             return json.dumps(
                 {
                     "success": True,
@@ -3425,6 +3604,48 @@ class TunaGateway:
                 },
                 indent=2,
             )
+
+        @self.mcp.tool(
+            name="host.list_conversations",
+            description=(
+                "List persisted deployment chat conversations. "
+                "Optionally filter by deployment_id or modality."
+            ),
+        )
+        async def list_host_conversations(
+            deployment_id: Optional[str] = None,
+            modality: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            conversations = await self._persistence.list_conversations(
+                deployment_id=deployment_id,
+                modality=modality,
+                limit=limit,
+            )
+            return json.dumps(
+                {
+                    "success": True,
+                    "count": len(conversations),
+                    "conversations": conversations,
+                },
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="host.get_conversation",
+            description="Load a persisted deployment chat conversation, including messages.",
+        )
+        async def get_host_conversation(conversation_id: str) -> str:
+            conversation = await self._persistence.get_conversation(conversation_id)
+            if conversation is None:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"Conversation not found: {conversation_id}",
+                    },
+                    indent=2,
+                )
+            return json.dumps({"success": True, **conversation}, indent=2)
 
     # -- Workflow --
     def _register_workflow_tools(self):
@@ -3812,7 +4033,7 @@ class TunaGateway:
             description="Get the current status of an async workflow job.",
         )
         async def workflow_job_status(job_id: str) -> str:
-            job = self.workflow_job_manager.get_job(job_id)
+            job = await self.workflow_job_manager.aget_job(job_id)
             if job is None:
                 return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
             return json.dumps({"success": True, **_serialize_workflow_job(job)}, indent=2)
@@ -3825,7 +4046,7 @@ class TunaGateway:
             from shared.training_jobs import JobStatus as JS
 
             status_enum = JS(status) if status else None
-            jobs = self.workflow_job_manager.list_jobs(status=status_enum, limit=limit)
+            jobs = await self.workflow_job_manager.alist_jobs(status=status_enum, limit=limit)
             return json.dumps({
                 "success": True,
                 "count": len(jobs),
@@ -4340,17 +4561,33 @@ class TunaGateway:
             import os
             from pathlib import Path as _Path
 
+            persisted = await self._persistence.list_datasets()
+            datasets_by_path = {
+                str(item.get("file_path")): item
+                for item in persisted
+                if item.get("file_path")
+            }
             root = _Path(data_dir)
             if not root.exists():
                 root = _Path(os.getcwd()) / data_dir
             if not root.exists():
-                return json.dumps({"success": True, "datasets": []}, indent=2)
+                return json.dumps(
+                    {
+                        "success": True,
+                        "datasets": list(datasets_by_path.values()),
+                        "count": len(datasets_by_path),
+                    },
+                    indent=2,
+                )
 
             supported = (".jsonl", ".json", ".csv", ".parquet")
-            datasets = []
+            datasets = list(datasets_by_path.values())
             for f in sorted(root.rglob("*")):
                 if f.is_file() and f.suffix.lower() in supported:
-                    meta = await self.dataset_service.info(str(f))
+                    file_path = str(f.resolve())
+                    if file_path in datasets_by_path:
+                        continue
+                    meta = await self.dataset_service.info(file_path)
                     if meta.get("success"):
                         datasets.append(meta["metadata"])
 
@@ -4420,6 +4657,10 @@ class TunaGateway:
         gw_session = f"gw-{str(uuid.uuid4())[:8]}"
         session_id_var.set(gw_session)
         init_diagnostics(log_root="logs")
+        try:
+            asyncio.run(self._persistence.ensure_ready())
+        except Exception:
+            pass
         self.mcp.run(transport)
 
 

@@ -43,6 +43,7 @@ class DatabaseSessionManager:
 
     async def create_tables(self):
         from .base import Base
+        from . import models  # noqa: F401
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 

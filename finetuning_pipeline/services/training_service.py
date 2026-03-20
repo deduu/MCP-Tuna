@@ -116,6 +116,13 @@ class TrainingService:
             "optim": str(kwargs.pop("optim", "adamw_torch")),
         }
 
+    @staticmethod
+    def _is_missing_completion_error(exc: Exception) -> bool:
+        """Detect TRL variants that require a ``completion`` column at runtime."""
+        if isinstance(exc, KeyError) and exc.args == ("completion",):
+            return True
+        return str(exc).strip().strip('"').strip("'") == "completion"
+
     def _build_config(
         self,
         ConfigClass: Any,
@@ -327,6 +334,114 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
+
+    @staticmethod
+    def _prepare_sft_text_dataset(
+        dataset: Any,
+        tokenizer: Any,
+        prompt_column: str,
+        response_column: str,
+    ) -> Any:
+        """Normalize SFT rows to prompt/completion/text for TRL compatibility."""
+
+        def to_sft_record(example: Dict[str, Any]) -> Dict[str, str]:
+            prompt = str(example.get(prompt_column) or "").strip()
+            completion = str(example.get(response_column) or "").strip()
+            messages = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": completion},
+            ]
+            if hasattr(tokenizer, "apply_chat_template"):
+                text = tokenizer.apply_chat_template(messages, tokenize=False)
+            else:
+                text = f"User: {prompt}\nAssistant: {completion}"
+            return {
+                "prompt": prompt,
+                "completion": completion,
+                "text": text,
+            }
+
+        dataset = dataset.map(to_sft_record)
+        keep_columns = {"prompt", "completion", "text"}
+        cols_to_remove = [c for c in dataset.column_names if c not in keep_columns]
+        if cols_to_remove:
+            dataset = dataset.remove_columns(cols_to_remove)
+        return dataset
+
+    @staticmethod
+    def _extract_latest_log_metric(
+        log_history: List[Dict[str, Any]],
+        key: str,
+    ) -> Optional[float]:
+        for entry in reversed(log_history):
+            value = entry.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _summarize_trainer_metrics(
+        self,
+        trainer: Any,
+        train_output: Any,
+    ) -> Dict[str, Any]:
+        """Return a compact training summary for job results and workflow outputs."""
+        state = getattr(trainer, "state", None)
+        raw_log_history = getattr(state, "log_history", None) or []
+        log_history = [
+            entry for entry in raw_log_history
+            if isinstance(entry, dict)
+        ]
+
+        metrics: Dict[str, Any] = {}
+        training_loss = getattr(train_output, "training_loss", None)
+        if training_loss is not None:
+            try:
+                metrics["training_loss"] = float(training_loss)
+            except (TypeError, ValueError):
+                pass
+        if "training_loss" not in metrics:
+            latest_loss = self._extract_latest_log_metric(log_history, "loss")
+            if latest_loss is not None:
+                metrics["training_loss"] = latest_loss
+
+        eval_loss = self._extract_latest_log_metric(log_history, "eval_loss")
+        if eval_loss is not None:
+            metrics["eval_loss"] = eval_loss
+
+        best_metric = getattr(state, "best_metric", None)
+        if best_metric is not None:
+            try:
+                metrics["best_eval_loss"] = float(best_metric)
+            except (TypeError, ValueError):
+                pass
+
+        learning_rate = self._extract_latest_log_metric(log_history, "learning_rate")
+        if learning_rate is not None:
+            metrics["learning_rate"] = learning_rate
+
+        grad_norm = self._extract_latest_log_metric(log_history, "grad_norm")
+        if grad_norm is not None:
+            metrics["grad_norm"] = grad_norm
+
+        global_step = getattr(state, "global_step", None)
+        if global_step is not None:
+            metrics["global_step"] = int(global_step)
+
+        epoch = getattr(state, "epoch", None)
+        if epoch is not None:
+            try:
+                metrics["epoch"] = round(float(epoch), 2)
+            except (TypeError, ValueError):
+                pass
+
+        if log_history:
+            metrics["log_history_tail"] = log_history[-5:]
+
+        return metrics
 
     def _load_vlm_model_and_processor(
         self, model_name: str, kwargs: dict
@@ -573,6 +688,7 @@ class TrainingService:
         """
         start_time = time.time()
         model_name = base_model or self.config.base_model
+        original_kwargs = dict(kwargs)
 
         try:
             from datasets import Dataset
@@ -592,6 +708,8 @@ class TrainingService:
         try:
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
+            original_dataset = dataset
+            original_evaluation_dataset = evaluation_dataset
 
             if (
                 prompt_column not in dataset.column_names
@@ -620,33 +738,23 @@ class TrainingService:
             )
             cuda_available, bf16_supported = self._detect_precision()
 
-            def to_text(example: Dict[str, Any]) -> Dict[str, str]:
-                prompt = (example.get(prompt_column) or "").strip()
-                response = (example.get(response_column) or "").strip()
-                messages = [
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": response},
-                ]
-                if hasattr(tokenizer, "apply_chat_template"):
-                    text = tokenizer.apply_chat_template(messages, tokenize=False)
-                else:
-                    text = f"User: {prompt}\nAssistant: {response}"
-                return {"text": text}
-
-            dataset = dataset.map(to_text)
-            cols_to_remove = [c for c in dataset.column_names if c != "text"]
-            if cols_to_remove:
-                dataset = dataset.remove_columns(cols_to_remove)
+            dataset = self._prepare_sft_text_dataset(
+                dataset=dataset,
+                tokenizer=tokenizer,
+                prompt_column=prompt_column,
+                response_column=response_column,
+            )
 
             # Format eval dataset the same way
             if evaluation_dataset is not None:
                 if isinstance(evaluation_dataset, list):
                     evaluation_dataset = Dataset.from_list(evaluation_dataset)
-                if "text" not in evaluation_dataset.column_names:
-                    evaluation_dataset = evaluation_dataset.map(to_text)
-                    eval_cols = [c for c in evaluation_dataset.column_names if c != "text"]
-                    if eval_cols:
-                        evaluation_dataset = evaluation_dataset.remove_columns(eval_cols)
+                evaluation_dataset = self._prepare_sft_text_dataset(
+                    dataset=evaluation_dataset,
+                    tokenizer=tokenizer,
+                    prompt_column=prompt_column,
+                    response_column=response_column,
+                )
 
             peft_config = None
             if use_lora:
@@ -718,8 +826,9 @@ class TrainingService:
             def _train_sync():
                 """Run blocking training in a thread."""
                 _interrupted = False
+                _train_output = None
                 try:
-                    trainer.train(resume_from_checkpoint=checkpoint)
+                    _train_output = trainer.train(resume_from_checkpoint=checkpoint)
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
@@ -731,9 +840,9 @@ class TrainingService:
                             "max_seq_length, or use 4-bit quantization."
                         ) from exc
                     raise
-                return _interrupted
+                return _interrupted, _train_output
 
-            interrupted = await asyncio.to_thread(_train_sync)
+            interrupted, train_output = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 await asyncio.to_thread(
@@ -758,6 +867,7 @@ class TrainingService:
                         eval_results = json.load(f)
 
             await asyncio.to_thread(self._cleanup, trainer, model)
+            metrics = self._summarize_trainer_metrics(trainer, train_output)
 
             result: Dict[str, Any] = {
                 "success": True,
@@ -775,6 +885,7 @@ class TrainingService:
                     "completion_only_loss": completion_only_loss,
                     "resumed_from": checkpoint,
                 },
+                "metrics": metrics,
                 "evaluation_results": eval_results,
                 "num_training_examples": len(dataset),
             }
@@ -782,6 +893,46 @@ class TrainingService:
                 result["hub_url"] = hub_url
             return result
         except Exception as e:
+            if completion_only_loss and self._is_missing_completion_error(e):
+                logging.getLogger(__name__).warning(
+                    "SFT trainer expected a 'completion' column; retrying with "
+                    "completion_only_loss disabled for compatibility"
+                )
+                fallback = await self.train_model(
+                    dataset=original_dataset,
+                    output_dir=output_dir,
+                    base_model=base_model,
+                    num_epochs=num_epochs,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    prompt_column=prompt_column,
+                    response_column=response_column,
+                    enable_evaluation=enable_evaluation,
+                    evaluation_dataset=original_evaluation_dataset,
+                    eval_file_path=eval_file_path,
+                    evaluation_metrics=evaluation_metrics,
+                    save_evaluation_results=save_evaluation_results,
+                    resume_from_checkpoint=resume_from_checkpoint,
+                    save_best_model=save_best_model,
+                    completion_only_loss=False,
+                    early_stopping_patience=early_stopping_patience,
+                    push_to_hub=push_to_hub,
+                    extra_callbacks=extra_callbacks,
+                    **original_kwargs,
+                )
+                warnings = list(fallback.get("warnings") or [])
+                warnings.append(
+                    "completion_only_loss was disabled automatically because the "
+                    "installed TRL stack expected a 'completion' column."
+                )
+                fallback["warnings"] = warnings
+                config = fallback.get("config")
+                if isinstance(config, dict):
+                    config["completion_only_loss_requested"] = True
+                    config["completion_only_loss_effective"] = False
+                return fallback
             try:
                 import torch
 

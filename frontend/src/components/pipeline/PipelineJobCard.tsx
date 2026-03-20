@@ -13,6 +13,37 @@ interface PipelineJobCardProps {
   onCancel: (id: string) => void
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function extractTrainingResult(result: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!result) return null
+  if (typeof result.model_path === 'string' || typeof result.final_model_path === 'string') {
+    return result
+  }
+
+  const stepResults = result.results
+  if (!Array.isArray(stepResults)) return null
+
+  for (let index = stepResults.length - 1; index >= 0; index -= 1) {
+    const stepResult = stepResults[index]
+    if (!isRecord(stepResult) || typeof stepResult.tool !== 'string' || !stepResult.tool.startsWith('finetune.train')) {
+      continue
+    }
+    if (isRecord(stepResult.result)) {
+      return stepResult.result
+    }
+  }
+
+  return null
+}
+
+function readMetric(metrics: Record<string, unknown> | null, key: string): number | null {
+  const value = metrics?.[key]
+  return typeof value === 'number' ? value : null
+}
+
 const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   running: 'default',
   completed: 'success',
@@ -24,6 +55,8 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
 export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
   const [showResult, setShowResult] = useState(false)
   const result = (job.result as Record<string, unknown> | undefined) ?? null
+  const trainingResult = extractTrainingResult(result)
+  const trainingMetrics = isRecord(trainingResult?.metrics) ? trainingResult.metrics : null
   const progress = job.progress
 
   const isActive = job.status === 'running' || job.status === 'pending'
@@ -187,6 +220,51 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
         {/* Error */}
         {job.error && (
           <p className="text-sm text-red-400">{job.error}</p>
+        )}
+
+        {job.status === 'completed' && trainingResult && (
+          <div className="space-y-3 rounded-lg border border-border/60 bg-secondary/20 p-3">
+            <div>
+              <p className="text-sm font-medium">Training result</p>
+              <p className="text-xs text-muted-foreground">
+                Final output and compact fine-tuning summary from the training step.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+              {readMetric(trainingMetrics, 'training_loss') != null && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Train Loss</p>
+                  <p className="font-mono">{readMetric(trainingMetrics, 'training_loss')?.toFixed(4)}</p>
+                </div>
+              )}
+              {readMetric(trainingMetrics, 'eval_loss') != null && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Val Loss</p>
+                  <p className="font-mono">{readMetric(trainingMetrics, 'eval_loss')?.toFixed(4)}</p>
+                </div>
+              )}
+              {readMetric(trainingMetrics, 'best_eval_loss') != null && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Best Val Loss</p>
+                  <p className="font-mono">{readMetric(trainingMetrics, 'best_eval_loss')?.toFixed(4)}</p>
+                </div>
+              )}
+              {typeof trainingResult.num_training_examples === 'number' && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Train Rows</p>
+                  <p className="font-mono">{trainingResult.num_training_examples}</p>
+                </div>
+              )}
+            </div>
+
+            {typeof trainingResult.model_path === 'string' && (
+              <div className="rounded-md bg-background/40 p-2 text-xs">
+                <p className="text-muted-foreground">Model Path</p>
+                <p className="font-mono break-all">{trainingResult.model_path}</p>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Actions */}

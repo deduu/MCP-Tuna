@@ -1,17 +1,23 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { ImagePlus, Send, Trash2, X } from 'lucide-react'
-import type { Deployment } from '@/api/types'
+import { History, ImagePlus, MessageSquare, Send, Trash2, X } from 'lucide-react'
+import { useDeploymentConversation, useDeploymentConversations } from '@/api/hooks/useDeployments'
+import type { ConversationMessage, Deployment } from '@/api/types'
 import { mcpCall } from '@/api/client'
 import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
 import type { ChatContentBlock, ChatImageBlock } from '@/lib/chat-content'
-import { buildUserChatContent, sanitizeChatContentForRequest } from '@/lib/chat-content'
+import {
+  buildUserChatContent,
+  extractTextFromChatContent,
+  sanitizeChatContentForRequest,
+} from '@/lib/chat-content'
 import { uploadAsset } from '@/lib/uploads'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { MessageBlocks } from '@/components/chat/MessageBlocks'
 import { toast } from 'sonner'
+import { cn, formatDateTime, formatTimeAgo } from '@/lib/utils'
 
 type DeploymentChatMessage = {
   id: string
@@ -40,10 +46,16 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [selectedHistoryConversationId, setSelectedHistoryConversationId] = useState<string | null>(null)
   const [isTextStreaming, setIsTextStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const textAbortControllerRef = useRef<AbortController | null>(null)
+  const { data: savedConversations = [] } = useDeploymentConversations(deployment.deployment_id, true)
+  const { data: selectedConversation, isFetching: isLoadingConversation } = useDeploymentConversation(
+    selectedHistoryConversationId,
+    Boolean(selectedHistoryConversationId),
+  )
 
   const vlmChatMutation = useMutation<HostChatResult, Error, string>({
     mutationFn: async (message) =>
@@ -88,10 +100,20 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     setMessages([])
     setInput('')
     setConversationId(null)
+    setSelectedHistoryConversationId(null)
     setIsTextStreaming(false)
     clearImageBlocks()
     vlmChatMutation.reset()
   }, [deployment.deployment_id])
+
+  useEffect(() => {
+    if (!selectedConversation) {
+      return
+    }
+
+    setConversationId(selectedConversation.conversation_id)
+    setMessages(selectedConversation.messages.map(toDeploymentChatMessage))
+  }, [selectedConversation])
 
   const handleSubmit = () => {
     const trimmed = input.trim()
@@ -133,6 +155,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     setMessages([])
     setInput('')
     setConversationId(null)
+    setSelectedHistoryConversationId(null)
     clearImageBlocks()
     vlmChatMutation.reset()
   }
@@ -145,6 +168,13 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
       : deployment.modality === 'vision-language'
         ? 'Messages use the live deployed VLM runtime managed by the gateway.'
         : 'Messages stream from the live deployed model runtime managed by the gateway.'
+
+  const activeConversationUpdatedAt = selectedConversation?.updated_at
+    ?? savedConversations.find((conversation) => conversation.conversation_id === conversationId)?.updated_at
+
+  const activeConversationLabel = activeConversationUpdatedAt
+    ? `${formatTimeAgo(activeConversationUpdatedAt) ?? 'recently'}`
+    : null
 
   async function streamTextDeploymentMessage(message: string) {
     const assistantId = crypto.randomUUID()
@@ -287,112 +317,238 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div
-          ref={scrollRef}
-          className="min-h-[280px] max-h-[420px] overflow-y-auto rounded-lg border bg-secondary/20 p-4"
-        >
-          {messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Send a prompt to verify the deployed model can answer interactively.
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((message) => (
-                <div key={message.id} className="space-y-1">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    {message.role === 'user' ? 'User' : message.error ? 'Error' : 'Assistant'}
-                  </div>
-                  {message.parts ? (
-                    <MessageBlocks blocks={message.parts} />
-                  ) : (
-                    <div className={message.error ? 'text-sm whitespace-pre-wrap text-destructive' : 'text-sm whitespace-pre-wrap'}>
-                      {message.content || (message.isStreaming ? 'Generating response...' : '')}
-                    </div>
-                  )}
-                </div>
-              ))}
+        <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="rounded-lg border bg-secondary/10 p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-muted-foreground" />
+                <p className="text-sm font-medium">Saved Conversations</p>
+              </div>
+              <Badge variant="outline">{savedConversations.length}</Badge>
             </div>
-          )}
-        </div>
 
-        <div className="space-y-2">
-          {deployment.modality === 'vision-language' && imageBlocks.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {imageBlocks.map((block, index) => (
-                <div key={`${block.image_path}-${index}`} className="relative overflow-hidden rounded-lg border border-border/70 bg-secondary/20">
-                  {block.preview_url ? (
-                    <img src={block.preview_url} alt={block.file_name ?? 'Uploaded image'} className="h-20 w-20 object-cover" />
-                  ) : (
-                    <div className="flex h-20 w-20 items-center justify-center px-2 text-[11px] text-muted-foreground">
-                      {block.file_name ?? 'Image'}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => removeImageBlock(index)}
-                    className="absolute right-1 top-1 rounded-full bg-background/90 p-1 text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={3}
-            disabled={isPending || isUploadingImage || deployment.status !== 'running'}
-            placeholder={
-              deployment.status === 'running'
-                ? deployment.modality === 'vision-language'
-                  ? 'Ask the deployed vision-language model a question or attach images...'
-                  : 'Ask the deployed model a question...'
-                : 'Start or redeploy the model to chat with it.'
-            }
-            className="flex min-h-[96px] w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] text-muted-foreground">
-              {deployment.modality === 'vision-language'
-                ? 'Enter to send, Shift+Enter for a new line, image button to attach'
-                : 'Enter to send, Shift+Enter for a new line'}
-            </p>
-            <div className="flex items-center gap-2">
-              {deployment.modality === 'vision-language' && (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => imageInputRef.current?.click()}
-                    disabled={isPending || isUploadingImage || deployment.status !== 'running'}
-                  >
-                    <ImagePlus className="h-4 w-4" />
-                    Attach image
-                  </Button>
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    className="hidden"
-                    accept="image/*"
-                    multiple
-                    onChange={handlePickImage}
-                    disabled={isPending || isUploadingImage}
-                  />
-                </>
-              )}
-              <Button
-                onClick={handleSubmit}
-                disabled={(!input.trim() && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running'}
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={handleClear}
+                disabled={isPending}
+                className={cn(
+                  'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                  !selectedHistoryConversationId && !conversationId
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border hover:border-primary/40 hover:bg-background/60',
+                )}
               >
-                <Send className="h-4 w-4" />
-                {isPending ? 'Sending...' : 'Send'}
-              </Button>
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-sm font-medium">New conversation</span>
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Clear the current transcript and start fresh.
+                </p>
+              </button>
+
+              {savedConversations.length === 0 ? (
+                <p className="rounded-lg border border-dashed px-3 py-4 text-xs text-muted-foreground">
+                  No persisted conversations yet for this deployment.
+                </p>
+              ) : (
+                savedConversations.map((conversation) => {
+                  const isSelected = conversation.conversation_id === (selectedHistoryConversationId ?? conversationId)
+                  const updatedLabel = formatTimeAgo(conversation.updated_at) ?? formatDateTime(conversation.updated_at) ?? 'unknown'
+
+                  return (
+                    <button
+                      key={conversation.conversation_id}
+                      type="button"
+                      onClick={() => setSelectedHistoryConversationId(conversation.conversation_id)}
+                      disabled={isPending}
+                      className={cn(
+                        'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                        isSelected
+                          ? 'border-primary bg-primary/10'
+                          : 'border-border hover:border-primary/40 hover:bg-background/60',
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {conversation.title?.trim() || conversation.conversation_id}
+                        </span>
+                        <Badge variant="outline">{conversation.message_count}</Badge>
+                      </div>
+                      {conversation.title && (
+                        <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                          {conversation.conversation_id}
+                        </p>
+                      )}
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Updated {updatedLabel}
+                      </p>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div
+              ref={scrollRef}
+              className="min-h-[280px] max-h-[420px] overflow-y-auto rounded-lg border bg-secondary/20 p-4"
+            >
+              {isLoadingConversation ? (
+                <p className="text-sm text-muted-foreground">Loading saved conversation…</p>
+              ) : messages.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Send a prompt to verify the deployed model can answer interactively.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map((message) => (
+                    <div key={message.id} className="space-y-1">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        {message.role === 'user' ? 'User' : message.error ? 'Error' : 'Assistant'}
+                      </div>
+                      {message.parts ? (
+                        <MessageBlocks blocks={message.parts} />
+                      ) : (
+                        <div className={message.error ? 'text-sm whitespace-pre-wrap text-destructive' : 'text-sm whitespace-pre-wrap'}>
+                          {message.content || (message.isStreaming ? 'Generating response...' : '')}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              {deployment.modality === 'vision-language' && imageBlocks.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {imageBlocks.map((block, index) => (
+                    <div key={`${block.image_path}-${index}`} className="relative overflow-hidden rounded-lg border border-border/70 bg-secondary/20">
+                      {block.preview_url ? (
+                        <img src={block.preview_url} alt={block.file_name ?? 'Uploaded image'} className="h-20 w-20 object-cover" />
+                      ) : (
+                        <div className="flex h-20 w-20 items-center justify-center px-2 text-[11px] text-muted-foreground">
+                          {block.file_name ?? 'Image'}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeImageBlock(index)}
+                        className="absolute right-1 top-1 rounded-full bg-background/90 p-1 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                {conversationId && (
+                  <Badge variant="outline" className="font-mono text-[10px]">
+                    {conversationId}
+                  </Badge>
+                )}
+                {activeConversationLabel && (
+                  <span>History retained, updated {activeConversationLabel}</span>
+                )}
+                {deployment.status !== 'running' && (
+                  <Badge variant="warning">View-only while stopped</Badge>
+                )}
+              </div>
+
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={3}
+                disabled={isPending || isUploadingImage || deployment.status !== 'running'}
+                placeholder={
+                  deployment.status === 'running'
+                    ? deployment.modality === 'vision-language'
+                      ? 'Ask the deployed vision-language model a question or attach images...'
+                      : 'Ask the deployed model a question...'
+                    : 'Start or redeploy the model to continue this conversation.'
+                }
+                className="flex min-h-[96px] w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[11px] text-muted-foreground">
+                  {deployment.modality === 'vision-language'
+                    ? 'Enter to send, Shift+Enter for a new line, image button to attach'
+                    : 'Enter to send, Shift+Enter for a new line'}
+                </p>
+                <div className="flex items-center gap-2">
+                  {deployment.modality === 'vision-language' && (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => imageInputRef.current?.click()}
+                        disabled={isPending || isUploadingImage || deployment.status !== 'running'}
+                      >
+                        <ImagePlus className="h-4 w-4" />
+                        Attach image
+                      </Button>
+                      <input
+                        ref={imageInputRef}
+                        type="file"
+                        className="hidden"
+                        accept="image/*"
+                        multiple
+                        onChange={handlePickImage}
+                        disabled={isPending || isUploadingImage}
+                      />
+                    </>
+                  )}
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={(!input.trim() && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running'}
+                  >
+                    <Send className="h-4 w-4" />
+                    {isPending ? 'Sending...' : 'Send'}
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </CardContent>
     </Card>
   )
+}
+
+function toDeploymentChatMessage(message: ConversationMessage): DeploymentChatMessage {
+  const parts = parseStructuredContent(message.content)
+  return {
+    id: `saved-${message.sequence}`,
+    role: message.role,
+    content: parts ? extractTextFromChatContent(parts) : typeof message.content === 'string' ? message.content : '',
+    parts,
+  }
+}
+
+function parseStructuredContent(content: ConversationMessage['content']): ChatContentBlock[] | undefined {
+  if (!Array.isArray(content)) {
+    return undefined
+  }
+
+  const blocks: ChatContentBlock[] = []
+  for (const item of content) {
+    if (typeof item !== 'object' || item === null) {
+      continue
+    }
+    if (item.type === 'text' && typeof item.text === 'string') {
+      blocks.push({ type: 'text', text: item.text })
+      continue
+    }
+    if (item.type === 'image_path' && typeof item.image_path === 'string') {
+      blocks.push({ type: 'image_path', image_path: item.image_path })
+    }
+  }
+
+  return blocks.length > 0 ? blocks : undefined
 }

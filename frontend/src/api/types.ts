@@ -121,6 +121,7 @@ export interface TrainingJob {
   created_at: string
   started_at?: string
   completed_at?: string
+  elapsed_seconds?: number
   progress?: TrainingProgress
   error?: string
   result?: Record<string, unknown>
@@ -150,6 +151,7 @@ export interface TrainingProgress {
 
 export interface Deployment {
   deployment_id: string
+  name?: string
   model_path: string
   adapter_path?: string
   endpoint: string
@@ -158,6 +160,9 @@ export interface Deployment {
   transport?: string
   modality?: ModelModality
   routes?: string[]
+  created_at?: string
+  updated_at?: string
+  stopped_at?: string
 }
 
 export interface DatasetInfo {
@@ -169,6 +174,32 @@ export interface DatasetInfo {
   technique?: string
   size_bytes: number
   modified_at?: string
+  object_key?: string
+  object_url?: string
+}
+
+export interface ConversationMessage {
+  sequence: number
+  role: 'user' | 'assistant'
+  content: string | Array<Record<string, unknown>>
+}
+
+export interface DeploymentConversationSummary {
+  conversation_id: string
+  title?: string | null
+  deployment_id?: string | null
+  modality: ModelModality
+  endpoint?: string | null
+  model_path?: string | null
+  adapter_path?: string | null
+  message_count: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface DeploymentConversation extends DeploymentConversationSummary {
+  system_prompt?: string | null
+  messages: ConversationMessage[]
 }
 
 // -- HuggingFace Hub search --

@@ -45,6 +45,7 @@ export function NewTrainingPanel({
   const [technique, setTechnique] = useState<TrainingTechnique>('sft')
   const [sequential, setSequential] = useState(false)
   const [datasetPath, setDatasetPath] = useState('')
+  const [evalDatasetPath, setEvalDatasetPath] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [outputDir, setOutputDir] = useState(() => buildDefaultOutputDir('sft', false))
   const [outputDirCustomized, setOutputDirCustomized] = useState(false)
@@ -97,6 +98,7 @@ export function NewTrainingPanel({
   const canSubmit = Boolean(modelPath && datasetPath && selectedTechniqueOption?.enabled && !startTraining.isPending)
   const submitLabel = startTraining.isPending ? 'Starting...' : 'Start Training'
   const autoSuggestDisabled = !datasetPath || autoSuggest.isPending || technique === 'vlm_sft'
+  const showEvalDatasetField = technique === 'sft' && !sequential
   const schemaTechniqueLabel = technique === 'curriculum'
     ? 'CURRICULUM (SFT schema)'
     : technique === 'vlm_sft'
@@ -223,6 +225,7 @@ export function NewTrainingPanel({
         weight_decay: parsedWeightDecay,
         gradient_accumulation_steps: parsedGradAccum,
         max_seq_length: parsedMaxSeqLength,
+        ...(showEvalDatasetField && evalDatasetPath.trim() ? { eval_file_path: evalDatasetPath.trim() } : {}),
       }
     } else if (technique === 'curriculum') {
       args = {
@@ -405,6 +408,7 @@ export function NewTrainingPanel({
         </div>
 
         <TrainingDatasetField
+          label="Train Dataset"
           datasetPath={datasetPath}
           onChange={setDatasetPath}
           datasets={datasets}
@@ -417,6 +421,19 @@ export function NewTrainingPanel({
               : 'Schema validation for this training mode is not advertised by the current backend yet.'
           }
         />
+
+        {showEvalDatasetField && (
+          <TrainingDatasetField
+            label="Validation Dataset (optional)"
+            datasetPath={evalDatasetPath}
+            onChange={setEvalDatasetPath}
+            datasets={datasets}
+            schemaValid={null}
+            qualityValid={null}
+            placeholder="/path/to/eval.jsonl"
+            hint="Optional. When set, the trainer will evaluate during SFT and can save the best checkpoint instead of training blind."
+          />
+        )}
 
         <div className="space-y-2">
           <label className="text-sm font-medium">Hyperparameters</label>

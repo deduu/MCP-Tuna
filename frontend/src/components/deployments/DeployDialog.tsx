@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 export interface DeployDialogInitialValues {
+  name?: string
   modelPath?: string
   adapterPath?: string
   port?: number
@@ -21,24 +22,55 @@ interface DeployDialogProps {
   initialValues?: DeployDialogInitialValues | null
 }
 
+function basename(value: string): string {
+  const normalized = value.trim().replace(/\\/g, '/')
+  const leaf = normalized.split('/').pop() || normalized
+  return leaf.replace(/\.[^.]+$/, '')
+}
+
+function inferDeploymentName(modelPath: string, adapterPath: string): string {
+  const modelName = basename(modelPath)
+  const adapterName = basename(adapterPath)
+
+  if (adapterName) {
+    if (!modelName || adapterName === modelName) return adapterName
+    return `${modelName} + ${adapterName}`
+  }
+
+  return modelName
+}
+
 export function DeployDialog({ open, onClose, type, initialValues }: DeployDialogProps) {
+  const [name, setName] = useState('')
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
   const [port, setPort] = useState('8001')
   const [quantization, setQuantization] = useState('4bit')
   const [modality, setModality] = useState<'text' | 'vision-language'>('text')
+  const [nameCustomized, setNameCustomized] = useState(false)
 
   const deployMutation = useDeploy()
 
   useEffect(() => {
     if (!open) return
 
+    const nextModelPath = initialValues?.modelPath ?? ''
+    const nextAdapterPath = initialValues?.adapterPath ?? ''
+    const nextName = initialValues?.name ?? inferDeploymentName(nextModelPath, nextAdapterPath)
+
+    setName(nextName)
     setModelPath(initialValues?.modelPath ?? '')
     setAdapterPath(initialValues?.adapterPath ?? '')
     setPort(String(initialValues?.port ?? 8001))
     setQuantization(initialValues?.quantization ?? '4bit')
     setModality(initialValues?.modality ?? 'text')
+    setNameCustomized(Boolean(initialValues?.name))
   }, [open, initialValues, type])
+
+  useEffect(() => {
+    if (nameCustomized) return
+    setName(inferDeploymentName(modelPath, adapterPath))
+  }, [modelPath, adapterPath, nameCustomized])
 
   const handleDeploy = () => {
     if (!modelPath.trim()) {
@@ -48,6 +80,10 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
 
     const args: Record<string, unknown> = {
       model_path: modelPath.trim(),
+    }
+
+    if (name.trim()) {
+      args.name = name.trim()
     }
 
     if (adapterPath.trim()) {
@@ -76,11 +112,13 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
   }
 
   const resetForm = () => {
+    setName('')
     setModelPath('')
     setAdapterPath('')
     setPort('8001')
     setQuantization('4bit')
     setModality('text')
+    setNameCustomized(false)
   }
 
   const title = type === 'mcp' ? 'Deploy as MCP Server' : 'Deploy as API Endpoint'
@@ -90,6 +128,21 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
       <div className="flex flex-col gap-4">
         <div className="rounded-md border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
           Base-model-only deployment is supported. For LoRA outputs, set the original base model in Model Path and the trained adapter folder in Adapter Path.
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Deployment Name</label>
+          <Input
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value)
+              setNameCustomized(true)
+            }}
+            placeholder="Optional display name"
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional. Defaults to the model name, or a base-model plus adapter label for LoRA deployments.
+          </p>
         </div>
 
         <div className="flex flex-col gap-1.5">

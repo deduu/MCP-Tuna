@@ -2,21 +2,23 @@ import type { Deployment } from '@/api/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import { Square, Trash2, Clipboard } from 'lucide-react'
+import { cn, formatTimeAgo } from '@/lib/utils'
+import { RotateCcw, Square, Trash2, Clipboard } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface DeploymentCardProps {
   deployment: Deployment
   isSelected: boolean
   onSelect: () => void
+  onRedeploy: (type: 'mcp' | 'api') => void
   onStop: () => void
   onUndeploy: () => void
 }
 
-export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUndeploy }: DeploymentCardProps) {
-  const modelName = deployment.model_path.split('/').pop() ?? deployment.model_path
+export function DeploymentCard({ deployment, isSelected, onSelect, onRedeploy, onStop, onUndeploy }: DeploymentCardProps) {
+  const modelName = deployment.name?.trim() || deployment.model_path.split('/').pop() || deployment.model_path
   const shortId = deployment.deployment_id.slice(0, 8)
+  const lastUpdated = formatTimeAgo(deployment.updated_at ?? deployment.created_at)
 
   const copyEndpoint = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -34,6 +36,11 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUnd
     if (window.confirm('Are you sure you want to undeploy this model? This action cannot be undone.')) {
       onUndeploy()
     }
+  }
+
+  const handleRedeploy = (e: React.MouseEvent, type: 'mcp' | 'api') => {
+    e.stopPropagation()
+    onRedeploy(type)
   }
 
   return (
@@ -66,6 +73,14 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUnd
               </Badge>
             </div>
             <p className="text-sm font-medium truncate">{modelName}</p>
+            {deployment.name && (
+              <p className="text-xs text-muted-foreground truncate">{deployment.model_path.split('/').pop() ?? deployment.model_path}</p>
+            )}
+            {lastUpdated && (
+              <p className="text-[11px] text-muted-foreground">
+                {deployment.status === 'stopped' ? 'Stopped' : 'Updated'} {lastUpdated}
+              </p>
+            )}
             <div className="flex items-center gap-1">
               <code className="text-xs text-muted-foreground truncate">{deployment.endpoint}</code>
               <button
@@ -77,6 +92,16 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onStop, onUnd
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {deployment.status === 'stopped' && (
+              <>
+                <Button variant="outline" size="icon" className="h-7 w-7" onClick={(e) => handleRedeploy(e, 'mcp')} title="Redeploy as MCP">
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleRedeploy(e, 'api')} title="Redeploy as API">
+                  <span className="text-[10px] font-semibold">API</span>
+                </Button>
+              </>
+            )}
             {deployment.status === 'running' && (
               <Button variant="outline" size="icon" className="h-7 w-7" onClick={handleStop}>
                 <Square className="h-3 w-3" />

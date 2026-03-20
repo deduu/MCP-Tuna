@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { cn, formatDuration } from '@/lib/utils'
+import { cn, formatDateTime, formatDuration, formatTimeAgo } from '@/lib/utils'
 import { getDeployInitialValues } from './deployment-paths'
 import { TrainingJobDetail } from './TrainingJobDetail'
 
@@ -43,6 +43,8 @@ export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJo
   const isActive = job.status === 'running' || job.status === 'pending'
   const pct = job.progress?.percent_complete ?? 0
   const deployValues = job.status === 'completed' ? getDeployInitialValues(job) : null
+  const createdLabel = formatTimeAgo(job.created_at)
+  const completedLabel = formatTimeAgo(job.completed_at)
 
   return (
     <Card>
@@ -57,6 +59,14 @@ export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJo
           <span className="text-sm text-muted-foreground ml-auto hidden sm:inline truncate max-w-48">
             {job.base_model}
           </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          {createdLabel && <span>Created {createdLabel}</span>}
+          {job.completed_at && completedLabel && <span>Finished {completedLabel}</span>}
+          {job.elapsed_seconds != null && job.elapsed_seconds > 0 && (
+            <span>Duration {formatDuration(job.elapsed_seconds)}</span>
+          )}
         </div>
 
         {/* Progress bar */}
@@ -83,6 +93,12 @@ export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJo
           <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs">
             <span className="text-muted-foreground">Adapter:</span>{' '}
             <code className="break-all text-foreground">{deployValues.adapterPath}</code>
+          </div>
+        )}
+
+        {job.created_at && (
+          <div className="rounded-md border border-border/60 bg-secondary/10 px-3 py-2 text-[11px] text-muted-foreground">
+            Persistent record retained from {formatDateTime(job.created_at) ?? job.created_at}
           </div>
         )}
 

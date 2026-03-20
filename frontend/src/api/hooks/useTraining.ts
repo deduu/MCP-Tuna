@@ -33,10 +33,10 @@ export function useTrainingJobs() {
   return useQuery<TrainingJob[]>({
     queryKey: ['training', 'jobs'],
     queryFn: async () => {
-      const result = await mcpCall<{ jobs: TrainingJob[] } | TrainingJob>('finetune.get_status')
-      if ('jobs' in result) return result.jobs.map((job) => normalizeTrainingJob(job as TrainingJob & Record<string, unknown>))
-      if ('job_id' in result) return [normalizeTrainingJob(result as TrainingJob & Record<string, unknown>)]
-      return []
+      const result = await mcpCall<{ jobs: TrainingJob[] }>('finetune.list_jobs', { limit: 50 })
+      return (result.jobs ?? [])
+        .map((job) => normalizeTrainingJob(job as TrainingJob & Record<string, unknown>))
+        .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''))
     },
     refetchInterval: (query) => {
       const jobs = query.state.data

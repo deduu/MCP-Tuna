@@ -4,6 +4,7 @@ import { sendChatMessage } from '@/api/chat-client'
 import { useDeployments } from '@/api/hooks/useDeployments'
 import type { ChatImageBlock } from '@/lib/chat-content'
 import { buildUserChatContent } from '@/lib/chat-content'
+import { deploymentDisplayLabel } from '@/lib/compare-targets'
 import { uploadAsset } from '@/lib/uploads'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -72,8 +73,8 @@ export function ChatInput() {
         : 'Tool Agent uses managed providers and can call MCP tools.'
       : selectedDeployment
         ? selectedDeployment.modality === 'vision-language'
-          ? `Deployed Local chats directly with ${shortDeploymentLabel(selectedDeployment.model_path)} in multimodal mode. Attach images and text together here.`
-          : `Deployed Local chats directly with ${shortDeploymentLabel(selectedDeployment.model_path)}. MCP tools are disabled in this mode.`
+          ? `Deployed Local chats directly with ${deploymentDisplayLabel(selectedDeployment)} in multimodal mode. Attach images and text together here.`
+          : `Deployed Local chats directly with ${deploymentDisplayLabel(selectedDeployment)}. MCP tools are disabled in this mode.`
         : 'Deployed Local needs a running deployment. Start one from Deployments first.'
 
   const handleSubmit = useCallback(() => {
@@ -218,7 +219,7 @@ export function ChatInput() {
                 ) : (
                   runningDeployments.map((deployment) => (
                     <option key={deployment.deployment_id} value={deployment.deployment_id}>
-                      {shortDeploymentLabel(deployment.model_path)}
+                      {deploymentDisplayLabel(deployment)}
                       {deployment.modality === 'vision-language' ? ' (VLM)' : ''}
                     </option>
                   ))
@@ -339,10 +340,4 @@ export function ChatInput() {
       </div>
     </div>
   )
-}
-
-function shortDeploymentLabel(modelPath: string) {
-  const normalized = modelPath.replace(/\\/g, '/')
-  const parts = normalized.split('/')
-  return parts[parts.length - 1] || modelPath
 }

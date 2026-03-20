@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
+import { queryClient } from '@/api/query-client'
 import { AppShell } from '@/components/layout/AppShell'
 import { DashboardPage } from '@/components/dashboard/DashboardPage'
 import { ToolExplorerPage } from '@/components/tools/ToolExplorerPage'
@@ -13,15 +14,6 @@ import { DeploymentsPage } from '@/components/deployments/DeploymentsPage'
 import { EvaluationPage } from '@/components/evaluation/EvaluationPage'
 import { PipelinePage } from '@/components/pipeline/PipelinePage'
 import { SettingsPage } from '@/components/settings/SettingsPage'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-  },
-})
 
 function App() {
   return (

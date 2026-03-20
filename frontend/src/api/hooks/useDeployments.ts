@@ -1,6 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpCall } from '../client'
-import type { Deployment, ModelModality } from '../types'
+import type {
+  Deployment,
+  DeploymentConversation,
+  DeploymentConversationSummary,
+  ModelModality,
+} from '../types'
 
 function normalizeDeployment(raw: Record<string, unknown>): Deployment {
   const deploymentId =
@@ -21,6 +26,7 @@ function normalizeDeployment(raw: Record<string, unknown>): Deployment {
 
   return {
     deployment_id: deploymentId,
+    name: typeof raw.name === 'string' ? raw.name : undefined,
     model_path: typeof raw.model_path === 'string' ? raw.model_path : '',
     adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : undefined,
     endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
@@ -34,7 +40,53 @@ function normalizeDeployment(raw: Record<string, unknown>): Deployment {
     routes: Array.isArray(raw.routes)
       ? raw.routes.filter((route): route is string => typeof route === 'string')
       : undefined,
+    created_at: typeof raw.created_at === 'string' ? raw.created_at : undefined,
+    updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : undefined,
+    stopped_at: typeof raw.stopped_at === 'string' ? raw.stopped_at : undefined,
   }
+}
+
+function normalizeConversationSummary(raw: Record<string, unknown>): DeploymentConversationSummary {
+  return {
+    conversation_id: typeof raw.conversation_id === 'string' ? raw.conversation_id : '',
+    title: typeof raw.title === 'string' ? raw.title : null,
+    deployment_id: typeof raw.deployment_id === 'string' ? raw.deployment_id : null,
+    modality:
+      raw.modality === 'vision-language' || raw.modality === 'unknown'
+        ? raw.modality
+        : 'text',
+    endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : null,
+    model_path: typeof raw.model_path === 'string' ? raw.model_path : null,
+    adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : null,
+    message_count: typeof raw.message_count === 'number' ? raw.message_count : 0,
+    created_at: typeof raw.created_at === 'string' ? raw.created_at : undefined,
+    updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : undefined,
+  }
+}
+
+function normalizeConversation(raw: Record<string, unknown>): DeploymentConversation {
+  const summary = normalizeConversationSummary(raw)
+  return {
+    ...summary,
+    system_prompt: typeof raw.system_prompt === 'string' ? raw.system_prompt : null,
+    messages: Array.isArray(raw.messages)
+      ? raw.messages
+          .filter((message): message is Record<string, unknown> => typeof message === 'object' && message !== null)
+          .map((message) => ({
+            sequence: typeof message.sequence === 'number' ? message.sequence : 0,
+            role: message.role === 'assistant' ? 'assistant' : 'user',
+            content:
+              typeof message.content === 'string' || Array.isArray(message.content)
+                ? message.content
+                : '',
+          }))
+      : [],
+  }
+}
+
+function sortTimestamp(value?: string) {
+  const parsed = Date.parse(value ?? '')
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 export function useDeployments() {
@@ -42,7 +94,14 @@ export function useDeployments() {
     queryKey: ['deployments'],
     queryFn: async () => {
       const result = await mcpCall<{ deployments: Array<Record<string, unknown>> }>('host.list_deployments')
-      return (result.deployments ?? []).map(normalizeDeployment)
+      return (result.deployments ?? [])
+        .map(normalizeDeployment)
+        .sort((a, b) => {
+          if (a.status !== b.status) {
+            return a.status === 'running' ? -1 : 1
+          }
+          return sortTimestamp(b.updated_at ?? b.created_at) - sortTimestamp(a.updated_at ?? a.created_at)
+        })
     },
     refetchInterval: 10_000,
     retry: 1,
@@ -67,6 +126,37 @@ export function useDeploymentLogs(deploymentId: string, enabled: boolean) {
     },
     enabled: !!deploymentId && enabled,
     refetchInterval: 3_000,
+  })
+}
+
+export function useDeploymentConversations(deploymentId: string, enabled: boolean = true) {
+  return useQuery<DeploymentConversationSummary[]>({
+    queryKey: ['deployments', 'conversations', deploymentId],
+    queryFn: async () => {
+      const result = await mcpCall<{ conversations: Array<Record<string, unknown>> }>(
+        'host.list_conversations',
+        { deployment_id: deploymentId, limit: 25 },
+      )
+      return (result.conversations ?? []).map(normalizeConversationSummary)
+    },
+    enabled: enabled && !!deploymentId,
+    refetchInterval: 10_000,
+    retry: 1,
+  })
+}
+
+export function useDeploymentConversation(conversationId: string | null, enabled: boolean = true) {
+  return useQuery<DeploymentConversation>({
+    queryKey: ['deployments', 'conversation', conversationId],
+    queryFn: async () =>
+      normalizeConversation(
+        await mcpCall<Record<string, unknown>>('host.get_conversation', {
+          conversation_id: conversationId,
+        }),
+      ),
+    enabled: enabled && !!conversationId,
+    staleTime: 30_000,
+    retry: 1,
   })
 }
 
@@ -117,4 +207,13 @@ export function useUndeployment() {
       qc.invalidateQueries({ queryKey: ['deployments'] })
     },
   })
+}
+
+export function getRedeployInitialValues(deployment: Deployment) {
+  return {
+    name: deployment.name,
+    modelPath: deployment.model_path,
+    adapterPath: deployment.adapter_path,
+    modality: deployment.modality === 'vision-language' ? 'vision-language' : 'text',
+  } as const
 }

@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Dict, List
 
 from shared.config import HostingConfig
 from shared.gpu_lock import GPULock
+from shared.persistence import get_persistence_service
 
 log = logging.getLogger(__name__)
 
@@ -44,11 +45,51 @@ def _client_endpoint_host(host: str) -> str:
     return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
 
 
+def _deployment_name(deployment: Dict[str, Any]) -> str | None:
+    name = deployment.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+
+    metadata = deployment.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_name = metadata.get("name")
+        if isinstance(metadata_name, str) and metadata_name.strip():
+            return metadata_name.strip()
+    return None
+
+
 class HostingService:
     """Manages model deployments as MCP servers or FastAPI endpoints."""
 
     def __init__(self):
         self._deployments: Dict[str, Dict[str, Any]] = {}
+        self._persistence = get_persistence_service()
+
+    async def _persist_deployment(self, deployment: Dict[str, Any], status: str) -> None:
+        metadata = dict(deployment.get("metadata") or {})
+        name = _deployment_name(deployment)
+        if name:
+            metadata["name"] = name
+        payload = {
+            "deployment_id": deployment["id"],
+            "status": status,
+            "type": deployment.get("type", "mcp"),
+            "modality": deployment.get("modality", "text"),
+            "transport": deployment.get("transport", "http"),
+            "host": deployment.get("host", "127.0.0.1"),
+            "port": deployment.get("port", 0),
+            "endpoint": (
+                f"http://{_client_endpoint_host(deployment['host'])}:{deployment['port']}"
+                if deployment.get("transport") == "http"
+                else "stdio"
+            ),
+            "api_path": deployment.get("api_path"),
+            "routes": deployment.get("routes") or [],
+            "model_path": deployment.get("model_path", ""),
+            "adapter_path": deployment.get("adapter_path"),
+            "metadata": metadata,
+        }
+        await self._persistence.upsert_deployment(payload)
 
     @staticmethod
     def _start_background_runtime(
@@ -172,6 +213,7 @@ class HostingService:
 
             self._deployments[deployment_id] = {
                 "id": deployment_id,
+                "name": config.name,
                 "type": "mcp",
                 "modality": config.modality,
                 "model_path": config.model_path,
@@ -187,6 +229,7 @@ class HostingService:
                 "mcp": mcp,
                 "provider": provider,
             }
+            await self._persist_deployment(self._deployments[deployment_id], "running")
 
             return {
                 "success": True,
@@ -201,6 +244,7 @@ class HostingService:
                     if config.transport == "http"
                     else "stdio"
                 ),
+                **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -384,6 +428,7 @@ class HostingService:
 
             self._deployments[deployment_id] = {
                 "id": deployment_id,
+                "name": config.name,
                 "type": "api",
                 "modality": config.modality,
                 "model_path": config.model_path,
@@ -399,6 +444,7 @@ class HostingService:
                 "server": server,
                 "provider": provider,
             }
+            await self._persist_deployment(self._deployments[deployment_id], "running")
 
             return {
                 "success": True,
@@ -409,6 +455,7 @@ class HostingService:
                 "modality": config.modality,
                 "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
                 "routes": ["/generate", "/generate_stream", "/health"],
+                **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -472,6 +519,7 @@ class HostingService:
 
             self._deployments[deployment_id] = {
                 "id": deployment_id,
+                "name": config.name,
                 "type": "mcp",
                 "modality": "vision-language",
                 "model_path": config.model_path,
@@ -488,6 +536,7 @@ class HostingService:
                 "provider": None,
                 "inference_service": inference,
             }
+            await self._persist_deployment(self._deployments[deployment_id], "running")
 
             return {
                 "success": True,
@@ -503,6 +552,7 @@ class HostingService:
                     else "stdio"
                 ),
                 "tools": ["generate_vlm"],
+                **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -576,6 +626,7 @@ class HostingService:
 
             self._deployments[deployment_id] = {
                 "id": deployment_id,
+                "name": config.name,
                 "type": "api",
                 "modality": "vision-language",
                 "model_path": config.model_path,
@@ -592,6 +643,7 @@ class HostingService:
                 "provider": None,
                 "inference_service": inference,
             }
+            await self._persist_deployment(self._deployments[deployment_id], "running")
 
             return {
                 "success": True,
@@ -602,6 +654,7 @@ class HostingService:
                 "model_path": config.model_path,
                 "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
                 "routes": ["/generate_vlm", "/health"],
+                **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -622,8 +675,16 @@ class HostingService:
 
     async def list_deployments(self) -> Dict[str, Any]:
         """List currently running model deployments."""
+        persisted_deployments = await self._persistence.list_deployments(include_stopped=True)
+        persisted_by_id = {
+            str(dep.get("deployment_id") or ""): dep
+            for dep in persisted_deployments
+            if dep.get("deployment_id")
+        }
         deployments = []
+        seen_ids: set[str] = set()
         for dep_id, dep in self._deployments.items():
+            persisted = persisted_by_id.get(dep_id) or {}
             deployment = {
                 "deployment_id": dep_id,
                 "model_path": dep["model_path"],
@@ -638,16 +699,56 @@ class HostingService:
                     else "stdio"
                 ),
             }
+            if _deployment_name(dep):
+                deployment["name"] = _deployment_name(dep)
             routes = dep.get("routes")
             if routes:
                 deployment["routes"] = routes
+            for key in ("created_at", "updated_at", "stopped_at"):
+                if persisted.get(key):
+                    deployment[key] = persisted[key]
             deployments.append(deployment)
+            seen_ids.add(dep_id)
+
+        for dep in await self._persistence.list_deployments(include_stopped=True):
+            dep_id = str(dep.get("deployment_id") or "")
+            if not dep_id or dep_id in seen_ids:
+                continue
+            deployments.append(
+                {
+                    "deployment_id": dep_id,
+                    "model_path": dep.get("model_path", ""),
+                    "adapter_path": dep.get("adapter_path"),
+                    "type": dep.get("type", "mcp"),
+                    "modality": dep.get("modality", "text"),
+                    "transport": dep.get("transport", "http"),
+                    "status": dep.get("status", "stopped"),
+                "endpoint": dep.get("endpoint", ""),
+                    **({"name": _deployment_name(dep)} if _deployment_name(dep) else {}),
+                    **({"routes": dep.get("routes", [])} if dep.get("routes") else {}),
+                }
+            )
+            if dep.get("created_at"):
+                deployments[-1]["created_at"] = dep["created_at"]
+            if dep.get("updated_at"):
+                deployments[-1]["updated_at"] = dep["updated_at"]
+            if dep.get("stopped_at"):
+                deployments[-1]["stopped_at"] = dep["stopped_at"]
         return {"success": True, "deployments": deployments, "count": len(deployments)}
 
     async def stop_deployment(self, deployment_id: str) -> Dict[str, Any]:
         """Stop a running deployment and free GPU memory."""
         if deployment_id not in self._deployments:
-            return {"success": False, "error": f"Deployment {deployment_id} not found"}
+            persisted = await self._persistence.get_deployment(deployment_id)
+            if persisted is None:
+                return {"success": False, "error": f"Deployment {deployment_id} not found"}
+            persisted["deployment_id"] = deployment_id
+            await self._persistence.upsert_deployment({**persisted, "status": "stopped"})
+            return {
+                "success": True,
+                "deployment_id": deployment_id,
+                "status": "stopped",
+            }
 
         dep = self._deployments.pop(deployment_id)
         task = dep.get("task")
@@ -673,12 +774,31 @@ class HostingService:
             except Exception:
                 log.warning("Failed to unload provider for %s", deployment_id, exc_info=True)
 
+        await self._persist_deployment(dep, "stopped")
         return {"success": True, "deployment_id": deployment_id, "status": "stopped"}
 
     async def health_check(self, deployment_id: str) -> Dict[str, Any]:
         """Check health of a running deployment."""
         if deployment_id not in self._deployments:
-            return {"success": False, "error": f"Deployment {deployment_id} not found"}
+            persisted = await self._persistence.get_deployment(deployment_id)
+            if persisted is None:
+                return {"success": False, "error": f"Deployment {deployment_id} not found"}
+            return {
+                "success": True,
+                "deployment_id": deployment_id,
+                "type": persisted.get("type", "mcp"),
+                "modality": persisted.get("modality", "text"),
+                "transport": persisted.get("transport"),
+                "status": persisted.get("status", "stopped"),
+                "model_path": persisted.get("model_path"),
+                "adapter_path": persisted.get("adapter_path"),
+                "endpoint": persisted.get("endpoint"),
+                "created_at": persisted.get("created_at"),
+                "updated_at": persisted.get("updated_at"),
+                "stopped_at": persisted.get("stopped_at"),
+                **({"name": _deployment_name(persisted)} if _deployment_name(persisted) else {}),
+                **({"routes": persisted.get("routes")} if persisted.get("routes") else {}),
+            }
 
         dep = self._deployments[deployment_id]
         thread = dep.get("thread")
@@ -702,6 +822,13 @@ class HostingService:
                 else "stdio"
             ),
         }
+        persisted = await self._persistence.get_deployment(deployment_id)
+        if persisted:
+            result["created_at"] = persisted.get("created_at")
+            result["updated_at"] = persisted.get("updated_at")
+            result["stopped_at"] = persisted.get("stopped_at")
+        if _deployment_name(dep):
+            result["name"] = _deployment_name(dep)
         if dep.get("routes"):
             result["routes"] = dep["routes"]
 

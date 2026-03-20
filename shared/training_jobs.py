@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from shared.persistence import get_persistence_service
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,7 +97,7 @@ class TrainingJobManager:
     Thread-safe via lock for dict mutations.
     """
 
-    def __init__(self, max_concurrent: int = 1):
+    def __init__(self, max_concurrent: int = 1, namespace: str = "training"):
         self._jobs: Dict[str, TrainingJob] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._cancel_events: Dict[str, threading.Event] = {}
@@ -103,6 +105,9 @@ class TrainingJobManager:
             max_workers=max_concurrent, thread_name_prefix="training"
         )
         self._lock = threading.Lock()
+        self._namespace = namespace
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._persistence = get_persistence_service()
 
     # ── create ──
 
@@ -124,6 +129,7 @@ class TrainingJobManager:
         )
         with self._lock:
             self._jobs[job_id] = job
+        self._schedule_persist(job)
         return job
 
     # ── start ──
@@ -143,11 +149,13 @@ class TrainingJobManager:
             raise ValueError(f"Unknown job: {job_id}")
 
         cancel_event = threading.Event()
+        self._loop = asyncio.get_running_loop()
         with self._lock:
             self._cancel_events[job_id] = cancel_event
 
         job.status = JobStatus.RUNNING
         job.started_at = _now_iso()
+        self._schedule_persist(job)
 
         async def _run() -> None:
             start = time.monotonic()
@@ -175,6 +183,7 @@ class TrainingJobManager:
                 job.result = result
                 job.completed_at = _now_iso()
                 job.elapsed_seconds = round(elapsed, 2)
+                self._schedule_persist(job)
             except Exception as exc:
                 job.status = JobStatus.FAILED
                 job.error = str(exc)
@@ -183,6 +192,7 @@ class TrainingJobManager:
                 job.completed_at = _now_iso()
                 job.elapsed_seconds = round(time.monotonic() - start, 2)
                 logger.exception("Training job %s failed", job_id)
+                self._schedule_persist(job)
 
         task = asyncio.create_task(_run())
         with self._lock:
@@ -214,6 +224,7 @@ class TrainingJobManager:
         if event is None:
             return False
         event.set()
+        self._schedule_persist(job)
         return True
 
     def get_cancel_event(self, job_id: str) -> Optional[threading.Event]:
@@ -231,3 +242,51 @@ class TrainingJobManager:
                 if hasattr(job.progress, key):
                     setattr(job.progress, key, value)
             job.progress.last_updated = _now_iso()
+        self._schedule_persist(job)
+
+    async def aget_job(self, job_id: str) -> Optional[TrainingJob]:
+        job = self.get_job(job_id)
+        if job is not None:
+            return job
+
+        persisted = await self._persistence.get_job(self._namespace, job_id)
+        if persisted is None:
+            return None
+        return TrainingJob.model_validate(persisted)
+
+    async def alist_jobs(
+        self,
+        status: Optional[JobStatus] = None,
+        limit: int = 20,
+    ) -> List[TrainingJob]:
+        jobs = self.list_jobs(status=status, limit=limit)
+        persisted = await self._persistence.list_jobs(
+            self._namespace,
+            status=status.value if status is not None else None,
+            limit=limit,
+        )
+        merged: Dict[str, TrainingJob] = {job.job_id: job for job in jobs}
+        for item in persisted:
+            job = TrainingJob.model_validate(item)
+            merged.setdefault(job.job_id, job)
+
+        return sorted(
+            merged.values(),
+            key=lambda job: job.created_at or "",
+            reverse=True,
+        )[:limit]
+
+    def _schedule_persist(self, job: TrainingJob) -> None:
+        payload = job.model_dump()
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._persistence.upsert_job(self._namespace, payload),
+                self._loop,
+            )
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._persistence.upsert_job(self._namespace, payload))

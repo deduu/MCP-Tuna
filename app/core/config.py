@@ -60,6 +60,29 @@ class FileSettings:
 
 
 # --------------------------------------------------
+# Persistence / Object Storage
+# --------------------------------------------------
+@dataclass
+class PersistenceSettings:
+    enabled: bool = os.getenv("PERSISTENCE_ENABLED", "true").lower() not in {"0", "false", "no"}
+
+
+@dataclass
+class ObjectStorageSettings:
+    enabled: bool = os.getenv("OBJECT_STORAGE_ENABLED", "false").lower() not in {"0", "false", "no"}
+    endpoint: str = os.getenv("OBJECT_STORAGE_ENDPOINT", "http://localhost:9000")
+    access_key: str = os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin")
+    secret_key: str = os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin")
+    bucket: str = os.getenv("OBJECT_STORAGE_BUCKET", "mcp-tuna")
+    region: str = os.getenv("OBJECT_STORAGE_REGION", "us-east-1")
+    secure: bool = os.getenv("OBJECT_STORAGE_SECURE", "false").lower() not in {"0", "false", "no"}
+    prefix: str = os.getenv("OBJECT_STORAGE_PREFIX", "").strip().strip("/")
+    public_url: str = os.getenv("OBJECT_STORAGE_PUBLIC_URL", "").strip()
+    auto_create_bucket: bool = os.getenv("OBJECT_STORAGE_AUTO_CREATE_BUCKET", "true").lower() not in {"0", "false", "no"}
+    preserve_local_files: bool = os.getenv("OBJECT_STORAGE_PRESERVE_LOCAL_FILES", "true").lower() not in {"0", "false", "no"}
+
+
+# --------------------------------------------------
 # Email
 # --------------------------------------------------
 @dataclass
@@ -107,7 +130,9 @@ class AppSettings:
     env: str = os.getenv("ENV", "development")
 
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
+    persistence: PersistenceSettings = field(default_factory=PersistenceSettings)
     files: FileSettings = field(default_factory=FileSettings)
+    object_storage: ObjectStorageSettings = field(default_factory=ObjectStorageSettings)
     email: EmailSettings = field(default_factory=EmailSettings)
     mcp: MCPSettings = field(default_factory=MCPSettings)
 

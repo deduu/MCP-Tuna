@@ -16,6 +16,18 @@ export interface TrainingTechniqueOption {
   reason?: string
 }
 
+function sanitizeOutputSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    ?.replace(/\.[^.]+$/, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || ''
+}
+
 const VLM_MODEL_MARKERS = [
   'qwen2.5-vl',
   'qwen-vl',
@@ -75,6 +87,7 @@ const TEXT_TECHNIQUE_OPTIONS: TrainingTechniqueOption[] = [
 export function buildDefaultOutputDir(
   technique: TrainingTechnique,
   sequential: boolean,
+  sourcePath?: string,
 ): string {
   const now = new Date()
   const stamp = [
@@ -87,8 +100,9 @@ export function buildDefaultOutputDir(
     String(now.getSeconds()).padStart(2, '0'),
   ].join('')
   const prefix = sequential ? `sequential_${technique}` : technique
+  const sourceSuffix = sanitizeOutputSegment(sourcePath || '')
 
-  return `./output/${prefix}_${stamp}`
+  return `./output/${prefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
 }
 
 export function inferModelModality(

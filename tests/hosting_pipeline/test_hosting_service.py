@@ -240,3 +240,28 @@ class TestHostingServiceVRAMLeak:
 
         assert result["deployments"][0]["modality"] == "vision-language"
         assert result["deployments"][0]["routes"] == ["/generate_vlm", "/health"]
+
+    async def test_list_deployments_includes_display_name_when_present(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        dep_id = "test-name-001"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "name": "llama-1b + ksmi-demo",
+            "type": "api",
+            "modality": "text",
+            "model_path": "test/model",
+            "adapter_path": "./adapter",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8081,
+            "thread": thread,
+            "task": MagicMock(),
+        }
+
+        result = await svc.list_deployments()
+
+        assert result["deployments"][0]["name"] == "llama-1b + ksmi-demo"

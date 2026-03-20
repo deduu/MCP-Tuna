@@ -13,7 +13,7 @@ import {
   extractTextFromChatContent,
   type ChatImageBlock,
 } from '@/lib/chat-content'
-import { resolveCompareTarget, shortDeploymentLabel } from '@/lib/compare-targets'
+import { deploymentDisplayLabel, resolveCompareTarget } from '@/lib/compare-targets'
 import { uploadAsset } from '@/lib/uploads'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -37,9 +37,9 @@ function createDeploymentTarget(deployment: Deployment): CompareTargetConfig {
   return {
     id: crypto.randomUUID(),
     kind: 'deployment',
-    label: shortDeploymentLabel(deployment.model_path),
+    label: deploymentDisplayLabel(deployment),
     deploymentId: deployment.deployment_id,
-    deploymentLabel: shortDeploymentLabel(deployment.model_path),
+    deploymentLabel: deploymentDisplayLabel(deployment),
     deploymentModality: deployment.modality ?? 'text',
   }
 }

@@ -229,6 +229,151 @@ class TestTrainModelSFTConfig:
         extra = captured_build_config_calls[0]["kwargs"].get("extra_kwargs", {})
         assert extra.get("completion_only_loss") is True
 
+    @pytest.mark.asyncio
+    async def test_sft_dataset_keeps_prompt_completion_and_text_columns(self, tmp_path):
+        """Normalize SFT rows to a schema that works across TRL variants."""
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_trainer_kwargs: dict = {}
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer(captured_trainer_kwargs)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_columns"),
+            )
+
+        train_dataset = captured_trainer_kwargs["train_dataset"]
+        assert set(train_dataset.column_names) == {"prompt", "completion", "text"}
+
+    @pytest.mark.asyncio
+    async def test_sft_result_includes_compact_metric_summary(self, tmp_path):
+        """Expose final train/eval metrics in the training result payload."""
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        def init(self, **kwargs):
+            self.state = types.SimpleNamespace(
+                log_history=[
+                    {"loss": 1.2, "learning_rate": 2e-4, "step": 1},
+                    {"eval_loss": 0.9, "step": 1},
+                    {"loss": 0.8, "grad_norm": 0.4, "step": 2},
+                ],
+                best_metric=0.9,
+                global_step=2,
+                epoch=1.0,
+            )
+
+        def train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.75)
+
+        fake_trainer = type("SFTTrainer", (), {
+            "__init__": init,
+            "train": train,
+            "save_model": MagicMock(),
+        })
+        fake_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("eval_dataset", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("dataset_text_field", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("max_seq_length", inspect.Parameter.KEYWORD_ONLY, default=2048),
+            inspect.Parameter("packing", inspect.Parameter.KEYWORD_ONLY, default=False),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_metrics"),
+            )
+
+        assert result["metrics"]["training_loss"] == 0.75
+        assert result["metrics"]["eval_loss"] == 0.9
+        assert result["metrics"]["best_eval_loss"] == 0.9
+        assert result["metrics"]["global_step"] == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_without_completion_only_loss_when_trl_expects_completion_column(self, tmp_path):
+        """Fallback for TRL stacks that raise KeyError('completion') during SFT setup."""
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_build_config_calls: list = []
+        trainer_init_calls = {"count": 0}
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return MagicMock()
+
+        def flaky_init(self, **kwargs):
+            trainer_init_calls["count"] += 1
+            if trainer_init_calls["count"] == 1:
+                raise KeyError("completion")
+
+        fake_trainer = type("SFTTrainer", (), {
+            "__init__": flaky_init,
+            "train": MagicMock(),
+            "save_model": MagicMock(),
+        })
+        fake_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("eval_dataset", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("dataset_text_field", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("max_seq_length", inspect.Parameter.KEYWORD_ONLY, default=2048),
+            inspect.Parameter("packing", inspect.Parameter.KEYWORD_ONLY, default=False),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_retry"),
+                completion_only_loss=True,
+            )
+
+        assert result["success"] is True
+        assert trainer_init_calls["count"] == 2
+        assert "warnings" in result
+        assert "completion_only_loss" in result["warnings"][0]
+        assert result["config"]["completion_only_loss_requested"] is True
+        assert result["config"]["completion_only_loss_effective"] is False
+        assert len(captured_build_config_calls) == 2
+        assert captured_build_config_calls[0]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is True
+        assert captured_build_config_calls[1]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is False
+
     def test_train_model_source_uses_sft_config(self):
         """Verify source code imports SFTConfig (not TrainingArguments) for SFT."""
         source = inspect.getsource(TrainingService.train_model)

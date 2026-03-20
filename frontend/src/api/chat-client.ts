@@ -1,6 +1,7 @@
 import { useChatStore } from '@/stores/chat'
 import type { TurnMetrics } from '@/stores/chat'
 import { mcpCall } from '@/api/client'
+import { queryClient } from '@/api/query-client'
 import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
 import {
   extractTextFromChatContent,
@@ -17,6 +18,15 @@ interface ChatRequestOptions {
   source?: 'agent' | 'deployment'
   deploymentId?: string | null
   deploymentModality?: 'text' | 'vision-language'
+}
+
+function refreshDeploymentConversationQueries(deploymentId: string | null | undefined, conversationId: string | null | undefined) {
+  if (deploymentId) {
+    void queryClient.invalidateQueries({ queryKey: ['deployments', 'conversations', deploymentId] })
+  }
+  if (conversationId) {
+    void queryClient.invalidateQueries({ queryKey: ['deployments', 'conversation', conversationId] })
+  }
 }
 
 /**
@@ -76,6 +86,7 @@ export async function sendChatMessage(
         })
 
         store.setDeploymentConversationId(result.conversation_id)
+        refreshDeploymentConversationQueries(options.deploymentId, result.conversation_id)
         store.appendToken(msgId, result.response ?? '')
         store.finishAssistantMessage(msgId)
         store.setStreaming(false)
@@ -97,6 +108,7 @@ export async function sendChatMessage(
           onComplete: (result) => {
             completed = true
             store.setDeploymentConversationId(result.conversation_id)
+            refreshDeploymentConversationQueries(options.deploymentId, result.conversation_id)
             const usage =
               result.usage && (
                 result.usage.prompt_tokens !== undefined ||

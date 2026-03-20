@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { buildDatasetOutputPath } from '@/lib/dataset-output'
+import { buildDefaultOutputDir } from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { DocumentPathInput } from './DocumentPathInput'
 import { ModelPathField, type ModelPathValidation } from './ModelPathField'
+import { StepConfigEditor } from './StepConfigEditor'
 
 const PIPELINE_STEPS = [
   'extract',
@@ -44,23 +46,44 @@ function resolveTrainUseLora(
 export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormProps) {
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set())
   const [documentPath, setDocumentPath] = useState('')
+  const [validationPath, setValidationPath] = useState('')
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
-  const [technique, setTechnique] = useState<string>('sft')
+  const [technique, setTechnique] = useState<(typeof TECHNIQUES)[number]>('sft')
   const [useLora, setUseLora] = useState(true)
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [stepConfig, setStepConfig] = useState('')
+  const [stepConfig, setStepConfig] = useState<Record<string, Record<string, unknown>>>({})
+  const [stepConfigValid, setStepConfigValid] = useState(true)
   const [modelValidation, setModelValidation] = useState<ModelPathValidation | null>(null)
   const [adapterValidation, setAdapterValidation] = useState<ModelPathValidation | null>(null)
   const [quantization, setQuantization] = useState<string>('4bit')
 
   const hasTrain = selectedSteps.has('train')
   const hasDeploy = selectedSteps.has('deploy')
+  const hasGenerate = selectedSteps.has('generate')
+  const hasExtract = selectedSteps.has('extract')
   const deployOnly = hasDeploy && !hasTrain
   const isVlmTechnique = technique === 'vlm_sft'
+  const usesExistingDataset = !isVlmTechnique && !hasGenerate && !hasExtract && ['clean', 'normalize', 'evaluate', 'train'].some((step) =>
+    selectedSteps.has(step),
+  )
+  const showValidationDatasetPath = hasTrain && technique === 'sft' && !isVlmTechnique
+  const trainConsumesExistingDatasetDirectly =
+    usesExistingDataset && !selectedSteps.has('clean') && !selectedSteps.has('normalize') && !selectedSteps.has('evaluate')
   const needsDocumentPath = ['extract', 'generate', 'clean', 'normalize', 'evaluate', 'train'].some((step) =>
     selectedSteps.has(step),
   )
+  const primaryPathLabel = isVlmTechnique || usesExistingDataset ? 'Dataset Path' : 'Document Path'
+  const primaryPathPlaceholder = isVlmTechnique
+    ? '/path/to/vlm_dataset.jsonl'
+    : usesExistingDataset
+      ? '/path/to/train_dataset.jsonl'
+      : '/path/to/document-or-dataset'
+  const primaryHelperText = isVlmTechnique
+    ? 'Use a backend-visible VLM dataset manifest path. Build one in Datasets > Build VLM Dataset Row.'
+    : usesExistingDataset
+      ? 'Paste an existing dataset path. You can skip extract/generate when the file is already in dataset format.'
+      : 'Browse uploads one document to the backend. For an existing dataset, you can also paste its server path.'
 
   function toggleStep(step: string) {
     setSelectedSteps((prev) => {
@@ -96,16 +119,13 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       }
     }
 
-    let overrides: Record<string, Record<string, unknown>> = {}
-    if (stepConfig.trim()) {
-      try {
-        overrides = JSON.parse(stepConfig) as Record<string, Record<string, unknown>>
-      } catch {
-        toast.error('Advanced step_config must be valid JSON')
-        return
-      }
+    if (!stepConfigValid) {
+      toast.error('Advanced step_config must be valid JSON')
+      return
     }
+    const overrides = stepConfig
     const effectiveTrainUseLora = resolveTrainUseLora(overrides, useLora)
+    const trainOutputDir = buildDefaultOutputDir(technique, false, documentPath.trim() || modelPath.trim())
 
     const steps: Array<{ tool: string; params: Record<string, unknown> }> = []
     const addStep = (stepId: string, tool: string, params: Record<string, unknown>) => {
@@ -123,7 +143,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
 
     if (selectedSteps.has('generate')) {
       addStep('generate', 'generate.from_document', { technique, file_path: documentPath })
-    } else if (!isVlmTechnique && ['clean', 'normalize', 'evaluate', 'train'].some((s) => selectedSteps.has(s))) {
+    } else if (!isVlmTechnique && ['clean', 'normalize', 'evaluate'].some((s) => selectedSteps.has(s))) {
       addStep('load', 'dataset.load', { file_path: documentPath })
     }
 
@@ -140,8 +160,16 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       if (isVlmTechnique) {
         addStep('train', 'finetune.train_vlm_async', {
           dataset_path: documentPath.trim(),
-          output_dir: './output/custom_pipeline',
+          output_dir: trainOutputDir,
           ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+          use_lora: effectiveTrainUseLora,
+        })
+      } else if (trainConsumesExistingDatasetDirectly) {
+        addStep('train', 'finetune.train', {
+          dataset_path: documentPath.trim(),
+          output_dir: trainOutputDir,
+          ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+          ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
           use_lora: effectiveTrainUseLora,
         })
       } else {
@@ -152,8 +180,9 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
         })
         addStep('train', 'finetune.train', {
           dataset_path: '$prev.file_path',
-          output_dir: './output/custom_pipeline',
+          output_dir: trainOutputDir,
           ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+          ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
           use_lora: effectiveTrainUseLora,
         })
       }
@@ -228,19 +257,13 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       <div className={cn('grid gap-3', needsDocumentPath ? 'sm:grid-cols-2' : 'sm:grid-cols-1')}>
         {needsDocumentPath && (
           <div>
-            <label className="text-sm font-medium text-foreground mb-1 block">
-              {isVlmTechnique ? 'Dataset Path' : 'Document Path'}
-            </label>
+            <label className="text-sm font-medium text-foreground mb-1 block">{primaryPathLabel}</label>
             <DocumentPathInput
               value={documentPath}
               onChange={setDocumentPath}
-              placeholder={isVlmTechnique ? '/path/to/vlm_dataset.jsonl' : '/path/to/document-or-dataset'}
+              placeholder={primaryPathPlaceholder}
               disabled={isPending}
-              helperText={
-                isVlmTechnique
-                  ? 'Use a backend-visible VLM dataset manifest path. Build one in Datasets > Build VLM Dataset Row.'
-                  : 'Browse uploads one document to the backend. For an existing dataset, you can also paste its server path.'
-              }
+              helperText={primaryHelperText}
             />
           </div>
         )}
@@ -264,6 +287,19 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
           />
         </div>
       </div>
+
+      {showValidationDatasetPath && (
+        <div>
+          <label className="text-sm font-medium text-foreground mb-1 block">Validation Dataset Path</label>
+          <DocumentPathInput
+            value={validationPath}
+            onChange={setValidationPath}
+            placeholder="/path/to/val_dataset.jsonl"
+            disabled={isPending}
+            helperText="Optional. Use a second JSONL dataset for evaluation during SFT. Leave blank to train without validation."
+          />
+        </div>
+      )}
 
       {deployOnly && (
         <div>
@@ -322,7 +358,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
         <label className="text-sm font-medium text-foreground mb-1 block">Technique</label>
         <select
           value={technique}
-          onChange={(e) => setTechnique(e.target.value)}
+          onChange={(e) => setTechnique(e.target.value as (typeof TECHNIQUES)[number])}
           className="flex h-9 w-full max-w-xs rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           {TECHNIQUES.map((t) => (
@@ -352,16 +388,17 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
         </button>
         {showAdvanced && (
           <div className="mt-2 space-y-2">
-            <textarea
+            <StepConfigEditor
+              selectedSteps={[...selectedSteps]}
               value={stepConfig}
-              onChange={(e) => setStepConfig(e.target.value)}
-              placeholder='{"generate": {"temperature": 0.8}, "train": {"num_epochs": 1}}'
-              rows={4}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onChange={(nextValue, isValid) => {
+                setStepConfigValid(isValid)
+                setStepConfig(nextValue)
+              }}
             />
             <p className="text-xs text-muted-foreground">
               Overrides accept either step ids like <code>generate</code>, <code>train</code>, <code>deploy</code>,
-              or full tool names like <code>generate.from_document</code>.
+              or full tool names like <code>generate.from_document</code>. Form mode exposes only known common overrides; use JSON mode for less common parameters.
             </p>
           </div>
         )}

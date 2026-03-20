@@ -5,7 +5,7 @@ import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { formatBytes } from '@/lib/utils'
+import { formatBytes, formatTimeAgo } from '@/lib/utils'
 import { Eye, EyeOff, Download, Trash2, Scissors } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/ui/dialog'
@@ -27,6 +27,7 @@ export function DatasetCard({ dataset, selected = false, onToggleSelect }: Datas
 
   const fileName = dataset.file_path.split(/[\\/]/).pop() ?? dataset.file_path
   const fileBaseName = fileName.includes('.') ? fileName.slice(0, fileName.lastIndexOf('.')) : fileName
+  const modifiedLabel = formatTimeAgo(dataset.modified_at)
 
   function downloadText(content: string, downloadName: string, mimeType: string) {
     const blob = new Blob([content], { type: mimeType })
@@ -122,6 +123,23 @@ export function DatasetCard({ dataset, selected = false, onToggleSelect }: Datas
             <Badge variant="outline" className="text-xs">
               {dataset.technique}
             </Badge>
+          )}
+
+          <div className="flex flex-wrap gap-1">
+            <Badge variant={dataset.object_key || dataset.object_url ? 'success' : 'outline'} className="text-[10px]">
+              {dataset.object_key || dataset.object_url ? 'Object storage' : 'Local only'}
+            </Badge>
+            {modifiedLabel && (
+              <Badge variant="outline" className="text-[10px]">
+                Updated {modifiedLabel}
+              </Badge>
+            )}
+          </div>
+
+          {dataset.object_key && (
+            <p className="text-[11px] text-muted-foreground break-all">
+              {dataset.object_key}
+            </p>
           )}
 
           {dataset.columns.length > 0 && (

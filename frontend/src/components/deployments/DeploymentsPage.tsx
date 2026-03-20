@@ -3,7 +3,7 @@ import { Rocket } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useDeployments } from '@/api/hooks/useDeployments'
+import { getRedeployInitialValues, useDeployments } from '@/api/hooks/useDeployments'
 import { DeploymentList } from './DeploymentList'
 import { DeploymentDetail } from './DeploymentDetail'
 import { DeployDialog, type DeployDialogInitialValues } from './DeployDialog'
@@ -70,12 +70,24 @@ export function DeploymentsPage() {
             deployments={deployments}
             selectedId={selectedDeploymentId}
             onSelect={setSelectedDeploymentId}
+            onRedeploy={(deploymentId, type) => {
+              const deployment = deployments.find((item) => item.deployment_id === deploymentId)
+              if (!deployment) return
+              openDeployDialog(type, getRedeployInitialValues(deployment))
+            }}
             isLoading={isLoading}
           />
         </div>
         <div className="lg:col-span-2">
           {selectedDeploymentId ? (
-            <DeploymentDetail deploymentId={selectedDeploymentId} />
+            <DeploymentDetail
+              deploymentId={selectedDeploymentId}
+              onRedeploy={(deploymentId, type) => {
+                const deployment = deployments.find((item) => item.deployment_id === deploymentId)
+                if (!deployment) return
+                openDeployDialog(type, getRedeployInitialValues(deployment))
+              }}
+            />
           ) : (
             <div className="flex h-64 items-center justify-center rounded-xl border border-dashed text-muted-foreground">
               Select a deployment to view details

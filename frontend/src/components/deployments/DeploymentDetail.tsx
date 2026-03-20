@@ -3,16 +3,17 @@ import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import { RefreshCw } from 'lucide-react'
+import { cn, formatDateTime } from '@/lib/utils'
+import { RefreshCw, RotateCcw } from 'lucide-react'
 import { LogViewer } from './LogViewer'
 import { DeploymentChat } from './DeploymentChat'
 
 interface DeploymentDetailProps {
   deploymentId: string
+  onRedeploy?: (deploymentId: string, type: 'mcp' | 'api') => void
 }
 
-export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
+export function DeploymentDetail({ deploymentId, onRedeploy }: DeploymentDetailProps) {
   const { data: deployments = [] } = useDeployments()
   const { data: logs = [], isLoading: logsLoading } = useDeploymentLogs(deploymentId, true)
   const statusMutation = useToolExecution()
@@ -31,7 +32,7 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
     )
   }
 
-  const modelName = deployment.model_path.split('/').pop() ?? deployment.model_path
+  const modelName = deployment.name?.trim() || deployment.model_path.split('/').pop() || deployment.model_path
 
   return (
     <div className="flex flex-col gap-4">
@@ -44,6 +45,17 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
               <RefreshCw className={cn('h-4 w-4', statusMutation.isPending && 'animate-spin')} />
               Refresh
             </Button>
+            {deployment.status === 'stopped' && onRedeploy && (
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => onRedeploy(deploymentId, 'mcp')}>
+                  <RotateCcw className="h-4 w-4" />
+                  Redeploy MCP
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => onRedeploy(deploymentId, 'api')}>
+                  Redeploy API
+                </Button>
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -61,8 +73,12 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Model</dt>
+              <dt className="text-muted-foreground">Name</dt>
               <dd className="truncate">{modelName}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Model</dt>
+              <dd className="truncate">{deployment.model_path.split('/').pop() ?? deployment.model_path}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground">Type</dt>
@@ -91,6 +107,24 @@ export function DeploymentDetail({ deploymentId }: DeploymentDetailProps) {
               <dt className="text-muted-foreground">Model Path</dt>
               <dd className="font-mono text-xs break-all">{deployment.model_path}</dd>
             </div>
+            {deployment.created_at && (
+              <div>
+                <dt className="text-muted-foreground">Created</dt>
+                <dd>{formatDateTime(deployment.created_at) ?? deployment.created_at}</dd>
+              </div>
+            )}
+            {deployment.updated_at && (
+              <div>
+                <dt className="text-muted-foreground">Last Update</dt>
+                <dd>{formatDateTime(deployment.updated_at) ?? deployment.updated_at}</dd>
+              </div>
+            )}
+            {deployment.stopped_at && (
+              <div className="col-span-2">
+                <dt className="text-muted-foreground">Stopped</dt>
+                <dd>{formatDateTime(deployment.stopped_at) ?? deployment.stopped_at}</dd>
+              </div>
+            )}
           </dl>
 
           {statusMutation.data && (

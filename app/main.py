@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.api_chat import router as chat_router
+from app.db.session import shutdown_db, startup_db
 
 from agentsoul.utils.logger import configure_logging
 from shared.diagnostics import init_diagnostics, session_id_var
@@ -59,7 +60,7 @@ async def lifespan(app: FastAPI):
 
     try:
         logger.info("Setting up initial database connections...")
-        # setup_database(settings=settings)
+        await startup_db()
     except Exception as e:
         logger.exception(f"Failed to set up database connections: {e}")
 
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await _diag_writer.close()
+    await shutdown_db()
     logger.info("Shutting down backend... releasing resources.")
 
 

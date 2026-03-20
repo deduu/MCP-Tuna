@@ -27,6 +27,8 @@ class DatasetMetadata(BaseModel):
     technique: Optional[str] = None  # sft | dpo | grpo | kto | vlm_sft | None
     size_bytes: int = 0
     modified_at: Optional[str] = None
+    object_key: Optional[str] = None
+    object_url: Optional[str] = None
 
 
 class SplitResult(BaseModel):

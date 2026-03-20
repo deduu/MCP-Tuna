@@ -35,6 +35,10 @@ export function TrainingPage() {
     () => jobs.filter((j) => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled'),
     [jobs],
   )
+  const failedJobs = useMemo(
+    () => jobs.filter((j) => j.status === 'failed'),
+    [jobs],
+  )
 
   const filteredJobs = activeTab === 'active' ? activeJobs : activeTab === 'completed' ? completedJobs : jobs
 
@@ -70,6 +74,13 @@ export function TrainingPage() {
         {activeJobs.length > 0 && (
           <Badge variant="default">{activeJobs.length} active</Badge>
         )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <Badge variant="outline">{jobs.length} retained jobs</Badge>
+        <Badge variant="success">{completedJobs.filter((job) => job.status === 'completed').length} completed</Badge>
+        {failedJobs.length > 0 && <Badge variant="error">{failedJobs.length} failed</Badge>}
+        <span>History is loaded from persisted backend state after refresh and restart.</span>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">

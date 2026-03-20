@@ -24,12 +24,14 @@ class HostingMCPServer:
         async def deploy_as_mcp(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 host=host,
                 port=port,
                 transport="http",
@@ -42,12 +44,14 @@ class HostingMCPServer:
         async def deploy_vlm_as_mcp(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 host=host,
                 port=port,
                 transport="http",
@@ -61,12 +65,14 @@ class HostingMCPServer:
         async def deploy_as_api(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 host=host,
                 port=port,
                 transport="http",
@@ -79,12 +85,14 @@ class HostingMCPServer:
         async def deploy_vlm_as_api(
             model_path: str,
             adapter_path: Optional[str] = None,
+            name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
+                name=name,
                 host=host,
                 port=port,
                 transport="http",

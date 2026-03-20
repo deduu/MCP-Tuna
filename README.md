@@ -7,121 +7,171 @@
 </p>
 
 <p align="center">
-  <strong>MCP-native platform for dataset generation, evaluation, fine-tuning, deployment, and orchestration.</strong>
+  <strong>MCP-native platform for dataset generation, evaluation, fine-tuning, deployment, orchestration, and operator-facing tooling.</strong>
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> |
-  <a href="#unified-gateway-tool-surface">Tool Surface</a> |
-  <a href="docs/tool-catalog.md">Tool Catalog</a> |
-  <a href="#frontend-surface">Frontend</a> |
-  <a href="#mcp-client-setup">MCP Client Setup</a>
+  <a href="#platform-surfaces">Platform Surfaces</a> |
+  <a href="#gateway-namespaces">Gateway Namespaces</a> |
+  <a href="#mcp-client-setup">MCP Client Setup</a> |
+  <a href="#development">Development</a>
 </p>
 
 <p align="center">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-2563EB?style=flat-square">
-  <img alt="MCP Gateway" src="https://img.shields.io/badge/MCP-unified_gateway-0891B2?style=flat-square">
+  <img alt="Gateway" src="https://img.shields.io/badge/MCP-unified_gateway-0891B2?style=flat-square">
   <img alt="Frontend" src="https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-0F172A?style=flat-square">
-  <img alt="Training" src="https://img.shields.io/badge/training-LoRA%20%7C%20SFT%20%7C%20DPO%20%7C%20GRPO-1D4ED8?style=flat-square">
+  <img alt="Training" src="https://img.shields.io/badge/training-SFT%20%7C%20DPO%20%7C%20GRPO%20%7C%20KTO%20%7C%20VLM-1D4ED8?style=flat-square">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-0F766E?style=flat-square">
 </p>
 
-MCP Tuna is an end-to-end LLM fine-tuning platform built around a unified MCP gateway. It covers document ingestion, synthetic dataset generation, cleaning, normalization, quality scoring, LoRA training, model evaluation, deployment, and orchestration training data in one repo.
+MCP Tuna is an end-to-end post-training platform for text and vision-language models. It combines MCP servers, a unified gateway, a React control plane, an OpenAI-compatible chat backend, dataset persistence, optional object storage, fine-tuning pipelines, evaluation workflows, and deployment tooling in one repository.
 
-It is designed to be useful in two modes:
+The codebase is designed to work in two complementary modes:
 
-- as a serious MCP server suite that coding agents can call directly
-- as a developer-facing control plane with a frontend for tools, datasets, training, deployments, and evaluation
+- as a serious MCP server suite for coding agents and tool-calling runtimes
+- as a human-operated local platform for inspecting tools, datasets, jobs, deployments, and evaluation runs
 
-## Who This Is For
+## Why This Repo Exists
 
-- teams building fine-tuning and post-training workflows around local or hosted models
-- developers who want one repo for generation, evaluation, training, deployment, and MCP integration
-- AI agent workflows that need a broad, tool-rich gateway instead of one-off scripts
+Most fine-tuning stacks fragment quickly: one repo for synthetic data, another for cleaning, a notebook for training, a separate deployment service, and ad hoc glue for agents. MCP Tuna keeps those steps in one place and exposes them through a stable MCP-first surface.
 
-## Why MCP Tuna Instead Of An Ad-Hoc Stack
+That matters for both humans and agents:
 
-- You do not need to stitch together separate repos for generation, quality filtering, fine-tuning, deployment, and evaluation.
-- The MCP gateway gives agents a single discovery surface instead of fragile custom glue code.
-- The frontend makes the system inspectable for humans, which matters when debugging datasets, jobs, and deployments.
-- The repo supports both granular tools and higher-level workflows, so it works for experimentation and production-like flows.
-- It is structured as a platform, not a notebook dump or a thin model wrapper.
+- agents get one discovery surface instead of fragile handwritten tool wrappers
+- operators get a real UI instead of raw JSON and shell history
+- teams can move between local experimentation, repeatable workflows, and tool-driven automation without switching stacks
 
-## Why This Repo Is Worth Trying
+## What MCP Tuna Covers
 
-- It covers the full post-training lifecycle, not just fine-tuning.
-- The unified gateway exposes 100+ tools across 17 namespaces through one MCP endpoint.
-- The frontend is not a demo shell. It includes tool exploration, dataset flows, training controls, deployment management, and an evaluation hub.
-- The repo is modular. You can run the full gateway or split servers by capability.
-- It is practical for both local experimentation and agent-driven workflows through Codex, Claude Desktop, Cursor, Windsurf, or other MCP clients.
+| Area | What you can do |
+|------|------------------|
+| Data ingestion and generation | Load documents, generate SFT/DPO/GRPO/KTO data, and import Hugging Face datasets |
+| Dataset preparation | Clean, normalize, validate, preview, split, merge, and persist datasets |
+| Quality and benchmarking | Score dataset quality, benchmark models, run judge-based evaluation, and export reports |
+| Fine-tuning | Run synchronous or async LoRA training, curriculum flows, sequential multi-stage training, adapter merge, and GGUF export |
+| Multimodal/VLM | Train VLM SFT jobs, run multimodal inference, deploy VLM runtimes, and evaluate multimodal responses |
+| Deployment | Serve trained models as MCP servers or REST APIs and chat against live deployments |
+| Workflow orchestration | Run guided end-to-end pipelines and collect orchestration training data from trajectories |
+| Runtime and persistence | Persist jobs, deployments, conversations, datasets, and artifacts to PostgreSQL, with optional S3-compatible blob sync |
 
-## What You Get
+## Highlights
 
-| Area | What it does |
-|------|---------------|
-| `extract` + `generate` | Load documents and create SFT, DPO, GRPO, or KTO-ready datasets |
-| `clean` + `normalize` + `evaluate` | Remove bad rows, standardize schema, and score/filter quality |
-| `dataset` | Save, load, preview, split, merge, and inspect datasets |
-| `finetune` | Run synchronous or async LoRA training, curriculum training, and sequential multi-stage training |
-| `test` + `evaluate_model` + `ft_eval` + `judge` | Compare models, benchmark runs, evaluate fine-tuned models, and run LLM-as-a-judge scoring |
-| `host` | Deploy models as MCP or API services and chat against them |
-| `workflow` + `orchestration` | Run end-to-end pipelines or build orchestration training data from trajectories |
-| `system` + `validate` + `file` | Resource checks, model discovery, path browsing, uploads, and runtime setup |
+- Unified MCP gateway with 17 namespaces and 120+ tool entry points defined in the gateway source.
+- Dedicated React control plane for Tools, Chat, Datasets, Training, Deployments, Evaluation, Pipeline, and Settings.
+- Built-in multimodal path with `vlm_sft` dataset handling, VLM training, VLM deployment, and multimodal judge flows.
+- Modular packaging: run the whole platform or install only the extras you need.
+- Split server entry points for teams that want capability-specific MCP surfaces instead of one gateway.
+- Bundled MCP client setup generator for VS Code, Claude Desktop, Claude Code, and Cursor.
 
-## Unified Gateway Tool Surface
+## Platform Surfaces
 
-The unified gateway is the main product surface. It groups tools by namespace so the system stays discoverable instead of turning into a flat list.
+| Surface | Purpose | Entry point |
+|---------|---------|-------------|
+| Unified MCP gateway | Primary MCP surface across all tool families | `mcp-tuna-gateway` |
+| Split MCP servers | Smaller, capability-specific servers | `mcp-tuna-data`, `mcp-tuna-eval`, `mcp-tuna-model-eval`, `mcp-tuna-train`, `mcp-tuna-host`, `mcp-tuna-orchestrate` |
+| Frontend control plane | Human-facing UI for operations and debugging | `frontend/` |
+| FastAPI backend | OpenAI-compatible `/v1/chat/completions` endpoint and app runtime | `app.main:app` |
+| Local chat CLI | Interactive REPL for direct or deployed model chat | `mcp-tuna-chat` |
+| MCP config generator | Writes client configs for supported MCP hosts | `mcp-tuna-setup` |
 
-| Namespace | Purpose | Typical use |
-|-----------|---------|-------------|
-| `system` | Resource checks, setup validation, config inspection, environment helpers | Check whether a machine can train before starting work |
-| `file` | Safe file upload and browse helpers for the frontend and MCP clients | Select backend-visible files and folders |
-| `extract` | Read source documents into text | Load PDFs, Markdown, text, and similar source material |
-| `generate` | Create synthetic training data | Turn docs or raw text into SFT/DPO/GRPO/KTO examples |
-| `clean` | Remove duplicates and invalid rows | Clean generated or imported data before evaluation |
-| `normalize` | Align keys and formats | Convert mixed datasets into a target training schema |
-| `evaluate` | Score dataset quality and filter low-value rows | Build higher-quality training corpora |
-| `evaluate_model` | Benchmark models on structured test sets | Measure model quality and export results |
-| `finetune` | Run training jobs and related utilities | Train, monitor, merge adapters, export GGUF |
-| `test` | Inference and direct model comparisons | Compare base vs fine-tuned behavior |
-| `validate` | Model discovery and dataset validation | Inspect model paths, search models, validate dataset schema |
-| `host` | Serve trained models | Deploy MCP or API inference endpoints |
-| `workflow` | Chain multiple tools into larger pipelines | Run full generate-to-train or compare workflows |
-| `orchestration` | Create orchestration training datasets | Generate problems, collect trajectories, build data |
-| `judge` | LLM-as-a-judge scoring | Single, batch, rubric, and pairwise evaluation |
-| `ft_eval` | Domain-specific fine-tune evaluation | Evaluate generated vs reference answers with summary/export |
-| `dataset` | Dataset persistence and transformation | Save, load, split, merge, inspect datasets |
+## Architecture
 
-For the namespace-by-namespace catalog and representative tool usage, see [docs/tool-catalog.md](docs/tool-catalog.md).
+```text
+Documents / Raw Text / HF Datasets / Images
+                    |
+                    v
+        Extract + Generate + Import Pipelines
+                    |
+      +-------------+-------------+-------------+
+      |             |             |             |
+      v             v             v             v
+    Clean       Normalize      Evaluate      Dataset IO
+      \             |             /             /
+       +------------+------------+-------------+
+                    |
+                    v
+           Fine-tuning and Job Control
+                    |
+          +---------+----------+-----------+
+          |                    |           |
+          v                    v           v
+      Benchmarking         Deployment   Orchestration
+          |                    |
+          +----------+---------+
+                     |
+                     v
+           Gateway + Backend + Frontend
+```
 
-## Frontend Surface
+## Gateway Namespaces
 
-The frontend is a working control plane, not a placeholder.
+The unified gateway is the core product surface. It groups tools by namespace so clients can discover capability families instead of traversing a flat, unstructured tool list.
 
-| Page | What it is for |
+| Namespace | Tool count | Responsibility |
+|-----------|------------|----------------|
+| `system` | 13 | Machine readiness, diagnostics, environment setup, and training prescription |
+| `file` | 3 | Backend-visible file browsing and uploads |
+| `extract` | 1 | Document loading |
+| `generate` | 8 | Synthetic dataset generation from documents, text, pages, or Hugging Face datasets |
+| `clean` | 4 | Deduplication, schema checks, and weak-row removal |
+| `normalize` | 4 | Field alignment and text normalization |
+| `evaluate` | 6 | Dataset scoring, statistics, and quality filtering |
+| `evaluate_model` | 4 | Model benchmarking and result export |
+| `dataset` | 8 | Save, load, preview, inspect, split, merge, and list datasets |
+| `finetune` | 23 | SFT/DPO/GRPO/KTO/VLM training, async jobs, curriculum, sequential chaining, adapter merge, and GGUF export |
+| `test` | 3 | Direct inference, model comparison, and VLM inference |
+| `validate` | 6 | Dataset validation and model discovery helpers |
+| `host` | 11 | MCP/API deployment, health checks, deployment inventory, and chat |
+| `workflow` | 11 | Guided multi-step pipeline execution and workflow job management |
+| `orchestration` | 4 | Problem generation, trajectory collection, training-data assembly, and orchestration training |
+| `judge` | 10 | Pointwise, pairwise, rubric, batch, and multimodal judge evaluation |
+| `ft_eval` | 4 | Fine-tune specific evaluation, summaries, and export |
+
+For a namespace-by-namespace catalog of representative flows, see [docs/tool-catalog.md](docs/tool-catalog.md).
+
+## Frontend
+
+The frontend is a working operator UI, not a placeholder shell.
+
+| Page | What it covers |
 |------|-----------------|
-| Dashboard | System status and quick navigation |
-| Chat | OpenAI-compatible chat flow backed by the repo runtime |
-| Tools | Live schema-driven tool explorer for every MCP tool |
-| Pipeline | Guided orchestration and custom pipeline forms |
-| Datasets | Import, generate, inspect, split, merge, clean, and evaluate datasets |
-| Training | Configure and monitor training jobs |
-| Deployments | Launch and manage hosted models |
-| Evaluation | LLM Judge, Fine-tune Eval, and Model Benchmark workflows |
+| Dashboard | Tool counts, system status, and fast navigation |
+| Tools | Schema-driven MCP tool explorer and execution forms |
+| Chat | Tool-aware chat, deployment chat, and compare flows |
+| Pipeline | Guided and custom orchestration forms |
+| Datasets | Import, preview, clean, normalize, split, merge, evaluate, and VLM dataset authoring |
+| Training | Technique selection, capability-aware forms, and job tracking |
+| Deployments | Launch, inspect, test, and chat with running deployments |
+| Evaluation | Single eval, compare, benchmark, judge, and fine-tune evaluation flows |
+| Settings | Gateway connectivity, environment, diagnostics, storage, and maintenance actions |
 
-The Tools page is especially useful for discovery because it renders tool parameters from the MCP schema and now supports dropdowns for constrained inputs plus browse controls for path-like fields.
+Key UI traits:
+
+- tool forms are generated from MCP schemas
+- path fields can browse backend-visible directories
+- training options are gated by available backend capabilities
+- multimodal chat and judge paths activate automatically when image blocks are present
 
 ## UI Preview
 
 <p align="center">
-  <img src="docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
+  <img src="https://raw.githubusercontent.com/deduu/MCP-Tuna/main/docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
 </p>
 
 <p align="center">
-  Visual preview of the core operator surfaces: Tools, Training, Evaluation, and Deployments.
+  Tools, Training, Evaluation, and Deployments from the local control plane.
 </p>
 
 ## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- `uv` for the recommended Python workflow
+- `npm` for the frontend
+- GPU plus CUDA-compatible PyTorch environment if you plan to run local training or hosted inference
 
 ### 1. Clone and install
 
@@ -131,50 +181,100 @@ cd MCP-Tuna
 uv sync --extra all
 ```
 
+Optional but recommended:
+
+```bash
+cp .env.example .env
+```
+
 ### 2. Run the unified gateway for MCP clients
+
+HTTP mode:
 
 ```bash
 uv run mcp-tuna-gateway http --port 8000
 ```
 
-For stdio-based MCP clients:
+stdio mode:
 
 ```bash
 uv run mcp-tuna-gateway
 ```
 
-### 3. Run the local frontend stack
+### 3. Run the full local platform
 
-The frontend dev proxy expects:
+For local UI development, the frontend expects:
 
 - FastAPI backend on `http://127.0.0.1:8000`
 - MCP gateway on `http://127.0.0.1:8002`
+- Vite frontend on `http://127.0.0.1:5173`
 
 Start them in separate terminals:
 
 ```bash
 uv run uvicorn app.main:app --reload --port 8000
 uv run python scripts/run_gateway.py http --port 8002
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
-Then run the frontend:
+### 4. Run the packaged local stack with Docker Compose
 
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose up -d
 ```
 
-## Copy-Paste Examples
+`docker-compose.yml` starts:
 
-These examples use the unified gateway over HTTP.
+- PostgreSQL with pgvector on `55432`
+- MinIO on `9000` with console on `9001`
+- the unified gateway on `8000`
 
-If you are following the frontend dev setup from this README, use port `8002` for `/mcp`. If you are running the gateway standalone, `8000` is fine.
+## Typical Workflows
+
+### Build a training dataset from documents
+
+1. Load or generate with `extract.load_document` or `generate.from_document`.
+2. Clean with `clean.dataset`.
+3. Normalize with `normalize.dataset`.
+4. Score and filter with `evaluate.dataset` and `evaluate.filter_by_quality`.
+5. Persist with `dataset.save`.
+
+### Validate a machine before training
+
+1. Run `system.check_resources`.
+2. Run `system.preflight_check`.
+3. Use `system.prescribe` or `system.auto_prescribe` for recommended settings.
+
+### Train and deploy a model
+
+1. Validate the dataset with `validate.schema`.
+2. Launch `finetune.train_async` or a technique-specific training tool.
+3. Monitor with `finetune.job_status` or `finetune.list_jobs`.
+4. Deploy with `host.deploy_mcp`, `host.deploy_api`, `host.deploy_vlm_mcp`, or `host.deploy_vlm_api`.
+
+### Run a multimodal flow
+
+1. Create a canonical `vlm_sft` dataset from the Datasets page or a JSONL manifest.
+2. Train with `finetune.train_vlm_async`.
+3. Test with `test.vlm_inference`.
+4. Evaluate with `judge.evaluate_vlm` or `judge.evaluate_vlm_batch`.
+5. Serve with `host.deploy_vlm_api` or `host.deploy_vlm_mcp`.
+
+### Benchmark or judge model outputs
+
+1. Use `evaluate_model.batch` for benchmark-style scoring over a dataset.
+2. Use `judge.evaluate`, `judge.compare_pair`, or their VLM variants for LLM-as-a-judge workflows.
+3. Export with `evaluate_model.export`, `judge.export`, or `ft_eval.export`.
+
+## Copy-Paste MCP Examples
+
+These examples assume the gateway is available at `http://127.0.0.1:8002/mcp`. If you are running the gateway standalone without the FastAPI backend on the same port, `8000` is also valid.
 
 ### Check whether a machine can train
 
 ```bash
-curl -s http://127.0.0.1:8000/mcp \
+curl -s http://127.0.0.1:8002/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -187,7 +287,7 @@ curl -s http://127.0.0.1:8000/mcp \
 ### Generate SFT data from a document
 
 ```bash
-curl -s http://127.0.0.1:8000/mcp \
+curl -s http://127.0.0.1:8002/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -203,29 +303,10 @@ curl -s http://127.0.0.1:8000/mcp \
   }'
 ```
 
-### Validate a dataset before training
-
-```bash
-curl -s http://127.0.0.1:8000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc":"2.0",
-    "id":"validate-dataset",
-    "method":"tools/call",
-    "params":{
-      "name":"validate.schema",
-      "arguments":{
-        "dataset_path":"output/my_dataset.jsonl",
-        "technique":"sft"
-      }
-    }
-  }'
-```
-
 ### Start async fine-tuning
 
 ```bash
-curl -s http://127.0.0.1:8000/mcp \
+curl -s http://127.0.0.1:8002/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -242,10 +323,10 @@ curl -s http://127.0.0.1:8000/mcp \
   }'
 ```
 
-### Run an end-to-end pipeline from a high-level goal
+### Run a guided end-to-end workflow
 
 ```bash
-curl -s http://127.0.0.1:8000/mcp \
+curl -s http://127.0.0.1:8002/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0",
@@ -262,56 +343,27 @@ curl -s http://127.0.0.1:8000/mcp \
   }'
 ```
 
-## Typical Workflows
-
-### Build a training dataset from documents
-
-1. Use `extract.load_document` or `generate.from_document`.
-2. Clean with `clean.dataset`.
-3. Normalize with `normalize.dataset`.
-4. Score and filter with `evaluate.dataset` and `evaluate.filter_by_quality`.
-5. Persist with `dataset.save`.
-
-### Validate whether a machine can train
-
-1. Run `system.check_resources`.
-2. Run `system.preflight_check` for a known model.
-3. Run `system.prescribe` or `system.auto_prescribe` to generate recommended settings.
-
-### Train and deploy a model
-
-1. Start with a validated dataset path.
-2. Run `finetune.train_async` or one of the technique-specific training tools.
-3. Monitor with `finetune.job_status` or `finetune.list_jobs`.
-4. Deploy with `host.deploy_mcp` or `host.deploy_api`.
-
-### Benchmark multiple models
-
-1. Prepare a test dataset.
-2. Use the Evaluation Hub `Model Benchmark` page or call `evaluate_model.batch`.
-3. Export results with `evaluate_model.export`.
-
-## Installation Tiers
+## Installation Profiles
 
 Install only what you need:
 
-| Extra | What it enables | Key dependencies |
-|-------|------------------|------------------|
-| `data` | Dataset generation | openai |
-| `eval` | Dataset quality scoring and filtering | openai, scikit-learn |
-| `model-eval` | Model comparison and benchmarking | rouge-score, evaluate, pandas |
-| `model-eval-full` | `model-eval` plus BERTScore | bert-score |
-| `training` | LoRA fine-tuning | torch, transformers, peft, trl |
-| `hosting` | Model deployment | torch, transformers, fastapi |
-| `orchestration` | Agent trajectory training data | openai |
-| `export` | GGUF export | llama-cpp-python |
-| `backend` | FastAPI backend and PostgreSQL | sqlalchemy, asyncpg |
-| `memory` | Agent memory integrations | chromadb |
-| `retrieval` | BM25 and FAISS retrieval | faiss-cpu, rank-bm25 |
-| `tracing` | Observability | auditi |
-| `dev` | Tests and linting | pytest, ruff |
-| `all-servers` | All MCP server extras | combined server extras |
-| `all` | Full local development environment | all server + infra extras |
+| Extra | What it enables |
+|-------|------------------|
+| `data` | Document ingestion and synthetic dataset generation |
+| `eval` | Dataset quality scoring and filtering |
+| `model-eval` | Model benchmarking and export |
+| `model-eval-full` | `model-eval` plus BERTScore |
+| `training` | Local LoRA training and training utilities |
+| `hosting` | Local model deployment and chat services |
+| `orchestration` | Trajectory generation and orchestration data workflows |
+| `export` | GGUF export |
+| `backend` | FastAPI backend, SQLAlchemy, async PostgreSQL, object storage support |
+| `memory` | Chroma-backed memory integrations |
+| `retrieval` | FAISS and BM25 retrieval |
+| `tracing` | Auditi tracing |
+| `dev` | Tests and linting |
+| `all-servers` | All gateway and split-server capability groups |
+| `all` | Full local development environment |
 
 Examples:
 
@@ -321,34 +373,69 @@ pip install "mcp-tuna[training,hosting]"
 pip install "mcp-tuna[all]"
 ```
 
-## Available Server Commands
+## Runtime Configuration
 
-| Server | Command | Primary use |
-|--------|---------|-------------|
-| Unified Gateway | `mcp-tuna-gateway` | Full end-to-end MCP surface |
-| Data Prep | `mcp-tuna-data` | Document loading, generation, cleaning, normalization, dataset IO |
-| Evaluation | `mcp-tuna-eval` | Dataset scoring and filtering |
-| Model Eval | `mcp-tuna-model-eval` | Benchmarking and judge utilities |
-| Training | `mcp-tuna-train` | Fine-tuning workflows |
-| Hosting | `mcp-tuna-host` | Deployment and health checks |
-| Orchestration | `mcp-tuna-orchestrate` | Trajectory generation and orchestration datasets |
-| Chat | `mcp-tuna-chat` | Direct model chat CLI |
+Core environment variables are loaded from `.env` if present.
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | OpenAI-backed generation, evaluation, and judge flows |
+| `ANTHROPIC_API_KEY` | Anthropic provider access |
+| `GOOGLE_API_KEY` | Google provider access |
+| `HF_TOKEN` | Hugging Face model download, gated model access, and upload workflows |
+| `UPLOAD_ROOT` | Root directory for uploaded documents and images |
+| `PERSISTENCE_ENABLED` | Enable PostgreSQL-backed job, dataset, deployment, conversation, and artifact persistence |
+| `DB_DRIVER`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Database connection settings |
+| `OBJECT_STORAGE_ENABLED` | Enable S3-compatible object storage sync for artifacts and datasets |
+| `OBJECT_STORAGE_*` | Endpoint, credentials, bucket, region, prefix, and public URL settings |
+| `MCP_TUNA_GATEWAY_URL` | URL used by the app runtime to auto-connect agents to the gateway |
+
+Use `.env.example` as the starting point for local configuration.
+
+## Available Commands
+
+| Command | Purpose |
+|---------|---------|
+| `mcp-tuna-gateway` | Unified gateway over stdio or HTTP |
+| `mcp-tuna-data` | Data-prep focused MCP server |
+| `mcp-tuna-eval` | Dataset evaluation MCP server |
+| `mcp-tuna-model-eval` | Model evaluation MCP server |
+| `mcp-tuna-train` | Training MCP server |
+| `mcp-tuna-host` | Hosting and deployment MCP server |
+| `mcp-tuna-orchestrate` | Orchestration MCP server |
+| `mcp-tuna-chat` | Interactive chat CLI |
+| `mcp-tuna-setup` | MCP client config generator |
 
 ## MCP Client Setup
 
-### Auto-generate configs
+### Generate configs automatically
+
+Installed console scripts:
 
 ```bash
 mcp-tuna-setup --all
 ```
 
-Zero-install with `uvx`:
+Zero-install via `uvx`:
 
 ```bash
 mcp-tuna-setup --all --launcher uvx
 ```
 
-### Codex
+Repository-local launcher:
+
+```bash
+mcp-tuna-setup --all --launcher repo
+```
+
+The setup generator supports:
+
+- VS Code
+- Claude Desktop
+- Claude Code
+- Cursor
+
+### Codex example
 
 Add to `~/.codex/config.toml` or `.codex/config.toml`:
 
@@ -368,27 +455,13 @@ HTTP mode:
 url = "http://localhost:8000/mcp"
 ```
 
-### Claude Desktop
+### Claude Desktop or Cursor example
 
 ```json
 {
   "mcpServers": {
-    "mcp-tuna": {
-      "command": "mcp-tuna-gateway",
-      "env": { "OPENAI_API_KEY": "sk-..." }
-    }
-  }
-}
-```
-
-### Cursor
-
-```json
-{
-  "mcpServers": {
-    "mcp-tuna": {
-      "command": "mcp-tuna-gateway",
-      "env": { "OPENAI_API_KEY": "sk-..." }
+    "mcp-tuna-gateway": {
+      "command": "mcp-tuna-gateway"
     }
   }
 }
@@ -398,97 +471,72 @@ More ready-to-use configs live in [examples](examples).
 
 ## Docker
 
+### GPU image
+
 ```bash
-# GPU image
 docker build -t mcp-tuna .
 docker run --gpus all -p 8000:8000 \
   -e OPENAI_API_KEY=sk-... \
   -v hf-cache:/root/.cache/huggingface \
   mcp-tuna
+```
 
-# CPU-focused image
+### CPU image
+
+```bash
 docker build --target cpu -t mcp-tuna-cpu .
 docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... mcp-tuna-cpu
-
-# docker compose
-docker compose up -d
 ```
 
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENAI_API_KEY` | For generation and evaluation flows | OpenAI API access |
-| `HF_TOKEN` | For training or push-to-hub flows | Hugging Face downloads and uploads |
-| `HF_HOME` | No | Hugging Face cache location |
-| `MODEL_ROOT` | No | Extra server-visible model folder for the frontend browser |
-| `MODEL_BROWSE_ROOTS` | No | Multiple extra model folders, separated by OS path separator |
-
-## Architecture
-
-```text
-Documents / Raw Text / HF Datasets
-                |
-                v
-      Extract + Generate Pipelines
-                |
-      +---------+---------+---------+
-      |         |         |         |
-      v         v         v         v
-    Clean   Normalize  Evaluate  Dataset IO
-      \         |         /         /
-       +--------+--------+---------+
-                |
-                v
-         Fine-tuning Pipeline
-                |
-       +--------+---------+
-       |                  |
-       v                  v
-   Evaluation         Hosting
-                |
-                v
-         Orchestration Data
-```
-
-## Project Structure
+## Repository Layout
 
 ```text
 mcp-tuna/
 |-- mcp_gateway.py               # Unified MCP gateway
-|-- app/                         # FastAPI backend and runtime helpers
-|-- frontend/                    # React control plane
-|-- scripts/                     # Entry points, setup, and e2e helpers
-|-- servers/                     # Split MCP servers
-|-- shared/                      # Shared config, models, and utilities
-|-- data_generator_pipeline/     # Dataset generation
-|-- data_cleaning_pipeline/      # Deduplication and schema validation
-|-- data_normalization_pipeline/ # Key and format normalization
-|-- data_evaluator_pipeline/     # Dataset scoring and filtering
-|-- model_evaluator_pipeline/    # Benchmarking, judge, and FT eval
-|-- finetuning_pipeline/         # LoRA training and inference
-|-- hosting_pipeline/            # Deployment services
-|-- orchestration/               # Orchestration training data workflows
-`-- examples/                    # MCP client config examples
+|-- app/                         # FastAPI backend, config, DB, and API orchestration
+|-- frontend/                    # React + TypeScript control plane
+|-- scripts/                     # CLI entry points, setup, demos, and e2e helpers
+|-- servers/                     # Split MCP server entry points
+|-- shared/                      # Shared config, persistence, dataset, storage, and runtime helpers
+|-- src/agentsoul/               # Bundled agent framework, MCP client, providers, memory, and retrieval
+|-- data_generator_pipeline/     # Dataset generation services and templates
+|-- data_cleaning_pipeline/      # Cleaning and validation
+|-- data_normalization_pipeline/ # Schema and format normalization
+|-- data_evaluator_pipeline/     # Dataset quality metrics and filtering
+|-- model_evaluator_pipeline/    # Benchmarking, judge, and fine-tune evaluation
+|-- finetuning_pipeline/         # Training, adapters, curriculum, sequential, and VLM utilities
+|-- hosting_pipeline/            # Deployment and chat runtime services
+|-- orchestration/               # Orchestrated workflow and trajectory generation
+|-- tests/                       # Python test suite
+|-- docs/                        # Tool catalog and assets
+`-- examples/                    # MCP client configuration examples
 ```
 
 ## Development
 
+Recommended local workflow:
+
 ```bash
-# full local environment
 uv sync --extra all
-
-# tests
 uv run pytest -x -q
-
-# lint
 uv run ruff check .
-
-# frontend build
-cd frontend
-npm install
-npm run build
+npm --prefix frontend run build
 ```
+
+Useful targeted commands:
+
+```bash
+uv run mcp-tuna-gateway --help
+uv run pytest tests/test_server_manifest.py -q
+uv run pytest tests/test_new_gateway_tools.py -q
+```
+
+## Related Files
+
+- [CHANGELOG.md](CHANGELOG.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [docs/tool-catalog.md](docs/tool-catalog.md)
+- [server.json](server.json)
 
 ## License
 

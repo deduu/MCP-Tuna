@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 
 interface TrainingDatasetFieldProps {
+  label?: string
   datasetPath: string
   onChange: (value: string) => void
   datasets: DatasetInfo[]
@@ -13,6 +14,7 @@ interface TrainingDatasetFieldProps {
 }
 
 export function TrainingDatasetField({
+  label = 'Dataset',
   datasetPath,
   onChange,
   datasets,
@@ -24,7 +26,7 @@ export function TrainingDatasetField({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <label className="text-sm font-medium">Dataset</label>
+        <label className="text-sm font-medium">{label}</label>
         {schemaValid && (
           <Badge variant={schemaValid === 'pass' ? 'success' : 'warning'} className="text-[10px] px-1.5 py-0">
             schema {schemaValid}

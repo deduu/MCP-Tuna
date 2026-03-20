@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import type { ChatImageBlock } from '@/lib/chat-content'
 import { buildEvaluationMessages } from '@/lib/evaluation-multimodal'
+import type { JsonEditorValue } from '@/components/shared/JsonEditorField'
+import { JsonEditorField } from '@/components/shared/JsonEditorField'
 import { toast } from 'sonner'
 import { ImageAttachmentField } from './ImageAttachmentField'
 
@@ -55,7 +57,8 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
   const [question, setQuestion] = useState('')
   const [generated, setGenerated] = useState('')
   const [reference, setReference] = useState('')
-  const [rubric, setRubric] = useState('')
+  const [rubric, setRubric] = useState<JsonEditorValue | null>(null)
+  const [rubricValid, setRubricValid] = useState(true)
   const [images, setImages] = useState<ChatImageBlock[]>([])
   const [isUploadingImages, setIsUploadingImages] = useState(false)
   const [result, setResult] = useState<EvalResult | null>(null)
@@ -77,16 +80,15 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
         args.reference = reference.trim()
       }
       if (mode === 'rubric') {
-        if (!rubric.trim()) {
+        if (rubric === null) {
           toast.error('Rubric JSON is required for rubric evaluation')
           return
         }
-        try {
-          args.rubric = JSON.parse(rubric)
-        } catch {
+        if (!rubricValid) {
           toast.error('Rubric must be valid JSON')
           return
         }
+        args.rubric = rubric
       }
       const toolName = images.length > 0 ? 'judge.evaluate_vlm' : 'judge.evaluate'
       const res = await executeTool({
@@ -145,12 +147,27 @@ export function SingleEvalForm({ mode }: SingleEvalFormProps) {
           </div>
           {mode === 'rubric' && (
             <div className="space-y-1">
-              <label className="text-sm font-medium">Rubric</label>
-              <textarea
+              <JsonEditorField
+                label="Rubric"
+                description="Use the form editor for common rubric authoring, or switch to JSON for exact copy/paste control."
+                defaultValue={{
+                  name: 'custom',
+                  criteria: [
+                    {
+                      name: 'accuracy',
+                      description: 'Factual correctness',
+                      min_score: 1,
+                      max_score: 10,
+                      weight: 1,
+                    },
+                  ],
+                }}
                 placeholder='{"name":"custom","criteria":[{"name":"accuracy","description":"Factual correctness","min_score":1,"max_score":10,"weight":1.0}]}'
-                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-20 resize-y"
-                value={rubric}
-                onChange={(e) => setRubric(e.target.value)}
+                allowEmpty={false}
+                onChange={({ parsed, isValid }) => {
+                  setRubricValid(isValid)
+                  setRubric(parsed)
+                }}
               />
             </div>
           )}

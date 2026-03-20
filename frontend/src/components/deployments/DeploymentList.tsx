@@ -8,10 +8,11 @@ interface DeploymentListProps {
   deployments: Deployment[]
   selectedId: string | null
   onSelect: (id: string) => void
+  onRedeploy: (id: string, type: 'mcp' | 'api') => void
   isLoading: boolean
 }
 
-export function DeploymentList({ deployments, selectedId, onSelect, isLoading }: DeploymentListProps) {
+export function DeploymentList({ deployments, selectedId, onSelect, onRedeploy, isLoading }: DeploymentListProps) {
   const stopMutation = useStopDeployment()
   const undeployMutation = useUndeployment()
 
@@ -58,6 +59,7 @@ export function DeploymentList({ deployments, selectedId, onSelect, isLoading }:
           deployment={deployment}
           isSelected={selectedId === deployment.deployment_id}
           onSelect={() => onSelect(deployment.deployment_id)}
+          onRedeploy={(type) => onRedeploy(deployment.deployment_id, type)}
           onStop={() => handleStop(deployment.deployment_id)}
           onUndeploy={() => handleUndeploy(deployment.deployment_id)}
         />

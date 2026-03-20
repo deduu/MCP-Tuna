@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.dataset_models import DatasetConfig, DatasetMetadata
+from shared.object_storage import get_object_storage_service
+from shared.persistence import get_persistence_service
 from shared.multimodal_models import (
     extract_text_from_content,
     is_vlm_sample,
@@ -29,6 +31,8 @@ class DatasetService:
 
     def __init__(self, config: Optional[DatasetConfig] = None) -> None:
         self.config = config or DatasetConfig()
+        self._persistence = get_persistence_service()
+        self._object_storage = get_object_storage_service()
 
     @staticmethod
     def _resolve_dir(dir_path: Path) -> Optional[Path]:
@@ -87,7 +91,13 @@ class DatasetService:
                 else None
             ),
         )
-        return {"success": True, **meta.model_dump()}
+        payload = meta.model_dump()
+        upload_result = await self._sync_dataset_blob(path)
+        if upload_result.get("success"):
+            payload["object_key"] = upload_result.get("object_key")
+            payload["object_url"] = upload_result.get("object_url")
+        await self._persistence.upsert_dataset(payload)
+        return {"success": True, **payload}
 
     # ------------------------------------------------------------------
     # load
@@ -198,7 +208,20 @@ class DatasetService:
             size_bytes=path.stat().st_size,
             modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         )
-        return {"success": True, "metadata": meta.model_dump()}
+        payload = meta.model_dump()
+        persisted = await self._persistence.get_dataset(str(path.resolve()))
+        if persisted:
+            if persisted.get("object_key"):
+                payload["object_key"] = persisted["object_key"]
+            if persisted.get("object_url"):
+                payload["object_url"] = persisted["object_url"]
+        else:
+            upload_result = await self._sync_dataset_blob(path)
+            if upload_result.get("success"):
+                payload["object_key"] = upload_result.get("object_key")
+                payload["object_url"] = upload_result.get("object_url")
+        await self._persistence.upsert_dataset(payload)
+        return {"success": True, "metadata": payload}
 
     # ------------------------------------------------------------------
     # delete
@@ -223,7 +246,11 @@ class DatasetService:
             return {"success": False, "error": f"Unsupported extension: {ext}"}
 
         resolved = str(path.resolve())
+        persisted = await self._persistence.get_dataset(resolved)
         await asyncio.to_thread(path.unlink)
+        if persisted and persisted.get("object_key"):
+            await self._object_storage.delete_object(persisted.get("object_key"))
+        await self._persistence.mark_dataset_deleted(resolved)
         return {"success": True, "file_path": resolved, "deleted": True}
 
     # ------------------------------------------------------------------
@@ -643,3 +670,19 @@ class DatasetService:
             "p95_length": lengths[p95_idx],
             "sampled_rows": len(lengths),
         }
+
+    async def _sync_dataset_blob(self, path: Path) -> Dict[str, Any]:
+        if not self._object_storage.enabled:
+            return {"success": False, "disabled": True}
+
+        try:
+            relative = path.resolve().relative_to(Path.cwd().resolve())
+            relative_path = str(relative).replace("\\", "/")
+        except ValueError:
+            relative_path = path.name
+
+        return await self._object_storage.upload_file(
+            str(path.resolve()),
+            category="datasets",
+            relative_path=relative_path,
+        )

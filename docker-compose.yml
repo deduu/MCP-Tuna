@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: insights_pg
     environment:
       POSTGRES_USER: insights
@@ -10,6 +10,19 @@ services:
       - "55432:5432" # Change if local PostgreSQL already uses 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    container_name: mcp_tuna_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
 
   mcp-tuna-gateway:
     build:
@@ -21,6 +34,21 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
+      - DB_DRIVER=postgresql+asyncpg
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=insights_db
+      - DB_USER=insights
+      - DB_PASSWORD=insights
+      - PERSISTENCE_ENABLED=true
+      - OBJECT_STORAGE_ENABLED=true
+      - OBJECT_STORAGE_ENDPOINT=http://minio:9000
+      - OBJECT_STORAGE_ACCESS_KEY=minioadmin
+      - OBJECT_STORAGE_SECRET_KEY=minioadmin
+      - OBJECT_STORAGE_BUCKET=mcp-tuna
+      - OBJECT_STORAGE_REGION=us-east-1
+      - OBJECT_STORAGE_SECURE=false
+      - OBJECT_STORAGE_PREFIX=compose
     volumes:
       - model-cache:/root/.cache/huggingface
     deploy:
@@ -33,4 +61,5 @@ services:
 
 volumes:
   pgdata:
+  minio-data:
   model-cache:
