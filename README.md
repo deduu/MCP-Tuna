@@ -3,7 +3,7 @@
 <!-- mcp-name: io.github.deduu/mcp-tuna -->
 
 <p align="center">
-  <img src="docs/assets/mcp-tuna-logo.svg" alt="MCP Tuna" width="760">
+  <img src="https://github.com/user-attachments/assets/92983e56-bb42-4055-a26e-52c1e9c0cb62" alt="MCP Tuna" width="760">
 </p>
 
 <p align="center">
@@ -79,7 +79,7 @@ That matters for both humans and agents:
 ## Architecture
 
 ```mermaid
-flowchart TD
+graph TD
     client["HTTP Client / Open WebUI"] --> app["FastAPI App"]
     app --> orchestrator["Orchestrator"]
     orchestrator --> strategy{"Strategy"}
@@ -97,17 +97,19 @@ flowchart TD
     agents --> tools["Tool(s)"]
     tools --> apis["External APIs"]
 
-    classDef edge fill:#E0F2FE,stroke:#0284C7,color:#0F172A,stroke-width:1px;
-    classDef app fill:#D1FAE5,stroke:#10B981,color:#0F172A,stroke-width:1px;
-    classDef core fill:#EDE9FE,stroke:#8B5CF6,color:#0F172A,stroke-width:1px;
-    classDef strategy fill:#FDE68A,stroke:#F59E0B,color:#0F172A,stroke-width:1px;
-    classDef agents fill:#FEE2E2,stroke:#EF4444,color:#0F172A,stroke-width:1px;
+    style client fill:#0EA5E9,stroke:#0284C7,color:#FFFFFF,stroke-width:2px
+    style app fill:#10B981,stroke:#059669,color:#FFFFFF,stroke-width:2px
+    style orchestrator fill:#8B5CF6,stroke:#7C3AED,color:#FFFFFF,stroke-width:2px
+    style strategy fill:#F59E0B,stroke:#D97706,color:#FFFFFF,stroke-width:2px
+    style agents fill:#EF4444,stroke:#DC2626,color:#FFFFFF,stroke-width:2px
+    style tools fill:#6366F1,stroke:#4F46E5,color:#FFFFFF,stroke-width:2px
+    style single fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
+    style router fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
+    style pipeline fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
+    style parallel fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
+    style apis fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
 
-    class client edge;
-    class app app;
-    class orchestrator,single,router,pipeline,parallel,tools,apis core;
-    class strategy strategy;
-    class agents agents;
+    linkStyle default stroke:#475569,stroke-width:1.5px
 ```
 
 This orchestration view is the core runtime path: request entry, strategy selection, agent execution mode, tool invocation, and downstream API access.
