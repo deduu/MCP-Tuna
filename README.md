@@ -3,7 +3,7 @@
 <!-- mcp-name: io.github.deduu/mcp-tuna -->
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/deduu/MCP-Tuna/main/docs/assets/mcp-tuna-logo.svg" alt="MCP Tuna" width="760">
+  <img src="docs/assets/mcp-tuna-logo.svg" alt="MCP Tuna" width="760">
 </p>
 
 <p align="center">
@@ -78,32 +78,39 @@ That matters for both humans and agents:
 
 ## Architecture
 
-```text
-Documents / Raw Text / HF Datasets / Images
-                    |
-                    v
-        Extract + Generate + Import Pipelines
-                    |
-      +-------------+-------------+-------------+
-      |             |             |             |
-      v             v             v             v
-    Clean       Normalize      Evaluate      Dataset IO
-      \             |             /             /
-       +------------+------------+-------------+
-                    |
-                    v
-           Fine-tuning and Job Control
-                    |
-          +---------+----------+-----------+
-          |                    |           |
-          v                    v           v
-      Benchmarking         Deployment   Orchestration
-          |                    |
-          +----------+---------+
-                     |
-                     v
-           Gateway + Backend + Frontend
+```mermaid
+flowchart TD
+    client["HTTP Client / Open WebUI"] --> app["FastAPI App"]
+    app --> orchestrator["Orchestrator"]
+    orchestrator --> strategy{"Strategy"}
+
+    strategy --> single["SingleAgent"]
+    strategy --> router["Router"]
+    strategy --> pipeline["Pipeline"]
+    strategy --> parallel["Parallel"]
+
+    single --> agents["Agent(s)"]
+    router --> agents
+    pipeline --> agents
+    parallel --> agents
+
+    agents --> tools["Tool(s)"]
+    tools --> apis["External APIs"]
+
+    classDef edge fill:#E0F2FE,stroke:#0284C7,color:#0F172A,stroke-width:1px;
+    classDef app fill:#D1FAE5,stroke:#10B981,color:#0F172A,stroke-width:1px;
+    classDef core fill:#EDE9FE,stroke:#8B5CF6,color:#0F172A,stroke-width:1px;
+    classDef strategy fill:#FDE68A,stroke:#F59E0B,color:#0F172A,stroke-width:1px;
+    classDef agents fill:#FEE2E2,stroke:#EF4444,color:#0F172A,stroke-width:1px;
+
+    class client edge;
+    class app app;
+    class orchestrator,single,router,pipeline,parallel,tools,apis core;
+    class strategy strategy;
+    class agents agents;
 ```
+
+This orchestration view is the core runtime path: request entry, strategy selection, agent execution mode, tool invocation, and downstream API access.
 
 ## Gateway Namespaces
 
@@ -157,7 +164,7 @@ Key UI traits:
 ## UI Preview
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/deduu/MCP-Tuna/main/docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
+  <img src="docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
 </p>
 
 <p align="center">
@@ -221,14 +228,22 @@ npm --prefix frontend run dev
 ### 4. Run the packaged local stack with Docker Compose
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
 `docker-compose.yml` starts:
 
 - PostgreSQL with pgvector on `55432`
 - MinIO on `9000` with console on `9001`
-- the unified gateway on `8000`
+- FastAPI backend on `8000`
+- the unified gateway on `8002`
+- the frontend on `5173`
+
+Open:
+
+- frontend: `http://127.0.0.1:5173`
+- backend: `http://127.0.0.1:8000`
+- gateway: `http://127.0.0.1:8002`
 
 ## Typical Workflows
 
@@ -470,6 +485,14 @@ url = "http://localhost:8000/mcp"
 More ready-to-use configs live in [examples](examples).
 
 ## Docker
+
+### Full stack with Compose
+
+```bash
+docker compose up --build -d
+```
+
+This runs PostgreSQL, MinIO, the FastAPI backend, the MCP gateway, and the React frontend in one local stack.
 
 ### GPU image
 

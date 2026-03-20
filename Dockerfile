@@ -26,10 +26,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --extra all-servers
+RUN uv sync --frozen --no-dev --extra all-servers --extra backend
 
 COPY . .
-RUN uv sync --frozen --no-dev --extra all-servers
+RUN uv sync --frozen --no-dev --extra all-servers --extra backend
 
 EXPOSE 8000
 CMD ["uv", "run", "mcp-tuna-gateway", "http", "--port", "8000"]

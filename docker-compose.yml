@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: insights
       POSTGRES_DB: insights_db
     ports:
-      - "55432:5432" # Change if local PostgreSQL already uses 5432
+      - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -24,33 +24,95 @@ services:
     volumes:
       - minio-data:/data
 
-  mcp-tuna-gateway:
+  backend:
+    build:
+      context: .
+      target: gpu
+    container_name: mcp_tuna_backend
+    command:
+      - uv
+      - run
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    depends_on:
+      - postgres
+      - minio
+      - gateway
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      DB_DRIVER: postgresql+asyncpg
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: insights_db
+      DB_USER: insights
+      DB_PASSWORD: insights
+      PERSISTENCE_ENABLED: "true"
+      OBJECT_STORAGE_ENABLED: "true"
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_ACCESS_KEY: minioadmin
+      OBJECT_STORAGE_SECRET_KEY: minioadmin
+      OBJECT_STORAGE_BUCKET: mcp-tuna
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_SECURE: "false"
+      OBJECT_STORAGE_PREFIX: compose
+      MCP_TUNA_GATEWAY_URL: http://gateway:8002/mcp
+      UPLOAD_ROOT: /app/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/root/.cache/huggingface
+      - uploads-data:/app/uploads
+      - logs-data:/app/logs
+      - output-data:/app/output
+
+  gateway:
     build:
       context: .
       target: gpu
     container_name: mcp_tuna_gateway
-    ports:
-      - "8000:8000"
+    command:
+      - uv
+      - run
+      - mcp-tuna-gateway
+      - http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+    depends_on:
+      - postgres
+      - minio
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - HF_TOKEN=${HF_TOKEN:-}
-      - DB_DRIVER=postgresql+asyncpg
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=insights_db
-      - DB_USER=insights
-      - DB_PASSWORD=insights
-      - PERSISTENCE_ENABLED=true
-      - OBJECT_STORAGE_ENABLED=true
-      - OBJECT_STORAGE_ENDPOINT=http://minio:9000
-      - OBJECT_STORAGE_ACCESS_KEY=minioadmin
-      - OBJECT_STORAGE_SECRET_KEY=minioadmin
-      - OBJECT_STORAGE_BUCKET=mcp-tuna
-      - OBJECT_STORAGE_REGION=us-east-1
-      - OBJECT_STORAGE_SECURE=false
-      - OBJECT_STORAGE_PREFIX=compose
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      DB_DRIVER: postgresql+asyncpg
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: insights_db
+      DB_USER: insights
+      DB_PASSWORD: insights
+      PERSISTENCE_ENABLED: "true"
+      OBJECT_STORAGE_ENABLED: "true"
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_ACCESS_KEY: minioadmin
+      OBJECT_STORAGE_SECRET_KEY: minioadmin
+      OBJECT_STORAGE_BUCKET: mcp-tuna
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_SECURE: "false"
+      OBJECT_STORAGE_PREFIX: compose
+      UPLOAD_ROOT: /app/uploads
+    ports:
+      - "8002:8002"
     volumes:
       - model-cache:/root/.cache/huggingface
+      - uploads-data:/app/uploads
+      - logs-data:/app/logs
+      - output-data:/app/output
     deploy:
       resources:
         reservations:
@@ -59,7 +121,28 @@ services:
               count: all
               capabilities: [gpu]
 
+  frontend:
+    image: node:20-alpine
+    container_name: mcp_tuna_frontend
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+      - gateway
+    environment:
+      VITE_PROXY_API_TARGET: http://backend:8000
+      VITE_PROXY_MCP_TARGET: http://gateway:8002
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+      - frontend-node-modules:/app/frontend/node_modules
+
 volumes:
   pgdata:
   minio-data:
   model-cache:
+  uploads-data:
+  logs-data:
+  output-data:
+  frontend-node-modules:
