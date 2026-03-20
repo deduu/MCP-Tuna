@@ -80,39 +80,42 @@ That matters for both humans and agents:
 
 ```mermaid
 graph TD
-    client["HTTP Client / Open WebUI"] --> app["FastAPI App"]
-    app --> orchestrator["Orchestrator"]
-    orchestrator --> strategy{"Strategy"}
+    inputs["Documents / Raw Text / HF Datasets / Images"] --> ingest["Extract + Generate + Import Pipelines"]
 
-    strategy --> single["SingleAgent"]
-    strategy --> router["Router"]
-    strategy --> pipeline["Pipeline"]
-    strategy --> parallel["Parallel"]
+    ingest --> clean["Clean"]
+    ingest --> normalize["Normalize"]
+    ingest --> evaluate["Evaluate"]
+    ingest --> datasetio["Dataset IO"]
 
-    single --> agents["Agent(s)"]
-    router --> agents
-    pipeline --> agents
-    parallel --> agents
+    clean --> finetune["Fine-tuning and Job Control"]
+    normalize --> finetune
+    evaluate --> finetune
+    datasetio --> finetune
 
-    agents --> tools["Tool(s)"]
-    tools --> apis["External APIs"]
+    finetune --> benchmarking["Benchmarking"]
+    finetune --> deployment["Deployment"]
+    finetune --> orchestration["Orchestration"]
 
-    style client fill:#0EA5E9,stroke:#0284C7,color:#FFFFFF,stroke-width:2px
-    style app fill:#10B981,stroke:#059669,color:#FFFFFF,stroke-width:2px
-    style orchestrator fill:#8B5CF6,stroke:#7C3AED,color:#FFFFFF,stroke-width:2px
-    style strategy fill:#F59E0B,stroke:#D97706,color:#FFFFFF,stroke-width:2px
-    style agents fill:#EF4444,stroke:#DC2626,color:#FFFFFF,stroke-width:2px
-    style tools fill:#6366F1,stroke:#4F46E5,color:#FFFFFF,stroke-width:2px
-    style single fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
-    style router fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
-    style pipeline fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
-    style parallel fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
-    style apis fill:#F8FAFC,stroke:#A78BFA,color:#0F172A,stroke-width:2px
+    benchmarking --> platform["Gateway + Backend + Frontend"]
+    deployment --> platform
+    orchestration --> platform
 
-    linkStyle default stroke:#475569,stroke-width:1.5px
+    style inputs fill:#F8FAFC,stroke:#94A3B8,color:#0F172A,stroke-width:1.5px
+    style ingest fill:#0EA5E9,stroke:#0284C7,color:#FFFFFF,stroke-width:2px
+    style clean fill:#ECFEFF,stroke:#06B6D4,color:#0F172A,stroke-width:1.5px
+    style normalize fill:#EFF6FF,stroke:#3B82F6,color:#0F172A,stroke-width:1.5px
+    style evaluate fill:#EEF2FF,stroke:#6366F1,color:#0F172A,stroke-width:1.5px
+    style datasetio fill:#F5F3FF,stroke:#8B5CF6,color:#0F172A,stroke-width:1.5px
+    style finetune fill:#F59E0B,stroke:#D97706,color:#FFFFFF,stroke-width:2px
+    style benchmarking fill:#F8FAFC,stroke:#14B8A6,color:#0F172A,stroke-width:1.5px
+    style deployment fill:#F8FAFC,stroke:#22C55E,color:#0F172A,stroke-width:1.5px
+    style orchestration fill:#F8FAFC,stroke:#A855F7,color:#0F172A,stroke-width:1.5px
+    style platform fill:#0F172A,stroke:#334155,color:#FFFFFF,stroke-width:2px
+
+    linkStyle default stroke:#64748B,stroke-width:1.5px
 ```
 
-This orchestration view is the core runtime path: request entry, strategy selection, agent execution mode, tool invocation, and downstream API access.
+This platform view shows the repo's end-to-end flow from ingestion through dataset prep, fine-tuning control, downstream runtime surfaces, and the final gateway/backend/frontend layer.
 
 ## Gateway Namespaces
 
