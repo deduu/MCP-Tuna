@@ -93,3 +93,25 @@ async def test_workflow_run_pipeline_async_cancels_custom_training_step(tmp_path
     assert job.progress.current_stage == "finetune.train"
     assert job.result is not None
     assert "cancelled" in job.result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_workflow_delete_job_removes_finished_record(tmp_path: Path):
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    delete_job = gateway.mcp._tools["workflow.delete_job"]["func"]
+
+    job = gateway.workflow_job_manager.create_job(
+        trainer_type="workflow",
+        base_model="meta-llama/Llama-3.2-3B-Instruct",
+        output_dir=str(tmp_path / "workflow"),
+        config_summary={"steps": ["finetune.train"]},
+    )
+    job.status = JobStatus.FAILED
+
+    payload = json.loads(await delete_job(job_id=job.job_id))
+
+    assert payload["success"] is True
+    assert gateway.workflow_job_manager.get_job(job.job_id) is None

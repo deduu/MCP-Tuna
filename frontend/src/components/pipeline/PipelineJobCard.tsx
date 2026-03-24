@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, Square, Eye } from 'lucide-react'
+import { ChevronDown, Square, Eye, Trash2 } from 'lucide-react'
 import type { PipelineJob } from '@/api/hooks/usePipeline'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
@@ -13,6 +13,8 @@ import { cn, formatDuration, formatTimeAgo } from '@/lib/utils'
 interface PipelineJobCardProps {
   job: PipelineJob
   onCancel: (id: string) => void
+  onDelete?: (job: PipelineJob) => void
+  isDeleting?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,7 +56,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   cancelled: 'outline',
 }
 
-export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
+export function PipelineJobCard({ job, onCancel, onDelete, isDeleting = false }: PipelineJobCardProps) {
   const [showResult, setShowResult] = useState(false)
   const result = (job.result as Record<string, unknown> | undefined) ?? null
   const trainingResult = extractTrainingResult(result)
@@ -308,10 +310,26 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
               variant="outline"
               size="sm"
               onClick={() => onCancel(job.job_id)}
+              disabled={isDeleting}
               className="ml-auto gap-1 text-xs text-destructive hover:text-destructive"
             >
               <Square className="h-3.5 w-3.5" />
               Cancel
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onDelete(job)}
+              disabled={isDeleting}
+              className={cn(
+                'gap-1 text-xs text-destructive hover:text-destructive',
+                !isActive && 'ml-auto',
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {isDeleting ? 'Removing...' : isActive ? 'Cancel & Delete' : 'Delete'}
             </Button>
           )}
         </div>

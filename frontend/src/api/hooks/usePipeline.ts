@@ -78,11 +78,35 @@ function mapWorkflowJob(job: WorkflowJobPayload): PipelineJob {
   }
 }
 
-export function usePipelineJobs() {
+async function fetchPipelineJobStatus(jobId: string) {
+  const response = await mcpCall<WorkflowJobPayload>('workflow.job_status', { job_id: jobId })
+  return mapWorkflowJob(response)
+}
+
+function isActivePipelineJobStatus(status: PipelineJob['status']) {
+  return status === 'running' || status === 'pending'
+}
+
+async function waitForPipelineJobToStop(jobId: string, timeoutMs: number = 30_000) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const job = await fetchPipelineJobStatus(jobId)
+    if (!isActivePipelineJobStatus(job.status)) {
+      return job
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000))
+  }
+
+  throw new Error('Workflow job is still stopping. Try again in a few seconds.')
+}
+
+export function usePipelineJobs(limit: number = 50) {
   return useQuery<PipelineJob[]>({
-    queryKey: ['pipeline', 'jobs'],
+    queryKey: ['pipeline', 'jobs', limit],
     queryFn: async () => {
-      const response = await mcpCall<WorkflowJobListResponse>('workflow.list_jobs', { limit: 50 })
+      const response = await mcpCall<WorkflowJobListResponse>('workflow.list_jobs', { limit })
       return (response.jobs ?? []).map(mapWorkflowJob)
     },
     staleTime: 1_000,
@@ -97,10 +121,7 @@ export function usePipelineJobs() {
 export function usePipelineJobStatus(jobId: string) {
   return useQuery<PipelineJob>({
     queryKey: ['pipeline', 'job', jobId],
-    queryFn: async () => {
-      const response = await mcpCall<WorkflowJobPayload>('workflow.job_status', { job_id: jobId })
-      return mapWorkflowJob(response)
-    },
+    queryFn: async () => fetchPipelineJobStatus(jobId),
     enabled: !!jobId,
     staleTime: 1_000,
     refetchInterval: (query) => {
@@ -135,6 +156,36 @@ export function useCancelPipeline() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (jobId: string) => mcpCall('workflow.cancel_job', { job_id: jobId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pipeline', 'jobs'] })
+    },
+  })
+}
+
+export function useRemovePipelineJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ jobId, status }: { jobId: string; status: PipelineJob['status'] }) => {
+      if (isActivePipelineJobStatus(status)) {
+        const cancelResult = await mcpCall<{ success?: boolean; error?: string }>('workflow.cancel_job', {
+          job_id: jobId,
+        })
+        if (cancelResult.success === false) {
+          throw new Error(cancelResult.error ?? 'Cancel failed')
+        }
+
+        await waitForPipelineJobToStop(jobId)
+      }
+
+      const deleteResult = await mcpCall<{ success?: boolean; error?: string }>('workflow.delete_job', {
+        job_id: jobId,
+      })
+      if (deleteResult.success === false) {
+        throw new Error(deleteResult.error ?? 'Delete failed')
+      }
+
+      return deleteResult
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pipeline', 'jobs'] })
     },

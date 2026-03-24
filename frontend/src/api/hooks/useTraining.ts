@@ -34,11 +34,36 @@ function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): Train
   }
 }
 
-export function useTrainingJobs() {
+async function fetchTrainingJobStatus(jobId: string) {
+  return normalizeTrainingJob(
+    await mcpCall<TrainingJob & Record<string, unknown>>('finetune.get_status', { job_id: jobId }),
+  )
+}
+
+function isActiveJobStatus(status: TrainingJob['status']) {
+  return status === 'running' || status === 'pending'
+}
+
+async function waitForJobToStop(jobId: string, timeoutMs: number = 30_000) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const job = await fetchTrainingJobStatus(jobId)
+    if (!isActiveJobStatus(job.status)) {
+      return job
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000))
+  }
+
+  throw new Error('Job is still stopping. Try again in a few seconds.')
+}
+
+export function useTrainingJobs(limit: number = 50) {
   return useQuery<TrainingJob[]>({
-    queryKey: ['training', 'jobs'],
+    queryKey: ['training', 'jobs', limit],
     queryFn: async () => {
-      const result = await mcpCall<{ jobs: TrainingJob[] }>('finetune.list_jobs', { limit: 50 })
+      const result = await mcpCall<{ jobs: TrainingJob[] }>('finetune.list_jobs', { limit })
       return (result.jobs ?? [])
         .map((job) => normalizeTrainingJob(job as TrainingJob & Record<string, unknown>))
         .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''))
@@ -55,9 +80,7 @@ export function useTrainingJobs() {
 export function useTrainingJobStatus(jobId: string) {
   return useQuery<TrainingJob>({
     queryKey: ['training', 'job', jobId],
-    queryFn: async () => normalizeTrainingJob(
-      await mcpCall<TrainingJob & Record<string, unknown>>('finetune.get_status', { job_id: jobId }),
-    ),
+    queryFn: async () => fetchTrainingJobStatus(jobId),
     enabled: !!jobId,
     refetchInterval: 2_000,
   })
@@ -211,6 +234,37 @@ export function useDeleteTrainingJob() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (jobId: string) => mcpCall('finetune.delete_job', { job_id: jobId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
+      qc.invalidateQueries({ queryKey: ['system', 'health'] })
+    },
+  })
+}
+
+export function useRemoveTrainingJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ jobId, status }: { jobId: string; status: TrainingJob['status'] }) => {
+      if (isActiveJobStatus(status)) {
+        const cancelResult = await mcpCall<{ success?: boolean; error?: string }>('finetune.cancel', {
+          job_id: jobId,
+        })
+        if (cancelResult.success === false) {
+          throw new Error(cancelResult.error ?? 'Cancel failed')
+        }
+
+        await waitForJobToStop(jobId)
+      }
+
+      const deleteResult = await mcpCall<{ success?: boolean; error?: string }>('finetune.delete_job', {
+        job_id: jobId,
+      })
+      if (deleteResult.success === false) {
+        throw new Error(deleteResult.error ?? 'Delete failed')
+      }
+
+      return deleteResult
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
       qc.invalidateQueries({ queryKey: ['system', 'health'] })

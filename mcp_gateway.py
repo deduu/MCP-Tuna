@@ -4182,16 +4182,33 @@ class TunaGateway:
             description="Cancel a running workflow job.",
         )
         async def workflow_cancel_job(job_id: str) -> str:
-            success = self.workflow_job_manager.cancel_job(job_id)
+            success = await self.workflow_job_manager.acancel_job(job_id)
             if not success:
                 return json.dumps({
                     "success": False,
-                    "error": f"Job not found or not running: {job_id}",
+                    "error": f"Job not found or not active: {job_id}",
                 }, indent=2)
             return json.dumps({
                 "success": True,
                 "job_id": job_id,
                 "message": "Cancellation requested. Workflow stops after the current stage.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.delete_job",
+            description="Delete a finished workflow job record. Active jobs must be cancelled first.",
+        )
+        async def workflow_delete_job(job_id: str) -> str:
+            success = await self.workflow_job_manager.adelete_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or still active: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Workflow job deleted.",
             }, indent=2)
 
         @self.mcp.tool(

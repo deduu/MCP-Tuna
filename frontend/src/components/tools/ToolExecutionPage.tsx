@@ -28,7 +28,7 @@ export function ToolExecutionPage() {
 
   if (registryLoading) {
     return (
-      <div className="max-w-2xl space-y-4">
+      <div className="mx-auto w-full max-w-2xl space-y-4">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-48" />
       </div>
@@ -37,7 +37,7 @@ export function ToolExecutionPage() {
 
   if (!tool) {
     return (
-      <div className="max-w-2xl">
+      <div className="mx-auto w-full max-w-2xl">
         <Button variant="ghost" onClick={() => navigate(`/tools/${namespace}`)}>
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back
@@ -48,7 +48,7 @@ export function ToolExecutionPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="mx-auto w-full max-w-2xl space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => navigate(`/tools/${namespace}`)}>
           <ArrowLeft className="h-4 w-4" />

@@ -22,7 +22,7 @@ export function NamespaceDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4 max-w-3xl">
+      <div className="mx-auto w-full max-w-3xl space-y-4">
         <Skeleton className="h-8 w-48" />
         {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-20" />
@@ -32,7 +32,7 @@ export function NamespaceDetailPage() {
   }
 
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="mx-auto w-full max-w-3xl space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => navigate('/tools')}>
           <ArrowLeft className="h-4 w-4" />

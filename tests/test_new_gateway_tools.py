@@ -97,6 +97,9 @@ class TestToolRegistration:
     def test_finetune_delete_job_registered(self, tool_names):
         assert "finetune.delete_job" in tool_names
 
+    def test_workflow_delete_job_registered(self, tool_names):
+        assert "workflow.delete_job" in tool_names
+
     def test_test_vlm_inference_registered(self, tool_names):
         assert "test.vlm_inference" in tool_names
 

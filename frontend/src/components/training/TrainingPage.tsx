@@ -1,37 +1,52 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Cpu, Plus } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import type { TrainingJob } from '@/api/types'
-import { useTrainingJobs, useAvailableModels, useCancelTraining, useDeleteTrainingJob } from '@/api/hooks/useTraining'
-import { usePipelineJobs, useCancelPipeline } from '@/api/hooks/usePipeline'
+import { useTrainingJobs, useAvailableModels, useCancelTraining, useRemoveTrainingJob } from '@/api/hooks/useTraining'
+import { usePipelineJobs, useCancelPipeline, useRemovePipelineJob, type PipelineJob } from '@/api/hooks/usePipeline'
 import { useSystemResources } from '@/api/hooks/useSystemResources'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { includesTrainingStage } from '@/lib/training-progress'
 import { NewTrainingPanel } from './NewTrainingPanel'
-import { TrainingJobCard } from './TrainingJobCard'
 import { getDeployInitialValues } from './deployment-paths'
-import { PipelineJobCard } from '@/components/pipeline/PipelineJobCard'
+import { TrainingHistoryDetailPanel } from './TrainingHistoryDetailPanel'
+import { TrainingHistoryList } from './TrainingHistoryList'
+import {
+  buildTrainingHistoryEntries,
+  filterTrainingHistoryEntries,
+  getTrainingHistoryFilterCounts,
+  paginateTrainingHistoryEntries,
+  type TrainingHistoryFilter,
+} from './training-history'
+
+const HISTORY_FETCH_LIMIT = 200
+const HISTORY_PAGE_SIZE = 20
 
 export function TrainingPage() {
   const [panelOpen, setPanelOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState('active')
+  const [activeTab, setActiveTab] = useState<TrainingHistoryFilter>('active')
   const [selectedModelPath, setSelectedModelPath] = useState('')
+  const [removingJobId, setRemovingJobId] = useState<string | null>(null)
+  const [removingPipelineJobId, setRemovingPipelineJobId] = useState<string | null>(null)
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [historyPage, setHistoryPage] = useState(1)
+  const [selectedHistoryKey, setSelectedHistoryKey] = useState<string | null>(null)
   const navigate = useNavigate()
 
-  const { data: jobs = [], isLoading: jobsLoading, error: jobsError } = useTrainingJobs()
-  const { data: pipelineJobs = [], isLoading: pipelineJobsLoading } = usePipelineJobs()
+  const { data: jobs = [], isLoading: jobsLoading, error: jobsError } = useTrainingJobs(HISTORY_FETCH_LIMIT)
+  const { data: pipelineJobs = [], isLoading: pipelineJobsLoading } = usePipelineJobs(HISTORY_FETCH_LIMIT)
   const { data: resources } = useSystemResources()
   const { data: models = [] } = useAvailableModels()
   const cancelTraining = useCancelTraining()
-  const deleteTrainingJob = useDeleteTrainingJob()
+  const removeTrainingJob = useRemoveTrainingJob()
   const cancelPipeline = useCancelPipeline()
+  const removePipelineJob = useRemovePipelineJob()
 
   const activeJobs = useMemo(
     () => jobs.filter((j) => j.status === 'running' || j.status === 'pending'),
@@ -53,9 +68,46 @@ export function TrainingPage() {
     () => jobs.filter((j) => j.status === 'failed'),
     [jobs],
   )
-
-  const filteredJobs = activeTab === 'active' ? activeJobs : activeTab === 'completed' ? completedJobs : jobs
   const totalActiveRuns = activeJobs.length + activePipelineJobs.length
+  const historyEntries = useMemo(
+    () => buildTrainingHistoryEntries(jobs, pipelineTrainingJobs),
+    [jobs, pipelineTrainingJobs],
+  )
+  const historyCounts = useMemo(
+    () => getTrainingHistoryFilterCounts(historyEntries),
+    [historyEntries],
+  )
+  const filteredHistory = useMemo(
+    () => filterTrainingHistoryEntries(historyEntries, activeTab, historyQuery),
+    [historyEntries, activeTab, historyQuery],
+  )
+  const pagedHistory = useMemo(
+    () => paginateTrainingHistoryEntries(filteredHistory, historyPage, HISTORY_PAGE_SIZE),
+    [filteredHistory, historyPage],
+  )
+  const selectedEntry = useMemo(
+    () => pagedHistory.items.find((entry) => entry.key === selectedHistoryKey) ?? pagedHistory.items[0] ?? null,
+    [pagedHistory.items, selectedHistoryKey],
+  )
+  const historyMayBeTruncated =
+    jobs.length >= HISTORY_FETCH_LIMIT || pipelineTrainingJobs.length >= HISTORY_FETCH_LIMIT
+
+  useEffect(() => {
+    setHistoryPage(1)
+  }, [activeTab, historyQuery])
+
+  useEffect(() => {
+    if (historyPage !== pagedHistory.page) {
+      setHistoryPage(pagedHistory.page)
+    }
+  }, [historyPage, pagedHistory.page])
+
+  useEffect(() => {
+    const nextKey = selectedEntry?.key ?? null
+    if (selectedHistoryKey !== nextKey) {
+      setSelectedHistoryKey(nextKey)
+    }
+  }, [selectedEntry, selectedHistoryKey])
 
   function handleCancel(jobId: string) {
     cancelTraining.mutate(jobId, {
@@ -80,11 +132,22 @@ export function TrainingPage() {
     })
   }
 
-  function handleDelete(jobId: string) {
-    deleteTrainingJob.mutate(jobId, {
-      onSuccess: () => toast.success('Training job deleted'),
-      onError: (err) => toast.error(`Delete failed: ${err.message}`),
-    })
+  function handleDelete(job: TrainingJob) {
+    setRemovingJobId(job.job_id)
+    removeTrainingJob.mutate(
+      { jobId: job.job_id, status: job.status },
+      {
+        onSuccess: () => {
+          toast.success(
+            job.status === 'running' || job.status === 'pending'
+              ? 'Training job cancelled and deleted'
+              : 'Training job deleted',
+          )
+        },
+        onError: (err) => toast.error(`Delete failed: ${err.message}`),
+        onSettled: () => setRemovingJobId(null),
+      },
+    )
   }
 
   function handleCancelPipeline(jobId: string) {
@@ -94,8 +157,26 @@ export function TrainingPage() {
     })
   }
 
+  function handleDeletePipeline(job: PipelineJob) {
+    setRemovingPipelineJobId(job.job_id)
+    removePipelineJob.mutate(
+      { jobId: job.job_id, status: job.status },
+      {
+        onSuccess: () => {
+          toast.success(
+            job.status === 'running' || job.status === 'pending'
+              ? 'Workflow job cancelled and deleted'
+              : 'Workflow job deleted',
+          )
+        },
+        onError: (err) => toast.error(`Delete failed: ${err.message}`),
+        onSettled: () => setRemovingPipelineJobId(null),
+      },
+    )
+  }
+
   return (
-    <div className="space-y-6 max-w-7xl">
+    <div className="mx-auto w-full max-w-7xl space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Cpu className="h-6 w-6 text-primary" />
@@ -106,8 +187,9 @@ export function TrainingPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <Badge variant="outline">{jobs.length} retained jobs</Badge>
+        <Badge variant="outline">{historyEntries.length} loaded runs</Badge>
         <Badge variant="secondary">{pipelineTrainingJobs.length} pipeline runs</Badge>
+        <Badge variant="outline">{jobs.length} direct jobs</Badge>
         <Badge variant="success">{completedJobs.filter((job) => job.status === 'completed').length} completed</Badge>
         {failedJobs.length > 0 && <Badge variant="error">{failedJobs.length} failed</Badge>}
         <span>History is loaded from persisted backend state after refresh and restart.</span>
@@ -151,67 +233,56 @@ export function TrainingPage() {
             </Button>
           )}
 
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold">Pipeline Training Runs</h2>
-              <Badge variant="secondary">{pipelineTrainingJobs.length}</Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Full and custom pipeline runs that include a training stage are tracked here as workflow jobs.
-            </p>
-            {pipelineJobsLoading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-32 w-full rounded-xl" />
-                <Skeleton className="h-32 w-full rounded-xl" />
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Run Browser</h2>
+                <p className="text-sm text-muted-foreground">
+                  Browse direct jobs and pipeline-backed runs from one list, then inspect the selected run on the right.
+                </p>
               </div>
-            ) : pipelineTrainingJobs.length === 0 ? (
-              <div className="text-sm text-muted-foreground py-6 text-center">
-                No pipeline-backed training runs yet
+              {historyMayBeTruncated && (
+                <Badge variant="warning">Newest {HISTORY_FETCH_LIMIT} records loaded per source</Badge>
+              )}
+            </div>
+
+            {jobsLoading || pipelineJobsLoading ? (
+              <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+                <Skeleton className="h-[520px] rounded-xl" />
+                <Skeleton className="h-[520px] rounded-xl" />
               </div>
             ) : (
-              <div className="space-y-3">
-                {pipelineTrainingJobs.map((job) => (
-                  <PipelineJobCard key={job.job_id} job={job} onCancel={handleCancelPipeline} />
-                ))}
+              <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+                <TrainingHistoryList
+                  entries={pagedHistory.items}
+                  selectedKey={selectedEntry?.key ?? null}
+                  onSelect={setSelectedHistoryKey}
+                  filter={activeTab}
+                  onFilterChange={setActiveTab}
+                  counts={historyCounts}
+                  query={historyQuery}
+                  onQueryChange={setHistoryQuery}
+                  page={pagedHistory.page}
+                  totalPages={pagedHistory.totalPages}
+                  totalItems={pagedHistory.totalItems}
+                  startIndex={pagedHistory.startIndex}
+                  endIndex={pagedHistory.endIndex}
+                  onPageChange={setHistoryPage}
+                  isTruncated={historyMayBeTruncated}
+                />
+                <TrainingHistoryDetailPanel
+                  entry={selectedEntry}
+                  onCancelTraining={handleCancel}
+                  onDeleteTraining={handleDelete}
+                  onDeployTraining={handleDeploy}
+                  onCancelPipeline={handleCancelPipeline}
+                  onDeletePipeline={handleDeletePipeline}
+                  removingTrainingJobId={removingJobId}
+                  removingPipelineJobId={removingPipelineJobId}
+                />
               </div>
             )}
           </div>
-
-          {/* Job tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabList>
-              <Tab value="active">Active ({activeJobs.length})</Tab>
-              <Tab value="completed">Completed ({completedJobs.length})</Tab>
-              <Tab value="all">All ({jobs.length})</Tab>
-            </TabList>
-
-            {['active', 'completed', 'all'].map((tabValue) => (
-              <TabPanel key={tabValue} value={tabValue}>
-                {jobsLoading ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-28 w-full rounded-xl" />
-                    <Skeleton className="h-28 w-full rounded-xl" />
-                  </div>
-                ) : filteredJobs.length === 0 ? (
-                  <div className="text-sm text-muted-foreground py-8 text-center">
-                    No {tabValue === 'all' ? '' : tabValue} retained training jobs
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredJobs.map((job) => (
-                      <TrainingJobCard
-                        key={job.job_id}
-                        job={job}
-                        onCancel={handleCancel}
-                        onDelete={handleDelete}
-                        onDeploy={handleDeploy}
-                      />
-                    ))}
-                  </div>
-                )}
-              </TabPanel>
-            ))}
-          </Tabs>
         </div>
 
         {/* Side panel */}

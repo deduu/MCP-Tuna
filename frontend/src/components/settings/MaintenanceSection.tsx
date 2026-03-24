@@ -15,8 +15,8 @@ export function MaintenanceSection() {
     clearAll.mutate(
       { toolName: 'system.clear_all', args: {} },
       {
-        onSuccess: () => toast.success('All data has been cleared successfully.'),
-        onError: (err) => toast.error(`Failed to clear data: ${err.message}`),
+        onSuccess: () => toast.success('Deployments stopped and GPU memory cleared.'),
+        onError: (err) => toast.error(`Failed to reset runtime state: ${err.message}`),
       },
     )
   }
@@ -30,15 +30,15 @@ export function MaintenanceSection() {
             Maintenance
           </CardTitle>
           <CardDescription>
-            Destructive actions that cannot be undone. Proceed with caution.
+            Runtime recovery actions for stuck deployments or GPU memory issues.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between rounded-lg border border-destructive/20 bg-destructive/5 p-4">
             <div className="space-y-1">
-              <p className="text-sm font-medium">Clear All Data</p>
+              <p className="text-sm font-medium">Stop Deployments and Clear GPU</p>
               <p className="text-xs text-muted-foreground">
-                Remove all datasets, training jobs, deployments, and cached files.
+                Stops active deployments and clears GPU memory. Stored datasets and job history are not deleted.
               </p>
             </div>
             <Button
@@ -48,7 +48,7 @@ export function MaintenanceSection() {
               disabled={clearAll.isPending}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              {clearAll.isPending ? 'Clearing...' : 'Clear All'}
+              {clearAll.isPending ? 'Resetting...' : 'Reset Runtime'}
             </Button>
           </div>
         </CardContent>
@@ -58,9 +58,9 @@ export function MaintenanceSection() {
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         onConfirm={handleConfirm}
-        title="Clear All Data"
-        description="This will permanently delete all datasets, training jobs, model deployments, and cached files. This action cannot be undone."
-        confirmText="delete everything"
+        title="Reset Runtime State"
+        description="This will stop active deployments and clear GPU memory for recovery. It does not delete datasets, training jobs, or cached files."
+        confirmText="reset runtime"
       />
     </>
   )

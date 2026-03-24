@@ -19,6 +19,10 @@ export default defineConfig({
     proxy: {
       '/v1': apiTarget,
       '/mcp': mcpTarget,
+      '/gateway-health': {
+        target: mcpTarget,
+        rewrite: () => '/health',
+      },
     },
   },
 })

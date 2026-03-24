@@ -12,9 +12,11 @@ import { TrainingJobDetail } from './TrainingJobDetail'
 interface TrainingJobCardProps {
   job: TrainingJob
   onCancel: (id: string) => void
-  onDelete?: (id: string) => void
+  onDelete?: (job: TrainingJob) => void
   onRerun?: (job: TrainingJob) => void
   onDeploy?: (job: TrainingJob, type: 'mcp' | 'api') => void
+  isDeleting?: boolean
+  defaultExpanded?: boolean
 }
 
 const TECHNIQUE_STYLE: Record<string, { variant: BadgeProps['variant']; label: string }> = {
@@ -32,8 +34,16 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   cancelled: 'outline',
 }
 
-export function TrainingJobCard({ job, onCancel, onDelete, onRerun, onDeploy }: TrainingJobCardProps) {
-  const [expanded, setExpanded] = useState(false)
+export function TrainingJobCard({
+  job,
+  onCancel,
+  onDelete,
+  onRerun,
+  onDeploy,
+  isDeleting = false,
+  defaultExpanded = false,
+}: TrainingJobCardProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const techniqueKey = (job.technique ?? job.trainer_type ?? 'unknown').toLowerCase()
 
   const technique = TECHNIQUE_STYLE[techniqueKey] ?? {
@@ -155,21 +165,23 @@ export function TrainingJobCard({ job, onCancel, onDelete, onRerun, onDeploy }: 
                 variant="outline"
                 size="sm"
                 onClick={() => onCancel(job.job_id)}
+                disabled={isDeleting}
                 className="gap-1 text-xs text-destructive hover:text-destructive"
               >
                 <Square className="h-3.5 w-3.5" />
                 Cancel
               </Button>
             )}
-            {!isActive && onDelete && (
+            {onDelete && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => onDelete(job.job_id)}
+                onClick={() => onDelete(job)}
+                disabled={isDeleting}
                 className="gap-1 text-xs text-destructive hover:text-destructive"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Delete
+                {isDeleting ? 'Removing...' : isActive ? 'Cancel & Delete' : 'Delete'}
               </Button>
             )}
           </div>

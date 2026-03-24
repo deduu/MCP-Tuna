@@ -42,7 +42,7 @@ export function ToolExplorerPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4 max-w-5xl">
+      <div className="mx-auto w-full max-w-5xl space-y-4">
         <Skeleton className="h-9 w-72" />
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -54,7 +54,7 @@ export function ToolExplorerPage() {
   }
 
   return (
-    <div className="space-y-4 max-w-5xl">
+    <div className="mx-auto w-full max-w-5xl space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <span>Browse MCP namespaces.</span>
         {vlmToolCount > 0 && <Badge variant="outline">{vlmToolCount} multimodal tools available</Badge>}

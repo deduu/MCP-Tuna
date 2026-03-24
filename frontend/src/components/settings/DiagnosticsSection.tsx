@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useSetupCheck, useSystemConfig } from '@/api/hooks/useSystemResources'
+import { useSetupCheck, useSystemConfig, useSystemHealth } from '@/api/hooks/useSystemResources'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import type { MCPToolResult, RecommendResult } from '@/api/types'
 import { Stethoscope, ChevronDown, ChevronUp, Play, HardDrive, Sparkles } from 'lucide-react'
@@ -113,6 +113,7 @@ function CheckList({ checks }: { checks: CheckItem[] }) {
 export function DiagnosticsSection() {
   const { data: setup, isLoading: setupLoading } = useSetupCheck()
   const { data: config, isLoading: configLoading } = useSystemConfig()
+  const { data: health, error: healthError, isLoading: healthLoading } = useSystemHealth()
 
   const preflight = useToolExecution()
   const diskPreflight = useToolExecution()
@@ -160,6 +161,25 @@ export function DiagnosticsSection() {
         <CardDescription>Run checks to verify your environment is properly configured</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Live Warnings</p>
+          {healthLoading ? (
+            <p className="text-xs text-muted-foreground">Loading live system warnings...</p>
+          ) : healthError ? (
+            <p className="text-xs text-destructive">{healthError.message}</p>
+          ) : health?.warnings?.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {health.warnings.map((warning) => (
+                <Badge key={warning} variant="warning" title={warning}>
+                  {warning}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">No live system warnings</p>
+          )}
+        </div>
+
         {/* Setup Check - auto-loaded */}
         <div className="space-y-2">
           <p className="text-sm font-medium">Setup Check</p>
