@@ -113,5 +113,11 @@ class HostingMCPServer:
             result = await svc.stop_deployment(deployment_id)
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(name="host.delete_deployment",
+                       description="Delete a deployment record and stop it first if it is still running")
+        async def delete_deployment(deployment_id: str) -> str:
+            result = await svc.delete_deployment(deployment_id)
+            return json.dumps(result, indent=2)
+
     def run(self, transport=None):
         self.mcp.run(transport)

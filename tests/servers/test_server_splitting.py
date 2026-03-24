@@ -162,10 +162,11 @@ class TestHostServer:
         assert "host.deploy_api" in tool_names
         assert "host.list_deployments" in tool_names
         assert "host.stop" in tool_names
+        assert "host.delete_deployment" in tool_names
         assert "host.health" in tool_names
 
     def test_tool_count(self, tool_names):
-        assert len(tool_names) == 7
+        assert len(tool_names) == 8
 
 
 # ---------------------------------------------------------------------------

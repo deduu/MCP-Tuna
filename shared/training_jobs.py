@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from shared.persistence import get_persistence_service
 
@@ -33,6 +33,22 @@ class JobStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+def _normalize_job_status(value: Any) -> Any:
+    if isinstance(value, JobStatus):
+        return value
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.startswith("JobStatus."):
+            normalized = normalized.split(".", 1)[1].lower()
+        try:
+            return JobStatus(normalized)
+        except ValueError:
+            return value
+
+    return value
 
 
 class TrainingProgress(BaseModel):
@@ -79,6 +95,11 @@ class TrainingJob(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     config_summary: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _coerce_status(cls, value: Any) -> Any:
+        return _normalize_job_status(value)
 
 
 # ──────────────────────────────────────────────
@@ -220,15 +241,67 @@ class TrainingJobManager:
         job = self.get_job(job_id)
         if job is None or job.status != JobStatus.RUNNING:
             return False
+
+        task = self._tasks.get(job_id)
         event = self._cancel_events.get(job_id)
-        if event is None:
+        if event is not None:
+            event.set()
+        elif task is None or task.done():
+            # Persisted orphan record: no live worker remains to stop, so mark it cancelled.
+            job.status = JobStatus.CANCELLED
+            job.completed_at = job.completed_at or _now_iso()
+            self._schedule_persist(job)
+            return True
+        else:
             return False
-        event.set()
         self._schedule_persist(job)
         return True
 
     def get_cancel_event(self, job_id: str) -> Optional[threading.Event]:
         return self._cancel_events.get(job_id)
+
+    async def acancel_job(self, job_id: str) -> bool:
+        job = self.get_job(job_id)
+        if job is None:
+            persisted = await self._persistence.get_job(self._namespace, job_id)
+            if persisted is None:
+                return False
+            job = TrainingJob.model_validate(persisted)
+            with self._lock:
+                self._jobs[job_id] = job
+
+        if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+            return False
+
+        event = self._cancel_events.get(job_id)
+        task = self._tasks.get(job_id)
+        if event is not None:
+            event.set()
+            self._schedule_persist(job)
+            return True
+
+        if task is not None and not task.done():
+            return False
+
+        # Persisted orphan record or queued job with no live worker: cancel in place.
+        job.status = JobStatus.CANCELLED
+        job.completed_at = job.completed_at or _now_iso()
+        self._schedule_persist(job)
+        return True
+
+    async def adelete_job(self, job_id: str) -> bool:
+        job = self.get_job(job_id)
+        if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+            return False
+
+        removed = False
+        with self._lock:
+            removed = self._jobs.pop(job_id, None) is not None or removed
+            self._tasks.pop(job_id, None)
+            self._cancel_events.pop(job_id, None)
+
+        persisted_removed = await self._persistence.delete_job(self._namespace, job_id)
+        return removed or persisted_removed
 
     # ── progress update ──
 
@@ -277,7 +350,7 @@ class TrainingJobManager:
         )[:limit]
 
     def _schedule_persist(self, job: TrainingJob) -> None:
-        payload = job.model_dump()
+        payload = job.model_dump(mode="json")
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self._persistence.upsert_job(self._namespace, payload),

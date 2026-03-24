@@ -6,8 +6,23 @@ import argparse
 import logging
 import socket
 import sys
+from pathlib import Path
 
 from shared.version import get_package_version
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+
+
+def _prefer_workspace_sources() -> None:
+    project_root_str = str(PROJECT_ROOT)
+    src_root_str = str(SRC_ROOT)
+    for path in (src_root_str, project_root_str):
+        if path in sys.path:
+            sys.path.remove(path)
+    sys.path.insert(0, project_root_str)
+    sys.path.insert(0, src_root_str)
 
 
 def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
@@ -21,6 +36,8 @@ def server_main(server_cls, name: str, default_port: int = 8000, **init_kwargs):
     """
     if sys.stderr.encoding != "utf-8":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    _prefer_workspace_sources()
 
     from agentsoul.server import HTTPTransport, StdioTransport
     from agentsoul.utils.logger import configure_logging

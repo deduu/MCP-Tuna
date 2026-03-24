@@ -8,6 +8,7 @@ import { deploymentDisplayLabel } from '@/lib/compare-targets'
 import { uploadAsset } from '@/lib/uploads'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useChatStore } from '@/stores/chat'
 import { toast } from 'sonner'
 import { AVAILABLE_CHAT_MODELS } from './chat-model-options'
@@ -16,6 +17,8 @@ export function ChatInput() {
   const [input, setInput] = useState('')
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
+  const [deploymentTemperature, setDeploymentTemperature] = useState('0.7')
+  const [deploymentMaxNewTokens, setDeploymentMaxNewTokens] = useState('512')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
 
@@ -96,6 +99,8 @@ export function ChatInput() {
     void sendChatMessage(payload, {
       source: chatMode,
       model: selectedModel,
+      temperature: chatMode === 'deployment' ? resolveTemperature(deploymentTemperature) : undefined,
+      maxNewTokens: chatMode === 'deployment' ? resolveMaxNewTokens(deploymentMaxNewTokens) : undefined,
       deploymentId: selectedDeploymentId,
       deploymentModality: selectedDeployment?.modality === 'vision-language' ? 'vision-language' : 'text',
     })
@@ -230,6 +235,33 @@ export function ChatInput() {
           )}
         </div>
 
+        {chatMode === 'deployment' && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Temperature</label>
+              <Input
+                type="number"
+                step="0.1"
+                min="0"
+                value={deploymentTemperature}
+                onChange={(event) => setDeploymentTemperature(event.target.value)}
+                disabled={isStreaming || isUploadingImage}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Max New Tokens</label>
+              <Input
+                type="number"
+                step="1"
+                min="1"
+                value={deploymentMaxNewTokens}
+                onChange={(event) => setDeploymentMaxNewTokens(event.target.value)}
+                disabled={isStreaming || isUploadingImage}
+              />
+            </div>
+          </div>
+        )}
+
         {imageBlocks.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {imageBlocks.map((block, index) => (
@@ -340,4 +372,14 @@ export function ChatInput() {
       </div>
     </div>
   )
+}
+
+function resolveTemperature(value: string) {
+  const parsed = Number.parseFloat(value.replace(',', '.'))
+  return Number.isFinite(parsed) ? parsed : 0.7
+}
+
+function resolveMaxNewTokens(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 512
 }

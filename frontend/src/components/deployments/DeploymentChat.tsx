@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { History, ImagePlus, MessageSquare, Send, Trash2, X } from 'lucide-react'
-import { useDeploymentConversation, useDeploymentConversations } from '@/api/hooks/useDeployments'
+import { History, ImagePlus, MessageSquare, Pencil, Send, Trash2, X } from 'lucide-react'
+import {
+  useDeleteConversation,
+  useDeploymentConversation,
+  useDeploymentConversations,
+  useRenameConversation,
+} from '@/api/hooks/useDeployments'
 import type { ConversationMessage, Deployment } from '@/api/types'
 import { mcpCall } from '@/api/client'
 import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
@@ -15,6 +20,7 @@ import { uploadAsset } from '@/lib/uploads'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { MessageBlocks } from '@/components/chat/MessageBlocks'
 import { toast } from 'sonner'
 import { cn, formatDateTime, formatTimeAgo } from '@/lib/utils'
@@ -48,9 +54,15 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [selectedHistoryConversationId, setSelectedHistoryConversationId] = useState<string | null>(null)
   const [isTextStreaming, setIsTextStreaming] = useState(false)
+  const [temperature, setTemperature] = useState('0.7')
+  const [topP, setTopP] = useState('0.95')
+  const [topK, setTopK] = useState('50')
+  const [maxNewTokens, setMaxNewTokens] = useState('512')
   const scrollRef = useRef<HTMLDivElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const textAbortControllerRef = useRef<AbortController | null>(null)
+  const renameConversation = useRenameConversation()
+  const deleteConversation = useDeleteConversation()
   const { data: savedConversations = [] } = useDeploymentConversations(deployment.deployment_id, true)
   const { data: selectedConversation, isFetching: isLoadingConversation } = useDeploymentConversation(
     selectedHistoryConversationId,
@@ -67,6 +79,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
             content: sanitizeChatContentForRequest(buildUserChatContent(message, imageBlocks)),
           },
         ],
+        temperature: resolveTemperature(temperature),
+        top_p: resolveTopP(topP),
+        top_k: resolveTopK(topK),
+        max_new_tokens: resolveMaxNewTokens(maxNewTokens),
         ...(conversationId ? { conversation_id: conversationId } : {}),
       }),
     onSuccess: (result) => {
@@ -160,6 +176,26 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     vlmChatMutation.reset()
   }
 
+  const handleRenameConversation = (conversationId: string, currentTitle?: string | null) => {
+    const nextTitle = window.prompt('Rename conversation', currentTitle?.trim() || '')
+    if (!nextTitle) return
+    renameConversation.mutate({ conversationId, title: nextTitle })
+  }
+
+  const handleDeleteConversation = (targetConversationId: string) => {
+    if (!window.confirm('Delete this conversation and its saved messages?')) {
+      return
+    }
+    const activeConversationId = selectedHistoryConversationId ?? conversationId
+    deleteConversation.mutate(targetConversationId, {
+      onSuccess: () => {
+        if (activeConversationId === targetConversationId) {
+          handleClear()
+        }
+      },
+    })
+  }
+
   const subtitle =
     deployment.type === 'api'
       ? deployment.modality === 'vision-language'
@@ -192,6 +228,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
           deployment_id: deployment.deployment_id,
           message,
           conversation_id: conversationId,
+          temperature: resolveTemperature(temperature),
+          top_p: resolveTopP(topP),
+          top_k: resolveTopK(topK),
+          max_new_tokens: resolveMaxNewTokens(maxNewTokens),
           signal: abortController.signal,
         },
         {
@@ -362,7 +402,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                       key={conversation.conversation_id}
                       type="button"
                       onClick={() => setSelectedHistoryConversationId(conversation.conversation_id)}
-                      disabled={isPending}
+                      disabled={isPending || renameConversation.isPending || deleteConversation.isPending}
                       className={cn(
                         'w-full rounded-lg border px-3 py-2 text-left transition-colors',
                         isSelected
@@ -374,7 +414,31 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                         <span className="truncate text-sm font-medium">
                           {conversation.title?.trim() || conversation.conversation_id}
                         </span>
-                        <Badge variant="outline">{conversation.message_count}</Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge variant="outline">{conversation.message_count}</Badge>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleRenameConversation(conversation.conversation_id, conversation.title)
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                            title="Rename conversation"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleDeleteConversation(conversation.conversation_id)
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-destructive"
+                            title="Delete conversation"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       </div>
                       {conversation.title && (
                         <p className="mt-1 font-mono text-[10px] text-muted-foreground">
@@ -460,6 +524,54 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                 )}
               </div>
 
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Temperature</label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={temperature}
+                    onChange={(event) => setTemperature(event.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Top P</label>
+                  <Input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={topP}
+                    onChange={(event) => setTopP(event.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Top K</label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={topK}
+                    onChange={(event) => setTopK(event.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Max New Tokens</label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={maxNewTokens}
+                    onChange={(event) => setMaxNewTokens(event.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+              </div>
+
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
@@ -478,8 +590,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[11px] text-muted-foreground">
                   {deployment.modality === 'vision-language'
-                    ? 'Enter to send, Shift+Enter for a new line, image button to attach'
-                    : 'Enter to send, Shift+Enter for a new line'}
+                    ? 'Enter to send, Shift+Enter for a new line, image button to attach. Max New Tokens is the reply length cap.'
+                    : 'Enter to send, Shift+Enter for a new line. Max New Tokens is the reply length cap.'}
                 </p>
                 <div className="flex items-center gap-2">
                   {deployment.modality === 'vision-language' && (
@@ -551,4 +663,25 @@ function parseStructuredContent(content: ConversationMessage['content']): ChatCo
   }
 
   return blocks.length > 0 ? blocks : undefined
+}
+
+function resolveTemperature(value: string) {
+  const parsed = Number.parseFloat(value.replace(',', '.'))
+  return Number.isFinite(parsed) ? parsed : 0.7
+}
+
+function resolveTopP(value: string) {
+  const parsed = Number.parseFloat(value.replace(',', '.'))
+  if (!Number.isFinite(parsed)) return 0.95
+  return Math.max(0, Math.min(1, parsed))
+}
+
+function resolveTopK(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50
+}
+
+function resolveMaxNewTokens(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 512
 }

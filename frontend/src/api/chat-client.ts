@@ -14,6 +14,9 @@ const CHAT_URL = '/v1/chat/completions'
 interface ChatRequestOptions {
   model?: string
   temperature?: number
+  maxNewTokens?: number
+  topP?: number
+  topK?: number
   selectedTools?: string[]
   source?: 'agent' | 'deployment'
   deploymentId?: string | null
@@ -80,6 +83,10 @@ export async function sendChatMessage(
               content: sanitizeChatContentForRequest(userContent),
             },
           ],
+          temperature: options.temperature ?? 0.7,
+          top_p: options.topP ?? 0.95,
+          top_k: options.topK ?? 50,
+          max_new_tokens: options.maxNewTokens ?? 512,
           ...(store.deploymentConversationId
             ? { conversation_id: store.deploymentConversationId }
             : {}),
@@ -99,6 +106,10 @@ export async function sendChatMessage(
           deployment_id: options.deploymentId,
           message: userText,
           conversation_id: store.deploymentConversationId,
+          temperature: options.temperature ?? 0.7,
+          top_p: options.topP ?? 0.95,
+          top_k: options.topK ?? 50,
+          max_new_tokens: options.maxNewTokens ?? 512,
           signal: abortController.signal,
         },
         {

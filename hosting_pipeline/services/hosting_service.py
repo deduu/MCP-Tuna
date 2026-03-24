@@ -175,10 +175,20 @@ class HostingService:
 
             @mcp.tool(name="generate",
                       description=f"Generate text with fine-tuned model at {config.model_path}")
-            async def generate(prompt: str, max_new_tokens: int = 512) -> str:
+            async def generate(
+                prompt: str,
+                max_new_tokens: int = 512,
+                temperature: float = 0.7,
+                top_p: float = 0.95,
+                top_k: int = 50,
+            ) -> str:
                 resp = await provider.chat(
                     messages=[{"role": "user", "content": prompt}],
                     max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    do_sample=temperature > 0,
                 )
                 return resp.content or ""
 
@@ -334,10 +344,20 @@ class HostingService:
                 return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             @app.post("/generate")
-            async def generate(prompt: str, max_new_tokens: int = 512):
+            async def generate(
+                prompt: str,
+                max_new_tokens: int = 512,
+                temperature: float = 0.7,
+                top_p: float = 0.95,
+                top_k: int = 50,
+            ):
                 resp = await provider.chat(
                     messages=[{"role": "user", "content": prompt}],
                     max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    do_sample=temperature > 0,
                 )
                 provider_metrics = getattr(provider, "last_metrics", None) or {}
                 usage = _normalize_usage(resp.usage, provider_metrics)
@@ -352,6 +372,9 @@ class HostingService:
             async def generate_stream(payload: Dict[str, Any]):
                 prompt = str(payload.get("prompt") or "")
                 max_new_tokens = int(payload.get("max_new_tokens") or 512)
+                temperature = float(payload.get("temperature", 0.7))
+                top_p = float(payload.get("top_p", 0.95))
+                top_k = int(payload.get("top_k", 50))
 
                 async def event_generator():
                     full_response = ""
@@ -360,6 +383,10 @@ class HostingService:
                         async for chunk in provider.stream(
                             messages=[{"role": "user", "content": prompt}],
                             max_new_tokens=max_new_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            do_sample=temperature > 0,
                         ):
                             chunk_content = getattr(chunk, "content", None)
                             if isinstance(chunk_content, str) and chunk_content:
@@ -477,12 +504,19 @@ class HostingService:
             async def generate_vlm(
                 messages: List[Dict[str, Any]],
                 max_new_tokens: int = 512,
+                temperature: float = 0.7,
+                top_p: float = 0.95,
+                top_k: int = 50,
             ) -> str:
                 result = await inference.run_vlm_inference(
                     messages=messages,
                     model_path=config.model_path,
                     adapter_path=config.adapter_path,
                     max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    do_sample=temperature > 0,
                 )
                 if not result.get("success"):
                     raise RuntimeError(result.get("error", "VLM generation failed"))
@@ -580,6 +614,9 @@ class HostingService:
                     adapter_path=config.adapter_path,
                     max_new_tokens=int(payload.get("max_new_tokens", 512)),
                     temperature=float(payload.get("temperature", 0.7)),
+                    top_p=float(payload.get("top_p", 0.95)),
+                    top_k=int(payload.get("top_k", 50)),
+                    do_sample=float(payload.get("temperature", 0.7)) > 0,
                 )
                 if not result.get("success"):
                     raise HTTPException(
@@ -722,8 +759,8 @@ class HostingService:
                     "type": dep.get("type", "mcp"),
                     "modality": dep.get("modality", "text"),
                     "transport": dep.get("transport", "http"),
-                    "status": dep.get("status", "stopped"),
-                "endpoint": dep.get("endpoint", ""),
+                    "status": "stopped",
+                    "endpoint": dep.get("endpoint", ""),
                     **({"name": _deployment_name(dep)} if _deployment_name(dep) else {}),
                     **({"routes": dep.get("routes", [])} if dep.get("routes") else {}),
                 }
@@ -777,6 +814,18 @@ class HostingService:
         await self._persist_deployment(dep, "stopped")
         return {"success": True, "deployment_id": deployment_id, "status": "stopped"}
 
+    async def delete_deployment(self, deployment_id: str) -> Dict[str, Any]:
+        """Remove deployment history. Stops a live deployment first if needed."""
+        if deployment_id in self._deployments:
+            stopped = await self.stop_deployment(deployment_id)
+            if not stopped.get("success"):
+                return stopped
+
+        deleted = await self._persistence.delete_deployment(deployment_id)
+        if not deleted:
+            return {"success": False, "error": f"Deployment {deployment_id} not found"}
+        return {"success": True, "deployment_id": deployment_id, "status": "deleted"}
+
     async def health_check(self, deployment_id: str) -> Dict[str, Any]:
         """Check health of a running deployment."""
         if deployment_id not in self._deployments:
@@ -789,7 +838,7 @@ class HostingService:
                 "type": persisted.get("type", "mcp"),
                 "modality": persisted.get("modality", "text"),
                 "transport": persisted.get("transport"),
-                "status": persisted.get("status", "stopped"),
+                "status": "stopped",
                 "model_path": persisted.get("model_path"),
                 "adapter_path": persisted.get("adapter_path"),
                 "endpoint": persisted.get("endpoint"),

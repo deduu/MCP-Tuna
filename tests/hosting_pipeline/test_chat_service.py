@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from shared.config import ChatConfig
-from hosting_pipeline.services.chat_service import ChatSession
+from hosting_pipeline.services.chat_service import ChatSession, _resolve_hf_cache_path
 
 
 # ──────────────────────────────────────────────
@@ -15,6 +15,20 @@ from hosting_pipeline.services.chat_service import ChatSession
 
 
 class TestChatConfig:
+    def test_resolve_hf_cache_path_uses_latest_snapshot(self, tmp_path):
+        wrapper = tmp_path / "models--example"
+        snapshots = wrapper / "snapshots"
+        older = snapshots / "old"
+        newer = snapshots / "new"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        (older / "config.json").write_text("{}")
+        (newer / "config.json").write_text("{}")
+
+        resolved = _resolve_hf_cache_path(str(wrapper))
+
+        assert resolved == str(newer)
+
     def test_defaults(self):
         cfg = ChatConfig()
         assert cfg.endpoint is None
@@ -22,6 +36,8 @@ class TestChatConfig:
         assert cfg.adapter_path is None
         assert cfg.max_new_tokens == 512
         assert cfg.temperature == 0.7
+        assert cfg.top_p == 0.95
+        assert cfg.top_k == 50
         assert cfg.system_prompt is None
         assert cfg.streaming is True
         assert cfg.modality == "text"
@@ -40,11 +56,15 @@ class TestChatConfig:
         cfg = ChatConfig(
             max_new_tokens=256,
             temperature=0.3,
+            top_p=0.8,
+            top_k=25,
             system_prompt="You are a helpful assistant.",
             streaming=False,
         )
         assert cfg.max_new_tokens == 256
         assert cfg.temperature == 0.3
+        assert cfg.top_p == 0.8
+        assert cfg.top_k == 25
         assert cfg.system_prompt == "You are a helpful assistant."
         assert cfg.streaming is False
 
@@ -99,6 +119,9 @@ class TestChatSessionAPIMode:
         assert session._history[1]["role"] == "assistant"
         mock_client.post.assert_awaited_once()
         assert mock_client.post.await_args.args[0] == "http://localhost:8001/generate"
+        assert mock_client.post.await_args.kwargs["params"]["temperature"] == 0.7
+        assert mock_client.post.await_args.kwargs["params"]["top_p"] == 0.95
+        assert mock_client.post.await_args.kwargs["params"]["top_k"] == 50
 
     @pytest.mark.asyncio
     async def test_send_message_result_api_mode_returns_metrics(self):
@@ -250,6 +273,41 @@ class TestChatSessionDirectMode:
 
         assert result == "Direct response"
         assert len(session._history) == 2
+        assert mock_provider.chat.await_args.kwargs["temperature"] == 0.7
+        assert mock_provider.chat.await_args.kwargs["top_p"] == 0.95
+        assert mock_provider.chat.await_args.kwargs["top_k"] == 50
+        assert mock_provider.chat.await_args.kwargs["do_sample"] is True
+
+    @pytest.mark.asyncio
+    async def test_send_message_direct_mode_disables_sampling_for_zero_temperature(self):
+        cfg = ChatConfig(model_path="test/model", temperature=0.0)
+        session = ChatSession(cfg)
+        session._mode = "direct"
+        session._initialized = True
+
+        mock_resp = MagicMock()
+        mock_resp.content = "Direct response"
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=mock_resp)
+        session._provider = mock_provider
+
+        await session.send_message("Hi")
+
+        assert mock_provider.chat.await_args.kwargs["temperature"] == 0.0
+        assert mock_provider.chat.await_args.kwargs["do_sample"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_generation_config_overrides_session_defaults(self):
+        cfg = ChatConfig(model_path="test/model")
+        session = ChatSession(cfg)
+
+        session.update_generation_config(max_new_tokens=768, temperature=0.2, top_p=0.85, top_k=30)
+
+        assert session.get_info()["max_new_tokens"] == 768
+        assert session.get_info()["temperature"] == 0.2
+        assert session.get_info()["top_p"] == 0.85
+        assert session.get_info()["top_k"] == 30
 
     @pytest.mark.asyncio
     async def test_stream_message_direct_mode(self):

@@ -85,6 +85,7 @@ export function ToolExecutionPage() {
         <CardContent>
           <ToolParameterForm
             key={toolName}
+            toolName={toolName}
             schema={tool.inputSchema ?? { properties: {} }}
             isLoading={execution.isPending}
             onSubmit={(args) => {
@@ -97,6 +98,7 @@ export function ToolExecutionPage() {
 
       {execution.data && (
         <ToolResultPanel
+          toolName={toolName}
           result={execution.data}
           executionTime={performance.now() - startTimeRef.current}
         />

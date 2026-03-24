@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, Square, RotateCcw, Rocket } from 'lucide-react'
+import { ChevronDown, Square, RotateCcw, Rocket, Trash2 } from 'lucide-react'
 import type { TrainingJob } from '@/api/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
@@ -12,6 +12,7 @@ import { TrainingJobDetail } from './TrainingJobDetail'
 interface TrainingJobCardProps {
   job: TrainingJob
   onCancel: (id: string) => void
+  onDelete?: (id: string) => void
   onRerun?: (job: TrainingJob) => void
   onDeploy?: (job: TrainingJob, type: 'mcp' | 'api') => void
 }
@@ -31,7 +32,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   cancelled: 'outline',
 }
 
-export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJobCardProps) {
+export function TrainingJobCard({ job, onCancel, onDelete, onRerun, onDeploy }: TrainingJobCardProps) {
   const [expanded, setExpanded] = useState(false)
   const techniqueKey = (job.technique ?? job.trainer_type ?? 'unknown').toLowerCase()
 
@@ -158,6 +159,17 @@ export function TrainingJobCard({ job, onCancel, onRerun, onDeploy }: TrainingJo
               >
                 <Square className="h-3.5 w-3.5" />
                 Cancel
+              </Button>
+            )}
+            {!isActive && onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onDelete(job.job_id)}
+                className="gap-1 text-xs text-destructive hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete
               </Button>
             )}
           </div>

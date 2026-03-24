@@ -28,6 +28,53 @@ function sanitizeOutputSegment(value: string): string {
     || ''
 }
 
+function buildTimestampedOutputDir(prefix: string, sourcePath?: string): string {
+  const now = new Date()
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('')
+  const sourceSuffix = sanitizeOutputSegment(sourcePath || '')
+
+  return `./output/${prefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
+}
+
+function resolvePathHint(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+
+  if (Array.isArray(value)) {
+    const paths = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    if (paths.length === 1) return paths[0]
+    if (paths.length > 1) return `multi_${paths.length}_files`
+  }
+
+  return ''
+}
+
+function parseSequentialStages(stages: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(stages)) {
+    return stages.filter((stage): stage is Record<string, unknown> => !!stage && typeof stage === 'object')
+  }
+
+  if (typeof stages !== 'string' || !stages.trim()) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(stages)
+    return Array.isArray(parsed)
+      ? parsed.filter((stage): stage is Record<string, unknown> => !!stage && typeof stage === 'object')
+      : []
+  } catch {
+    return []
+  }
+}
+
 const VLM_MODEL_MARKERS = [
   'qwen2.5-vl',
   'qwen-vl',
@@ -89,20 +136,66 @@ export function buildDefaultOutputDir(
   sequential: boolean,
   sourcePath?: string,
 ): string {
-  const now = new Date()
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    '_',
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-  ].join('')
   const prefix = sequential ? `sequential_${technique}` : technique
-  const sourceSuffix = sanitizeOutputSegment(sourcePath || '')
+  return buildTimestampedOutputDir(prefix, sourcePath)
+}
 
-  return `./output/${prefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
+export function buildPipelineOutputDir(
+  technique: string,
+  sourcePath?: string | string[],
+): string {
+  return buildTimestampedOutputDir(`pipeline_${technique}`, resolvePathHint(sourcePath))
+}
+
+export function buildToolExecutionOutputDir(
+  toolName: string,
+  values: Record<string, unknown>,
+): string | null {
+  const datasetPath = resolvePathHint(values.dataset_path)
+  const filePath = resolvePathHint(values.file_path)
+  const filePaths = resolvePathHint(values.file_paths)
+
+  switch (toolName) {
+    case 'finetune.train':
+    case 'finetune.train_async':
+      return buildDefaultOutputDir('sft', false, datasetPath)
+    case 'finetune.train_dpo':
+    case 'finetune.train_dpo_async':
+      return buildDefaultOutputDir('dpo', false, datasetPath)
+    case 'finetune.train_grpo':
+    case 'finetune.train_grpo_async':
+      return buildDefaultOutputDir('grpo', false, datasetPath)
+    case 'finetune.train_kto':
+    case 'finetune.train_kto_async':
+      return buildDefaultOutputDir('kto', false, datasetPath)
+    case 'finetune.train_curriculum':
+    case 'finetune.train_curriculum_async':
+      return buildDefaultOutputDir('curriculum', false, datasetPath)
+    case 'finetune.train_vlm':
+    case 'finetune.train_vlm_async':
+      return buildDefaultOutputDir('vlm_sft', false, datasetPath)
+    case 'finetune.sequential_train':
+    case 'finetune.sequential_train_async': {
+      const stages = parseSequentialStages(values.stages)
+      const firstStage = stages[0]
+      const technique = typeof firstStage?.technique === 'string'
+        ? firstStage.technique
+        : 'sft'
+      const sequentialSource = resolvePathHint(firstStage?.dataset_path)
+      return buildDefaultOutputDir(technique as TrainingTechnique, true, sequentialSource)
+    }
+    case 'workflow.full_pipeline':
+    case 'workflow.full_pipeline_async': {
+      const technique = typeof values.technique === 'string' ? values.technique : 'sft'
+      return buildPipelineOutputDir(technique, filePaths || filePath)
+    }
+    case 'workflow.curriculum_pipeline': {
+      const technique = typeof values.technique === 'string' ? values.technique : 'sft'
+      return buildPipelineOutputDir(`curriculum_${technique}`, filePaths || filePath)
+    }
+    default:
+      return null
+  }
 }
 
 export function inferModelModality(

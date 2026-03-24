@@ -52,6 +52,16 @@ class _FakeChatSession:
     def get_info(self):
         return {"turns": self._turns, "modality": self.last_config.modality}
 
+    def update_generation_config(self, *, max_new_tokens=None, temperature=None, top_p=None, top_k=None):
+        if max_new_tokens is not None:
+            self.last_config.max_new_tokens = max_new_tokens
+        if temperature is not None:
+            self.last_config.temperature = temperature
+        if top_p is not None:
+            self.last_config.top_p = top_p
+        if top_k is not None:
+            self.last_config.top_k = top_k
+
 
 class _FakeStructuredChatSession(_FakeChatSession):
     async def send_message_result(self, message: str):
@@ -89,10 +99,15 @@ class _FakeStreamingChatSession(_FakeChatSession):
 
 
 class _FakeConversationPersistence:
+    def __init__(self):
+        self.title = "conv-text"
+        self.deleted = False
+
     async def list_conversations(self, deployment_id=None, modality=None, limit=20):
         conversations = [
             {
                 "conversation_id": "conv-text",
+                "title": self.title,
                 "deployment_id": "dep-a",
                 "modality": "text",
                 "message_count": 4,
@@ -117,10 +132,11 @@ class _FakeConversationPersistence:
         return conversations[:limit]
 
     async def get_conversation(self, conversation_id):
-        if conversation_id != "conv-text":
+        if conversation_id != "conv-text" or self.deleted:
             return None
         return {
             "conversation_id": "conv-text",
+            "title": self.title,
             "deployment_id": "dep-a",
             "modality": "text",
             "message_count": 4,
@@ -131,6 +147,18 @@ class _FakeConversationPersistence:
                 {"sequence": 2, "role": "assistant", "content": "world"},
             ],
         }
+
+    async def set_conversation_title(self, conversation_id, title):
+        if conversation_id != "conv-text" or self.deleted:
+            return False
+        self.title = title
+        return True
+
+    async def delete_conversation(self, conversation_id):
+        if conversation_id != "conv-text" or self.deleted:
+            return False
+        self.deleted = True
+        return True
 
 
 @pytest.mark.asyncio
@@ -191,6 +219,43 @@ async def test_host_chat_uses_endpoint_for_api_deployment():
     assert _FakeChatSession.last_provider is None
     assert _FakeChatSession.last_config.endpoint == "http://127.0.0.1:8010"
     assert _FakeChatSession.last_config.model_path is None
+
+
+@pytest.mark.asyncio
+async def test_host_chat_applies_generation_overrides():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway.hoster._deployments["dep-api"] = {
+        "id": "dep-api",
+        "type": "api",
+        "model_path": "base/model",
+        "adapter_path": "./adapter",
+        "transport": "http",
+        "host": "127.0.0.1",
+        "port": 8010,
+    }
+
+    host_chat = gateway.mcp._tools["host.chat"]["func"]
+
+    with patch("hosting_pipeline.services.chat_service.ChatSession", _FakeChatSession):
+        result = json.loads(
+            await host_chat(
+                message="hello",
+                deployment_id="dep-api",
+                temperature=0.2,
+                max_new_tokens=1024,
+                top_p=0.8,
+                top_k=20,
+            )
+        )
+
+    assert result["success"] is True
+    assert _FakeChatSession.last_config.temperature == 0.2
+    assert _FakeChatSession.last_config.max_new_tokens == 1024
+    assert _FakeChatSession.last_config.top_p == 0.8
+    assert _FakeChatSession.last_config.top_k == 20
 
 
 @pytest.mark.asyncio
@@ -383,13 +448,24 @@ async def test_gateway_stream_route_streams_text_chat():
         with TestClient(app) as client:
             response = client.post(
                 "/mcp/chat/stream",
-                json={"deployment_id": "dep-api", "message": "hello"},
+                json={
+                    "deployment_id": "dep-api",
+                    "message": "hello",
+                    "temperature": 0.25,
+                    "top_p": 0.85,
+                    "top_k": 15,
+                    "max_new_tokens": 768,
+                },
             )
 
     assert response.status_code == 200
     assert "event: token" in response.text
     assert '"response": "echo:hello"' in response.text
     assert '"conversation_id":' in response.text
+    assert _FakeStreamingChatSession.last_config.temperature == 0.25
+    assert _FakeStreamingChatSession.last_config.max_new_tokens == 768
+    assert _FakeStreamingChatSession.last_config.top_p == 0.85
+    assert _FakeStreamingChatSession.last_config.top_k == 15
 
 
 @pytest.mark.asyncio
@@ -436,3 +512,23 @@ async def test_host_conversation_tools_expose_persisted_history():
     assert loaded["success"] is True
     assert loaded["conversation_id"] == "conv-text"
     assert loaded["messages"][1]["content"] == "world"
+
+
+@pytest.mark.asyncio
+async def test_host_conversation_tools_can_rename_and_delete():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway._persistence = _FakeConversationPersistence()
+
+    rename_conversation = gateway.mcp._tools["host.rename_conversation"]["func"]
+    delete_conversation = gateway.mcp._tools["host.delete_conversation"]["func"]
+
+    renamed = json.loads(await rename_conversation(conversation_id="conv-text", title="Useful title"))
+    deleted = json.loads(await delete_conversation(conversation_id="conv-text"))
+
+    assert renamed["success"] is True
+    assert renamed["title"] == "Useful title"
+    assert deleted["success"] is True
+    assert deleted["conversation_id"] == "conv-text"

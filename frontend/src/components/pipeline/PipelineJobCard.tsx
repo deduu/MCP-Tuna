@@ -6,6 +6,8 @@ import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { StepIndicator } from './StepIndicator'
+import { LossChart } from '@/components/training/LossChart'
+import { buildLossChartData, isTrainingStageActive, isTrainingStageName } from '@/lib/training-progress'
 import { cn, formatDuration, formatTimeAgo } from '@/lib/utils'
 
 interface PipelineJobCardProps {
@@ -58,6 +60,7 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
   const trainingResult = extractTrainingResult(result)
   const trainingMetrics = isRecord(trainingResult?.metrics) ? trainingResult.metrics : null
   const progress = job.progress
+  const lossChartData = buildLossChartData(progress)
 
   const isActive = job.status === 'running' || job.status === 'pending'
   const statusVariant = STATUS_VARIANT[job.status] ?? 'secondary'
@@ -66,7 +69,8 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
   const totalSteps = job.steps?.length ?? 0
   const rawProgress =
     typeof progress?.percent_complete === 'number' ? progress.percent_complete : undefined
-  const isTrainingStage = job.current_step === 'train' && (progress?.max_steps ?? 0) > 0
+  const isTrainingStage = isTrainingStageActive(job.current_step, progress)
+  const hasTrainingHistory = isTrainingStageName(job.current_step) || lossChartData.length > 0 || !!trainingResult
   const stageLabel =
     currentStepIndex >= 0 && totalSteps > 0 ? `Stage ${currentStepIndex + 1} of ${totalSteps}` : null
   const lastUpdateAgo = formatTimeAgo(progress?.last_updated)
@@ -167,6 +171,8 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
               <Progress value={rawProgress} className="h-2" />
             )}
 
+            <LossChart data={lossChartData} />
+
             <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
               <div className="rounded-md bg-background/40 p-2">
                 <p className="text-muted-foreground">Trainer Step</p>
@@ -214,6 +220,18 @@ export function PipelineJobCard({ job, onCancel }: PipelineJobCardProps) {
                 })()}
               </div>
             )}
+          </div>
+        )}
+
+        {!isTrainingStage && hasTrainingHistory && lossChartData.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-border/60 bg-secondary/20 p-3">
+            <div>
+              <p className="text-sm font-medium">Recorded training loss</p>
+              <p className="text-xs text-muted-foreground">
+                Persisted training and validation loss points from the workflow training step.
+              </p>
+            </div>
+            <LossChart data={lossChartData} />
           </div>
         )}
 

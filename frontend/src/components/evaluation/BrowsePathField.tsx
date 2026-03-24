@@ -298,7 +298,7 @@ export function BrowsePathField({
                   </Button>
                 )}
               </div>
-              <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
+              <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground" title={currentAbsolutePath || undefined}>
                 {currentAbsolutePath
                   ? currentAbsolutePath
                   : activeRootId
@@ -338,7 +338,7 @@ export function BrowsePathField({
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-sm font-medium">{entry.name}</div>
-                            <div className="truncate font-mono text-[11px] text-muted-foreground">
+                            <div className="truncate font-mono text-[11px] text-muted-foreground" title={entry.absolute_path}>
                               {entry.absolute_path}
                             </div>
                           </div>

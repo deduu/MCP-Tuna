@@ -77,6 +77,7 @@ def _load_tokenizer_with_fallback(
             "convert a slow tokenizer to a fast one",
             "sentencepiece",
             "tiktoken",
+            "'nonetype' object has no attribute 'endswith'",
         )
         if not any(marker in message for marker in fallback_markers):
             raise
@@ -366,6 +367,7 @@ class HuggingFaceProvider(BaseLLM):
             "do_sample": kwargs.get("do_sample", True),
             "temperature": kwargs.get("temperature", 0.1),
             "top_p": kwargs.get("top_p", 0.95),
+            "top_k": kwargs.get("top_k", 50),
             "pad_token_id": getattr(gcfg, "pad_token_id", self.tokenizer.pad_token_id),
             "eos_token_id": getattr(gcfg, "eos_token_id", self.tokenizer.eos_token_id),
             "use_cache": True,
@@ -484,6 +486,7 @@ class HuggingFaceProvider(BaseLLM):
             "do_sample": kwargs.get("do_sample", True),
             "temperature": kwargs.get("temperature", 0.1),
             "top_p": kwargs.get("top_p", 0.95),
+            "top_k": kwargs.get("top_k", 50),
             "streamer": streamer,
             "pad_token_id": getattr(gcfg, "pad_token_id", self.tokenizer.pad_token_id),
             "eos_token_id": getattr(gcfg, "eos_token_id", self.tokenizer.eos_token_id),

@@ -75,6 +75,11 @@ class HostServer:
         async def stop_deployment(deployment_id: str) -> str:
             return json.dumps(await svc.stop_deployment(deployment_id), indent=2)
 
+        @self.mcp.tool(name="host.delete_deployment",
+                       description="Delete deployment history and stop it first if needed")
+        async def delete_deployment(deployment_id: str) -> str:
+            return json.dumps(await svc.delete_deployment(deployment_id), indent=2)
+
         @self.mcp.tool(name="host.health",
                        description="Health check on a running deployment")
         async def health(deployment_id: str) -> str:

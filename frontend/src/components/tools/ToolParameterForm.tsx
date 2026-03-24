@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -7,9 +7,11 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
 import { JsonEditorField } from '@/components/shared/JsonEditorField'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
+import { buildToolExecutionOutputDir } from '@/lib/training-capabilities'
 import { toast } from 'sonner'
 
 interface ToolParameterFormProps {
+  toolName: string
   schema: {
     properties: Record<string, JSONSchemaProperty>
     required?: string[]
@@ -74,6 +76,18 @@ function getJsonPlaceholder(name: string, schema: JSONSchemaProperty): string {
   return `Enter ${schema.type} as JSON`
 }
 
+function getDefaultFormValues(schema: ToolParameterFormProps['schema']): Record<string, unknown> {
+  const defaults: Record<string, unknown> = {}
+
+  for (const [name, prop] of Object.entries(schema.properties ?? {})) {
+    if (prop.default !== undefined) {
+      defaults[name] = prop.default
+    }
+  }
+
+  return defaults
+}
+
 function renderLabel(name: string, required: boolean, schema: JSONSchemaProperty) {
   return (
     <label className="flex items-center gap-2 text-sm">
@@ -101,8 +115,7 @@ function ParameterField({
   onChange: (val: unknown) => void
   onJsonValidityChange: (name: string, isValid: boolean) => void
 }) {
-  const defaultLabel = schema.default !== undefined ? `Default: ${JSON.stringify(schema.default)}` : ''
-  const placeholder = typeof schema.default === 'string' ? schema.default : defaultLabel
+  const stringDefault = typeof schema.default === 'string' ? schema.default : undefined
   const selectOptions = getSelectOptions(name, schema)
   const normalizedName = name.toLowerCase()
 
@@ -155,7 +168,7 @@ function ParameterField({
         <ModelPathField
           value={typeof value === 'string' ? value : ''}
           onChange={(nextValue) => onChange(nextValue || undefined)}
-          placeholder={placeholder || 'meta-llama/Llama-3.2-3B-Instruct'}
+          placeholder={stringDefault || 'meta-llama/Llama-3.2-3B-Instruct'}
         />
       </div>
     )
@@ -171,7 +184,7 @@ function ParameterField({
         <ModelPathField
           value={typeof value === 'string' ? value : ''}
           onChange={(nextValue) => onChange(nextValue || undefined)}
-          placeholder={placeholder || '/path/to/adapter'}
+          placeholder={stringDefault || '/path/to/adapter'}
           validationPurpose="adapter"
         />
       </div>
@@ -194,7 +207,7 @@ function ParameterField({
         <BrowsePathField
           value={typeof value === 'string' ? value : ''}
           onChange={(nextValue) => onChange(nextValue || undefined)}
-          placeholder={placeholder || `/${normalizedName}`}
+          placeholder={stringDefault || `/${normalizedName}`}
           helperText={helperText}
           allowFiles={!isDirectoryOnly}
           allowDirectories={true}
@@ -202,7 +215,7 @@ function ParameterField({
             ? ['output', 'workspace', 'uploads', 'hf_cache']
             : ['workspace', 'output', 'uploads', 'hf_cache']}
           directorySelectionMode={isOutputPath ? 'append-filename' : 'replace'}
-          defaultFileName={isOutputPath ? inferDefaultFileName(value, placeholder) : undefined}
+          defaultFileName={isOutputPath ? inferDefaultFileName(value, stringDefault ?? '') : undefined}
         />
       </div>
     )
@@ -222,7 +235,7 @@ function ParameterField({
           ].filter(Boolean).join(' ')}
           initialValue={typeof value === 'string' ? null : (value as never)}
           defaultValue={schema.type === 'array' ? [] : {}}
-          placeholder={placeholder || getJsonPlaceholder(name, schema)}
+          placeholder={stringDefault || getJsonPlaceholder(name, schema)}
           allowEmpty={!required}
           onChange={({ parsed, isValid }) => {
             onJsonValidityChange(name, isValid)
@@ -257,22 +270,45 @@ function ParameterField({
           else if (schema.type === 'integer') onChange(v === '' ? undefined : parseInt(v, 10))
           else onChange(v || undefined)
         }}
-        placeholder={placeholder}
         step={schema.type === 'integer' ? '1' : 'any'}
       />
     </div>
   )
 }
 
-export function ToolParameterForm({ schema, onSubmit, isLoading }: ToolParameterFormProps) {
-  const [values, setValues] = useState<Record<string, unknown>>({})
+export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: ToolParameterFormProps) {
+  const [values, setValues] = useState<Record<string, unknown>>(() => getDefaultFormValues(schema))
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [jsonValidity, setJsonValidity] = useState<Record<string, boolean>>({})
+  const autoOutputDirRef = useRef<string | null>(null)
 
   const required = new Set(schema.required ?? [])
   const entries = Object.entries(schema.properties ?? {})
   const requiredFields = entries.filter(([k]) => required.has(k))
   const optionalFields = entries.filter(([k]) => !required.has(k))
+
+  useEffect(() => {
+    if (!schema.properties.output_dir) return
+
+    const autoOutputDir = buildToolExecutionOutputDir(toolName, values)
+    if (!autoOutputDir) return
+
+    setValues((prev) => {
+      const currentOutputDir = typeof prev.output_dir === 'string' ? prev.output_dir.trim() : ''
+      const lastAutoOutputDir = autoOutputDirRef.current?.trim() ?? ''
+      const shouldReplace = !currentOutputDir || currentOutputDir === lastAutoOutputDir
+
+      if (!shouldReplace || currentOutputDir === autoOutputDir) {
+        return prev
+      }
+
+      autoOutputDirRef.current = autoOutputDir
+      return {
+        ...prev,
+        output_dir: autoOutputDir,
+      }
+    })
+  }, [schema.properties, toolName, values])
 
   const handleChange = useCallback((name: string, val: unknown) => {
     setValues((prev) => {

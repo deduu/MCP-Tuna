@@ -120,6 +120,7 @@ class PipelineService:
             }
 
             results = await pipeline.run(file_name, [page_data])
+            page_errors = list(getattr(pipeline, "last_page_errors", []))
 
             # Convert to dicts
             data_dicts = [asdict(dp) for dp in results]
@@ -131,6 +132,7 @@ class PipelineService:
                 "page_index": page_index,
                 "data_points": data_dicts,
                 "count": len(data_dicts),
+                "page_errors": page_errors,
             }
 
         except Exception as e:
@@ -189,6 +191,7 @@ class PipelineService:
 
             # Process all pages
             results = await pipeline.run(file_name, pages)
+            page_errors = list(getattr(pipeline, "last_page_errors", []))
 
             # Convert to dicts
             data_dicts = [asdict(dp) for dp in results]
@@ -198,6 +201,8 @@ class PipelineService:
                 "total_pages_processed": len(pages),
                 "total_data_points": len(data_dicts),
                 "avg_per_page": len(data_dicts) / len(pages) if pages else 0,
+                "pages_with_errors": len(page_errors),
+                "successful_pages": max(len(pages) - len(page_errors), 0),
             }
 
             return {
@@ -207,6 +212,7 @@ class PipelineService:
                 "file_path": file_path,
                 "data_points": data_dicts,
                 "stats": stats,
+                "page_errors": page_errors,
             }
 
         except Exception as e:

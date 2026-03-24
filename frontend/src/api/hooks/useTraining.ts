@@ -20,9 +20,14 @@ function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): Train
   const technique = typeof job.technique === 'string'
     ? job.technique
     : trainerType
+  const rawStatus = typeof job.status === 'string' ? job.status : ''
+  const status = rawStatus.startsWith('JobStatus.')
+    ? rawStatus.slice('JobStatus.'.length).toLowerCase()
+    : rawStatus
 
   return {
     ...job,
+    status: status as TrainingJob['status'],
     trainer_type: trainerType,
     technique,
     dataset_path: typeof job.dataset_path === 'string' ? job.dataset_path : undefined,
@@ -198,6 +203,17 @@ export function useCancelTraining() {
     mutationFn: (jobId: string) => mcpCall('finetune.cancel', { job_id: jobId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
+    },
+  })
+}
+
+export function useDeleteTrainingJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => mcpCall('finetune.delete_job', { job_id: jobId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
+      qc.invalidateQueries({ queryKey: ['system', 'health'] })
     },
   })
 }

@@ -81,6 +81,7 @@ class InferenceService:
         max_new_tokens: int = 512,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        top_k: int = 50,
         do_sample: bool = True,
     ) -> Dict[str, Any]:
         """Run inference on a list of prompts."""
@@ -136,6 +137,7 @@ class InferenceService:
                         max_new_tokens=max_new_tokens,
                         temperature=temperature,
                         top_p=top_p,
+                        top_k=top_k,
                         do_sample=do_sample,
                         pad_token_id=tokenizer.eos_token_id,
                     )
@@ -227,6 +229,7 @@ class InferenceService:
         max_new_tokens: int = 512,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        top_k: int = 50,
         do_sample: bool = True,
     ) -> Dict[str, Any]:
         """Run multimodal inference on a structured chat message payload."""
@@ -259,6 +262,7 @@ class InferenceService:
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
+                    top_k=top_k,
                     do_sample=do_sample,
                     pad_token_id=getattr(get_processor_tokenizer(processor), "pad_token_id", None),
                 )

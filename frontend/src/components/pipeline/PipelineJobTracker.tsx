@@ -1,12 +1,18 @@
+import { useMemo } from 'react'
 import { usePipelineJobs, useCancelPipeline } from '@/api/hooks/usePipeline'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { includesTrainingStage } from '@/lib/training-progress'
 import { PipelineJobCard } from './PipelineJobCard'
 import { toast } from 'sonner'
 
 export function PipelineJobTracker() {
   const { data: jobs, isLoading, error } = usePipelineJobs()
   const cancel = useCancelPipeline()
+  const visibleJobs = useMemo(
+    () => (jobs ?? []).filter((job) => !includesTrainingStage(job.steps)),
+    [jobs],
+  )
 
   function handleCancel(jobId: string) {
     cancel.mutate(jobId, {
@@ -19,7 +25,7 @@ export function PipelineJobTracker() {
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <h2 className="text-lg font-semibold">Pipeline Jobs</h2>
-        {jobs && <Badge variant="secondary">{jobs.length}</Badge>}
+        <Badge variant="secondary">{visibleJobs.length}</Badge>
       </div>
 
       {isLoading && (
@@ -39,16 +45,15 @@ export function PipelineJobTracker() {
         </div>
       )}
 
-      {!isLoading && !error && (!jobs || jobs.length === 0) && (
+      {!isLoading && !error && visibleJobs.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">
-          No pipeline jobs yet. Start a full or custom pipeline to monitor it here.
+          No non-training pipeline jobs here. Pipeline runs with a training stage are shown on the Training page.
         </p>
       )}
 
-      {jobs &&
-        jobs.map((job) => (
-          <PipelineJobCard key={job.job_id} job={job} onCancel={handleCancel} />
-        ))}
+      {visibleJobs.map((job) => (
+        <PipelineJobCard key={job.job_id} job={job} onCancel={handleCancel} />
+      ))}
     </div>
   )
 }

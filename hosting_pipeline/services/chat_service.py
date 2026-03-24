@@ -3,10 +3,27 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from shared.config import ChatConfig
 from shared.multimodal_models import extract_text_from_content, normalize_content_blocks
+
+
+def _resolve_hf_cache_path(model_path: str | None) -> str | None:
+    if not model_path:
+        return model_path
+    path = Path(model_path)
+    if not path.is_dir():
+        return model_path
+    snapshots = path / "snapshots"
+    if not snapshots.is_dir() or (path / "config.json").exists():
+        return model_path
+    snapshot_dirs = [item for item in snapshots.iterdir() if item.is_dir()]
+    if not snapshot_dirs:
+        return model_path
+    latest = max(snapshot_dirs, key=lambda item: item.stat().st_mtime)
+    return str(latest)
 
 
 class ChatSession:
@@ -59,6 +76,7 @@ class ChatSession:
 
     async def _init_direct(self) -> Dict[str, Any]:
         self._mode = "direct"
+        resolved_model_path = _resolve_hf_cache_path(self._config.model_path)
         if self._config.modality == "vision-language":
             if self._inference_service is None:
                 from finetuning_pipeline.services.inference_service import InferenceService
@@ -68,7 +86,7 @@ class ChatSession:
             from agentsoul.providers.hf import HuggingFaceProvider
 
             self._provider = HuggingFaceProvider(
-                model_path=self._config.model_path,
+                model_path=resolved_model_path or self._config.model_path,
                 lora_adapter_path=self._config.adapter_path,
             )
 
@@ -169,7 +187,13 @@ class ChatSession:
         start_time = time.perf_counter()
         resp = await self._http_client.post(
             f"{self._config.endpoint}{self._config.api_path or '/generate'}",
-            params={"prompt": prompt, "max_new_tokens": self._config.max_new_tokens},
+            params={
+                "prompt": prompt,
+                "max_new_tokens": self._config.max_new_tokens,
+                "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+                "top_k": self._config.top_k,
+            },
         )
         data = resp.json()
         latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
@@ -190,6 +214,10 @@ class ChatSession:
         resp = await self._provider.chat(
             messages=list(self._history),
             max_new_tokens=self._config.max_new_tokens,
+            temperature=self._config.temperature,
+            top_p=self._config.top_p,
+            top_k=self._config.top_k,
+            do_sample=self._config.temperature > 0,
         )
         provider_metrics = getattr(self._provider, "last_metrics", None) or {}
         usage = self._normalize_usage(resp.usage, provider_metrics)
@@ -209,6 +237,8 @@ class ChatSession:
                 "messages": list(self._history),
                 "max_new_tokens": self._config.max_new_tokens,
                 "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+                "top_k": self._config.top_k,
             },
         )
         data = resp.json()
@@ -237,6 +267,9 @@ class ChatSession:
             adapter_path=self._config.adapter_path,
             max_new_tokens=self._config.max_new_tokens,
             temperature=self._config.temperature,
+            top_p=self._config.top_p,
+            top_k=self._config.top_k,
+            do_sample=self._config.temperature > 0,
         )
         if not result.get("success"):
             raise RuntimeError(result.get("error", "VLM generation failed"))
@@ -271,6 +304,8 @@ class ChatSession:
                     "prompt": prompt,
                     "max_new_tokens": self._config.max_new_tokens,
                     "temperature": self._config.temperature,
+                    "top_p": self._config.top_p,
+                    "top_k": self._config.top_k,
                 },
             ) as response:
                 content_type = response.headers.get("content-type", "").lower()
@@ -332,6 +367,10 @@ class ChatSession:
         async for chunk in self._provider.stream(
             messages=list(self._history),
             max_new_tokens=self._config.max_new_tokens,
+            temperature=self._config.temperature,
+            top_p=self._config.top_p,
+            top_k=self._config.top_k,
+            do_sample=self._config.temperature > 0,
         ):
             content = chunk if isinstance(chunk, str) else getattr(chunk, "content", None)
             if isinstance(content, str) and content:
@@ -438,6 +477,24 @@ class ChatSession:
             self._history = []
         self._last_result = None
 
+    def update_generation_config(
+        self,
+        *,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+    ) -> None:
+        """Apply per-request generation overrides without resetting history."""
+        if max_new_tokens is not None:
+            self._config.max_new_tokens = max_new_tokens
+        if temperature is not None:
+            self._config.temperature = temperature
+        if top_p is not None:
+            self._config.top_p = top_p
+        if top_k is not None:
+            self._config.top_k = top_k
+
     def restore_history(self, messages: List[Dict[str, Any]]) -> None:
         """Restore a previously persisted conversation history."""
         if self._config.system_prompt:
@@ -465,6 +522,8 @@ class ChatSession:
             "turns": user_turns,
             "max_new_tokens": self._config.max_new_tokens,
             "temperature": self._config.temperature,
+            "top_p": self._config.top_p,
+            "top_k": self._config.top_k,
             "streaming": self._config.streaming,
             "modality": self._config.modality,
         }

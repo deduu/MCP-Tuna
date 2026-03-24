@@ -30,6 +30,7 @@ const STEP_FIELD_CONFIG: Partial<Record<string, StepFieldConfig[]>> = {
     { key: 'weight_decay', label: 'weight_decay', type: 'number', defaultValue: 0 },
     { key: 'lora_r', label: 'lora_r', type: 'integer', defaultValue: 8 },
     { key: 'lora_alpha', label: 'lora_alpha', type: 'integer', defaultValue: 16 },
+    { key: 'lora_dropout', label: 'lora_dropout', type: 'number', defaultValue: 0.05 },
     {
       key: 'completion_only_loss',
       label: 'completion_only_loss',

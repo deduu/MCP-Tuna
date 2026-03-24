@@ -215,6 +215,9 @@ class TunaGateway:
         adapter_path: Optional[str] = None,
         conversation_id: Optional[str] = None,
         max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        top_k: int = 50,
         system_prompt: Optional[str] = None,
         prefer_runtime_metrics: bool = False,
     ) -> Dict[str, Any]:
@@ -229,6 +232,13 @@ class TunaGateway:
                     "error": "Conversation is multimodal. Use host.chat_vlm for this conversation.",
                     "conversation_id": cid,
                 }
+            if hasattr(session, "update_generation_config"):
+                session.update_generation_config(
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
             return {
                 "success": True,
                 "conversation_id": cid,
@@ -289,6 +299,9 @@ class TunaGateway:
             model_path=resolved_model_path,
             adapter_path=resolved_adapter_path,
             max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
             system_prompt=system_prompt,
             modality=modality,
             api_path=resolved_api_path,
@@ -337,6 +350,9 @@ class TunaGateway:
                 adapter_path=payload.get("adapter_path"),
                 conversation_id=payload.get("conversation_id"),
                 max_new_tokens=int(payload.get("max_new_tokens") or 512),
+                temperature=float(payload.get("temperature", 0.7)),
+                top_p=float(payload.get("top_p", 0.95)),
+                top_k=int(payload.get("top_k", 50)),
                 system_prompt=payload.get("system_prompt"),
                 prefer_runtime_metrics=bool(payload.get("prefer_runtime_metrics", False)),
             )
@@ -955,6 +971,7 @@ class TunaGateway:
                 use_lora=params.get("use_lora", True),
                 lora_r=params.get("lora_r", 8),
                 lora_alpha=params.get("lora_alpha", 16),
+                lora_dropout=params.get("lora_dropout", 0.05),
                 completion_only_loss=params.get("completion_only_loss", True),
                 early_stopping_patience=params.get("early_stopping_patience"),
                 eval_file_path=params.get("eval_file_path"),
@@ -2220,6 +2237,7 @@ class TunaGateway:
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
+            lora_dropout: float = 0.05,
             completion_only_loss: bool = True,
             early_stopping_patience: Optional[int] = None,
             eval_file_path: Optional[str] = None,
@@ -2250,6 +2268,7 @@ class TunaGateway:
                 use_lora=use_lora,
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
                 completion_only_loss=completion_only_loss,
                 early_stopping_patience=early_stopping_patience,
                 eval_file_path=eval_file_path,
@@ -2607,6 +2626,7 @@ class TunaGateway:
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
+            lora_dropout: float = 0.05,
             completion_only_loss: bool = True,
             early_stopping_patience: Optional[int] = None,
             eval_file_path: Optional[str] = None,
@@ -2637,6 +2657,7 @@ class TunaGateway:
                     "num_epochs": num_epochs, "lora_r": lora_r,
                     "batch_size": per_device_train_batch_size,
                     "learning_rate": learning_rate,
+                    "lora_dropout": lora_dropout,
                     "load_in_4bit": load_in_4bit,
                 },
             )
@@ -2651,6 +2672,7 @@ class TunaGateway:
                     use_lora=use_lora,
                     lora_r=lora_r,
                     lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
                     completion_only_loss=completion_only_loss,
                     early_stopping_patience=early_stopping_patience,
                     eval_file_path=eval_file_path,
@@ -3061,7 +3083,7 @@ class TunaGateway:
             ),
         )
         async def cancel_job(job_id: str) -> str:
-            success = self.job_manager.cancel_job(job_id)
+            success = await self.job_manager.acancel_job(job_id)
             if not success:
                 return json.dumps({
                     "success": False,
@@ -3098,7 +3120,7 @@ class TunaGateway:
             description="Cancel a running training job by job_id.",
         )
         async def cancel(job_id: str) -> str:
-            success = self.job_manager.cancel_job(job_id)
+            success = await self.job_manager.acancel_job(job_id)
             if not success:
                 return json.dumps({
                     "success": False,
@@ -3110,6 +3132,26 @@ class TunaGateway:
                 "message": "Cancellation requested.",
             }, indent=2)
 
+        @self.mcp.tool(
+            name="finetune.delete_job",
+            description=(
+                "Delete a finished training job record by job_id. "
+                "Active jobs must be cancelled first."
+            ),
+        )
+        async def delete_job(job_id: str) -> str:
+            success = await self.job_manager.adelete_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or still active: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Job record deleted.",
+            }, indent=2)
+
     # -- Test --
     def _register_test_tools(self):
         @self.mcp.tool(name="test.inference",
@@ -3118,10 +3160,18 @@ class TunaGateway:
             prompts: List[str], model_path: str,
             adapter_path: Optional[str] = None,
             max_new_tokens: int = 512,
+            temperature: float = 0.7,
+            top_p: float = 0.9,
+            top_k: int = 50,
         ) -> str:
             result = await self.finetuner.run_inference(
                 prompts=prompts, model_path=model_path,
-                adapter_path=adapter_path, max_new_tokens=max_new_tokens,
+                adapter_path=adapter_path,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                do_sample=temperature > 0,
             )
             return json.dumps(result, indent=2)
 
@@ -3149,12 +3199,16 @@ class TunaGateway:
             model_path: str,
             adapter_path: Optional[str] = None,
             max_new_tokens: int = 512,
+            top_p: float = 0.9,
+            top_k: int = 50,
         ) -> str:
             result = await self.finetuner.run_vlm_inference(
                 messages=messages,
                 model_path=model_path,
                 adapter_path=adapter_path,
                 max_new_tokens=max_new_tokens,
+                top_p=top_p,
+                top_k=top_k,
             )
             return json.dumps(result, indent=2)
 
@@ -3372,6 +3426,13 @@ class TunaGateway:
             return json.dumps(await self.hoster.stop_deployment(deployment_id), indent=2)
 
         @self.mcp.tool(
+            name="host.delete_deployment",
+            description="Delete a deployment record. Stops the deployment first if it is still running.",
+        )
+        async def delete_deployment(deployment_id: str) -> str:
+            return json.dumps(await self.hoster.delete_deployment(deployment_id), indent=2)
+
+        @self.mcp.tool(
             name="host.health",
             description="Health check on a running deployment. Returns status, uptime, endpoint.",
         )
@@ -3398,6 +3459,9 @@ class TunaGateway:
             adapter_path: Optional[str] = None,
             conversation_id: Optional[str] = None,
             max_new_tokens: int = 512,
+            temperature: float = 0.7,
+            top_p: float = 0.95,
+            top_k: int = 50,
             system_prompt: Optional[str] = None,
             prefer_runtime_metrics: bool = False,
         ) -> str:
@@ -3408,6 +3472,9 @@ class TunaGateway:
                 adapter_path=adapter_path,
                 conversation_id=conversation_id,
                 max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
                 system_prompt=system_prompt,
                 prefer_runtime_metrics=prefer_runtime_metrics,
             )
@@ -3461,6 +3528,9 @@ class TunaGateway:
             adapter_path: Optional[str] = None,
             conversation_id: Optional[str] = None,
             max_new_tokens: int = 512,
+            temperature: float = 0.7,
+            top_p: float = 0.95,
+            top_k: int = 50,
             system_prompt: Optional[str] = None,
             prefer_runtime_metrics: bool = False,
         ) -> str:
@@ -3488,6 +3558,13 @@ class TunaGateway:
                             "conversation_id": cid,
                         },
                         indent=2,
+                    )
+                if hasattr(session, "update_generation_config"):
+                    session.update_generation_config(
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
                     )
             else:
                 provider = None
@@ -3553,6 +3630,9 @@ class TunaGateway:
                     model_path=resolved_model_path,
                     adapter_path=resolved_adapter_path,
                     max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
                     system_prompt=system_prompt,
                     modality="vision-language",
                     api_path=resolved_api_path,
@@ -3647,6 +3727,45 @@ class TunaGateway:
                 )
             return json.dumps({"success": True, **conversation}, indent=2)
 
+        @self.mcp.tool(
+            name="host.rename_conversation",
+            description="Rename a persisted deployment chat conversation.",
+        )
+        async def rename_host_conversation(conversation_id: str, title: str) -> str:
+            normalized = " ".join(title.split()).strip()
+            if not normalized:
+                return json.dumps(
+                    {"success": False, "error": "title must be a non-empty string"},
+                    indent=2,
+                )
+            success = await self._persistence.set_conversation_title(conversation_id, normalized)
+            if not success:
+                return json.dumps(
+                    {"success": False, "error": f"Conversation not found: {conversation_id}"},
+                    indent=2,
+                )
+            return json.dumps(
+                {"success": True, "conversation_id": conversation_id, "title": normalized},
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="host.delete_conversation",
+            description="Delete a persisted deployment chat conversation and its stored messages.",
+        )
+        async def delete_host_conversation(conversation_id: str) -> str:
+            success = await self._persistence.delete_conversation(conversation_id)
+            if not success:
+                return json.dumps(
+                    {"success": False, "error": f"Conversation not found: {conversation_id}"},
+                    indent=2,
+                )
+            self._chat_sessions.pop(conversation_id, None)
+            return json.dumps(
+                {"success": True, "conversation_id": conversation_id},
+                indent=2,
+            )
+
     # -- Workflow --
     def _register_workflow_tools(self):
         class WorkflowExecutionError(RuntimeError):
@@ -3711,6 +3830,7 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
+            push_to_hub: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
             quantization: Optional[str] = None,
@@ -3725,6 +3845,7 @@ class TunaGateway:
                 base_model=base_model,
                 num_epochs=num_epochs,
                 use_lora=use_lora,
+                push_to_hub=push_to_hub,
                 deploy=deploy,
                 deploy_port=deploy_port,
                 quantization=quantization,
@@ -3971,6 +4092,7 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
+            push_to_hub: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
             quantization: Optional[str] = None,
@@ -3987,6 +4109,7 @@ class TunaGateway:
                     "technique": technique,
                     "file_count": len(resolved_paths),
                     "use_lora": use_lora,
+                    "push_to_hub": push_to_hub,
                     "deploy": deploy,
                     "quantization": quantization,
                 },
@@ -4007,6 +4130,7 @@ class TunaGateway:
                     base_model=base_model,
                     num_epochs=num_epochs,
                     use_lora=use_lora,
+                    push_to_hub=push_to_hub,
                     deploy=deploy,
                     deploy_port=deploy_port,
                     quantization=quantization,

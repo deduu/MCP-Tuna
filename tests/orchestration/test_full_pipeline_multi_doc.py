@@ -201,6 +201,38 @@ async def test_generate_stage_emits_heartbeat_updates_for_long_running_work():
 
 
 @pytest.mark.asyncio
+async def test_generate_and_evaluate_surfaces_page_failure_when_no_rows_are_generated():
+    generator = AsyncMock()
+    generator.generate_from_document = AsyncMock(
+        return_value={
+            "success": True,
+            "data_points": [],
+            "page_errors": [
+                {"page": 1, "page_index": 0, "error": "Invalid JSON returned: not-json"},
+            ],
+        }
+    )
+
+    orch = _make_orchestrator(generator=generator)
+    result = await orch.generate_and_evaluate(file_path="/docs/a.md")
+
+    assert result["success"] is False
+    assert result["error"] == (
+        "No data points generated from provided files. "
+        "First page failure in a.md page 1: Invalid JSON returned: not-json"
+    )
+    assert result["generation_errors"] == [
+        {
+            "file_path": "/docs/a.md",
+            "file_name": "a.md",
+            "page": 1,
+            "page_index": 0,
+            "error": "Invalid JSON returned: not-json",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_full_pipeline_returns_failure_when_training_fails():
     generator = AsyncMock()
     generator.generate_from_document = AsyncMock(
@@ -292,3 +324,49 @@ async def test_full_pipeline_deploys_direct_model_when_lora_disabled():
     config = hoster.deploy_as_mcp.await_args.args[0]
     assert config.model_path == "/out/model"
     assert config.adapter_path is None
+
+
+@pytest.mark.asyncio
+async def test_full_pipeline_passes_push_to_hub_to_training():
+    generator = AsyncMock()
+    generator.generate_from_document = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}]}
+    )
+    generator.export_dataset = AsyncMock(return_value={"success": True})
+    cleaner = AsyncMock()
+    cleaner.clean_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}], "cleaned_count": 1}
+    )
+    normalizer = AsyncMock()
+    normalizer.normalize_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}], "count": 1}
+    )
+    evaluator = AsyncMock()
+    evaluator.evaluate_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1", "weighted_score": 0.9}], "count": 1}
+    )
+    evaluator.filter_by_quality = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1", "weighted_score": 0.9}], "filtered_count": 1}
+    )
+    evaluator.analyze_statistics = AsyncMock(return_value={"success": True, "statistics": {}})
+    finetuner = AsyncMock()
+    finetuner.load_dataset_from_file = AsyncMock(return_value={"success": True, "dataset_object": [{"prompt": "q1", "response": "a1"}]})
+    finetuner.train_model = AsyncMock(return_value={"success": True, "model_path": "/out/model"})
+    finetuner.run_inference = AsyncMock(return_value={"success": True, "outputs": ["ok"]})
+
+    orch = _make_orchestrator(
+        generator=generator,
+        cleaner=cleaner,
+        normalizer=normalizer,
+        evaluator=evaluator,
+        finetuner=finetuner,
+    )
+    result = await orch.full_pipeline(
+        file_path="/docs/a.md",
+        output_dir="/out",
+        push_to_hub="my-org/my-model",
+    )
+
+    assert result["success"] is True
+    train_kwargs = finetuner.train_model.await_args.kwargs
+    assert train_kwargs["push_to_hub"] == "my-org/my-model"

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { buildDatasetOutputPath } from '@/lib/dataset-output'
 import { buildDefaultOutputDir } from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
@@ -51,6 +52,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
   const [adapterPath, setAdapterPath] = useState('')
   const [technique, setTechnique] = useState<(typeof TECHNIQUES)[number]>('sft')
   const [useLora, setUseLora] = useState(true)
+  const [pushToHub, setPushToHub] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [stepConfig, setStepConfig] = useState<Record<string, Record<string, unknown>>>({})
   const [stepConfigValid, setStepConfigValid] = useState(true)
@@ -171,6 +173,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
           ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
           ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
           use_lora: effectiveTrainUseLora,
+          ...(pushToHub.trim() ? { push_to_hub: pushToHub.trim() } : {}),
         })
       } else {
         addStep('save', 'dataset.save', {
@@ -184,6 +187,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
           ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
           ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
           use_lora: effectiveTrainUseLora,
+          ...(pushToHub.trim() ? { push_to_hub: pushToHub.trim() } : {}),
         })
       }
     }
@@ -343,15 +347,31 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       )}
 
       {hasTrain && (
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <input
-            type="checkbox"
-            checked={useLora}
-            onChange={(e) => setUseLora(e.target.checked)}
-            className="h-4 w-4 rounded border-input bg-transparent"
-          />
-          Train with LoRA adapter
-        </label>
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={useLora}
+              onChange={(e) => setUseLora(e.target.checked)}
+              className="h-4 w-4 rounded border-input bg-transparent"
+            />
+            Train with LoRA adapter
+          </label>
+          {!isVlmTechnique && (
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1 block">Push To Hub Repo</label>
+              <Input
+                value={pushToHub}
+                onChange={(e) => setPushToHub(e.target.value)}
+                disabled={isPending}
+                placeholder="your-org/your-model-name"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Optional. Push the trained model or adapter to this Hugging Face Hub repo after training.
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       <div>

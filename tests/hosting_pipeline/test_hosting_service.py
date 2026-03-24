@@ -23,11 +23,52 @@ def _make_mock_provider():
     return provider
 
 
+class _FakePersistence:
+    def __init__(self):
+        self.deleted_ids: list[str] = []
+        self.deployments: dict[str, dict] = {}
+
+    async def upsert_deployment(self, deployment: dict) -> bool:
+        deployment_id = str(deployment.get("deployment_id") or "")
+        if deployment_id:
+            self.deployments[deployment_id] = dict(deployment)
+        return True
+
+    async def get_deployment(self, deployment_id: str):
+        return self.deployments.get(deployment_id)
+
+    async def list_deployments(self, *, include_stopped: bool = True):
+        deployments = list(self.deployments.values())
+        if include_stopped:
+            return deployments
+        return [dep for dep in deployments if dep.get("status") != "stopped"]
+
+    async def delete_deployment(self, deployment_id: str) -> bool:
+        self.deleted_ids.append(deployment_id)
+        return self.deployments.pop(deployment_id, None) is not None or deployment_id == "test-delete-001"
+
+
 class TestHostingServiceVRAMLeak:
+    async def test_delete_deployment_removes_persisted_history(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        svc._persistence = _FakePersistence()
+
+        result = await svc.delete_deployment("test-delete-001")
+
+        assert result == {
+            "success": True,
+            "deployment_id": "test-delete-001",
+            "status": "deleted",
+        }
+        assert svc._persistence.deleted_ids == ["test-delete-001"]
+
     async def test_stop_deployment_calls_unload(self):
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         provider = _make_mock_provider()
 
         # Manually insert a deployment with a provider
@@ -53,6 +94,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-002"
         task = MagicMock()
         task.done.return_value = True
@@ -72,6 +114,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         provider = _make_mock_provider()
         provider.unload.side_effect = RuntimeError("unload failed")
 
@@ -97,6 +140,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         provider = _make_mock_provider()
 
         # Manually simulate what deploy_as_mcp does after loading
@@ -117,6 +161,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-005"
         thread = MagicMock()
         thread.is_alive.return_value = True
@@ -154,6 +199,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-006"
         thread = MagicMock()
         thread.is_alive.return_value = True
@@ -179,6 +225,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-007"
         thread = MagicMock()
         thread.is_alive.return_value = True
@@ -219,6 +266,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-vlm-001"
         thread = MagicMock()
         thread.is_alive.return_value = True
@@ -245,6 +293,7 @@ class TestHostingServiceVRAMLeak:
         from hosting_pipeline.services.hosting_service import HostingService
 
         svc = HostingService()
+        svc._persistence = _FakePersistence()
         dep_id = "test-name-001"
         thread = MagicMock()
         thread.is_alive.return_value = True

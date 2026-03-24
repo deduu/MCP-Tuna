@@ -74,6 +74,7 @@ export function DocumentPathListInput({
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        title={value || undefined}
         rows={4}
         placeholder={'/path/to/doc1.pdf\n/path/to/doc2.md'}
         className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"

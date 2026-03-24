@@ -94,6 +94,18 @@ class TestTrainingJob:
         job.error = "CUDA OOM"
         assert job.error == "CUDA OOM"
 
+    def test_model_validate_accepts_legacy_prefixed_status(self):
+        job = TrainingJob.model_validate({
+            "job_id": "test-legacy",
+            "status": "JobStatus.COMPLETED",
+        })
+        assert job.status == JobStatus.COMPLETED
+
+    def test_model_dump_json_uses_plain_status_value(self):
+        job = TrainingJob(job_id="test-json", status=JobStatus.RUNNING)
+        payload = job.model_dump(mode="json")
+        assert payload["status"] == "running"
+
 
 # ──────────────────────────────────────────────
 # TrainingJobManager tests
@@ -169,6 +181,77 @@ class TestTrainingJobManager:
         job = mgr.create_job("sft", "model", "/out", {})
         job.status = JobStatus.COMPLETED
         assert mgr.cancel_job(job.job_id) is False
+
+    def test_cancel_orphaned_running_job_marks_cancelled(self):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+        job.status = JobStatus.RUNNING
+
+        result = mgr.cancel_job(job.job_id)
+
+        assert result is True
+        assert job.status == JobStatus.CANCELLED
+        assert job.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_delete_finished_job_removes_record(self):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+        job.status = JobStatus.FAILED
+
+        result = await mgr.adelete_job(job.job_id)
+
+        assert result is True
+        assert mgr.get_job(job.job_id) is None
+
+    @pytest.mark.asyncio
+    async def test_delete_active_job_is_rejected(self):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+        job.status = JobStatus.RUNNING
+        mgr._cancel_events[job.job_id] = threading.Event()
+
+        result = await mgr.adelete_job(job.job_id)
+
+        assert result is False
+        assert mgr.get_job(job.job_id) is job
+
+    @pytest.mark.asyncio
+    async def test_acancel_job_marks_pending_record_cancelled_without_live_worker(self):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+
+        result = await mgr.acancel_job(job.job_id)
+
+        assert result is True
+        assert job.status == JobStatus.CANCELLED
+        assert job.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_acancel_job_marks_persisted_orphan_running_job_cancelled(self):
+        mgr = TrainingJobManager()
+        payload = TrainingJob(
+            job_id="job-persisted",
+            status=JobStatus.RUNNING,
+            trainer_type="sft",
+            base_model="model",
+            output_dir="/out",
+            created_at="2026-03-20T00:00:00+00:00",
+        ).model_dump(mode="json")
+
+        async def fake_get_job(namespace, job_id):
+            assert namespace == "training"
+            assert job_id == "job-persisted"
+            return payload
+
+        mgr._persistence.get_job = fake_get_job  # type: ignore[method-assign]
+
+        result = await mgr.acancel_job("job-persisted")
+        updated = mgr.get_job("job-persisted")
+
+        assert result is True
+        assert updated is not None
+        assert updated.status == JobStatus.CANCELLED
 
     @pytest.mark.asyncio
     async def test_start_job_runs_to_completion(self):

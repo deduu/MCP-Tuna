@@ -8,6 +8,7 @@ Used by both ToolService.tool() and MCPServer.tool() decorators.
 import inspect
 import re
 import types
+from dataclasses import asdict, is_dataclass
 from enum import Enum
 from typing import Annotated, Any, Callable, Dict, Literal, Union, get_args, get_origin, get_type_hints
 
@@ -137,6 +138,9 @@ def generate_tool_schema(func: Callable) -> dict:
 
         py_type = type_hints.get(param_name, Any)
         prop = python_type_to_json_schema(py_type)
+        default = _json_schema_default(param.default)
+        if default is not inspect.Parameter.empty:
+            prop["default"] = default
         prop["description"] = param_descriptions.get(
             param_name, f"Parameter: {param_name}"
         )
@@ -150,3 +154,21 @@ def generate_tool_schema(func: Callable) -> dict:
         schema["required"] = required
 
     return schema
+
+
+def _json_schema_default(value: Any) -> Any:
+    """Normalize Python defaults into JSON-schema-safe default values.
+
+    Skip ``None`` to avoid advertising JSON ``null`` for schemas that still expose
+    the underlying scalar type (for example ``Optional[str]`` remains ``string``).
+    """
+    if value is inspect.Parameter.empty or value is None:
+        return inspect.Parameter.empty
+
+    if isinstance(value, Enum):
+        return value.value
+
+    if is_dataclass(value):
+        return asdict(value)
+
+    return value

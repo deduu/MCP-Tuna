@@ -180,11 +180,16 @@ class TrainServer:
         @self.mcp.tool(name="test.inference", description="Run inference on prompts using a model")
         async def run_inference(
             prompts: List[str], model_path: str,
-            adapter_path: Optional[str] = None, max_new_tokens: int = 512,
+            adapter_path: Optional[str] = None,
+            max_new_tokens: int = 512,
+            temperature: float = 0.7,
         ) -> str:
             return json.dumps(await self.finetuner.run_inference(
                 prompts=prompts, model_path=model_path,
-                adapter_path=adapter_path, max_new_tokens=max_new_tokens,
+                adapter_path=adapter_path,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=temperature > 0,
             ), indent=2)
 
         @self.mcp.tool(name="test.compare_models",

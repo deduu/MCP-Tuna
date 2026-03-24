@@ -41,6 +41,23 @@ def _to_iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat()
 
 
+def _normalize_job_status(value: Any) -> str:
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        value = enum_value
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.startswith("JobStatus."):
+            return normalized.split(".", 1)[1].lower()
+        return normalized
+
+    if value is None:
+        return "pending"
+
+    return str(value)
+
+
 class PersistenceService:
     """Best-effort PostgreSQL persistence for runtime metadata."""
 
@@ -93,7 +110,7 @@ class PersistenceService:
     def _job_to_dict(record: JobRunRecord) -> Dict[str, Any]:
         return {
             "job_id": record.job_id,
-            "status": record.status,
+            "status": _normalize_job_status(record.status),
             "trainer_type": record.trainer_type,
             "base_model": record.base_model,
             "output_dir": record.output_dir,
@@ -118,7 +135,7 @@ class PersistenceService:
                 record = JobRunRecord(namespace=namespace, job_id=job["job_id"])
                 session.add(record)
 
-            record.status = str(job.get("status", record.status or "pending"))
+            record.status = _normalize_job_status(job.get("status", record.status or "pending"))
             record.trainer_type = str(job.get("trainer_type") or "")
             record.base_model = str(job.get("base_model") or "")
             record.output_dir = str(job.get("output_dir") or "")
@@ -167,6 +184,22 @@ class PersistenceService:
 
         result = await self._with_session(_op)
         return result if isinstance(result, list) else []
+
+    async def delete_job(self, namespace: str, job_id: str) -> bool:
+        async def _op(session):
+            stmt = select(JobRunRecord).where(
+                JobRunRecord.namespace == namespace,
+                JobRunRecord.job_id == job_id,
+            )
+            record = (await session.execute(stmt)).scalar_one_or_none()
+            if record is None:
+                return False
+            await session.delete(record)
+            await session.commit()
+            return True
+
+        result = await self._with_session(_op)
+        return bool(result)
 
     # ------------------------------------------------------------------
     # Deployments
@@ -251,6 +284,21 @@ class PersistenceService:
 
         result = await self._with_session(_op)
         return result if isinstance(result, list) else []
+
+    async def delete_deployment(self, deployment_id: str) -> bool:
+        async def _op(session):
+            stmt = select(DeploymentRecord).where(
+                DeploymentRecord.deployment_id == deployment_id,
+            )
+            record = (await session.execute(stmt)).scalar_one_or_none()
+            if record is None:
+                return False
+            await session.delete(record)
+            await session.commit()
+            return True
+
+        result = await self._with_session(_op)
+        return bool(result)
 
     # ------------------------------------------------------------------
     # Conversations
@@ -359,6 +407,38 @@ class PersistenceService:
 
         result = await self._with_session(_op)
         return result if isinstance(result, dict) else None
+
+    async def set_conversation_title(self, conversation_id: str, title: str) -> bool:
+        async def _op(session):
+            stmt = select(ConversationRecord).where(
+                ConversationRecord.conversation_id == conversation_id,
+            )
+            record = (await session.execute(stmt)).scalar_one_or_none()
+            if record is None:
+                return False
+            metadata = dict(record.metadata_json or {})
+            metadata["title"] = title
+            record.metadata_json = metadata
+            await session.commit()
+            return True
+
+        result = await self._with_session(_op)
+        return bool(result)
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        async def _op(session):
+            stmt = select(ConversationRecord).where(
+                ConversationRecord.conversation_id == conversation_id,
+            )
+            record = (await session.execute(stmt)).scalar_one_or_none()
+            if record is None:
+                return False
+            await session.delete(record)
+            await session.commit()
+            return True
+
+        result = await self._with_session(_op)
+        return bool(result)
 
     async def list_conversations(
         self,

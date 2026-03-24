@@ -41,6 +41,9 @@ interface StreamDeploymentChatRequest {
   adapter_path?: string | null
   conversation_id?: string | null
   max_new_tokens?: number
+  temperature?: number
+  top_p?: number
+  top_k?: number
   system_prompt?: string | null
   prefer_runtime_metrics?: boolean
   signal?: AbortSignal

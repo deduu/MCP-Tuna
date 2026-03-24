@@ -1,11 +1,15 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Check, Copy, ChevronDown, ChevronRight } from 'lucide-react'
 import type { MCPToolResult } from '@/api/types'
+import { cn } from '@/lib/utils'
 
 interface ToolResultPanelProps {
+  toolName?: string
   result: MCPToolResult
   executionTime?: number
 }
@@ -79,11 +83,18 @@ function JsonNode({ data, depth = 0 }: { data: unknown; depth?: number }) {
   return <span>{String(data)}</span>
 }
 
-export function ToolResultPanel({ result, executionTime }: ToolResultPanelProps) {
+export function ToolResultPanel({ toolName, result, executionTime }: ToolResultPanelProps) {
   const [copied, setCopied] = useState(false)
   const isError = result.success === false || (typeof result.error === 'string' && result.error.trim().length > 0)
   const statusLabel = isError ? 'Error' : 'Success'
   const statusVariant = isError ? 'error' : 'success'
+  const jobId = typeof result.job_id === 'string' ? result.job_id : null
+  const monitorRoute = toolName?.startsWith('finetune.')
+    ? '/training'
+    : toolName?.startsWith('workflow.')
+      ? '/pipeline'
+      : null
+  const monitorLabel = toolName?.startsWith('workflow.') ? 'Open Pipeline Monitor' : 'Open Training Monitor'
 
   const handleCopy = () => {
     navigator.clipboard.writeText(JSON.stringify(result, null, 2))
@@ -111,6 +122,22 @@ export function ToolResultPanel({ result, executionTime }: ToolResultPanelProps)
         </Button>
       </CardHeader>
       <CardContent className="font-mono text-xs overflow-auto max-h-96">
+        {jobId && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-secondary/20 p-3">
+            <span className="text-muted-foreground">Job ID</span>
+            <Badge variant="outline" className="font-mono text-[11px]">
+              {jobId}
+            </Badge>
+            {monitorRoute && (
+              <Link
+                to={monitorRoute}
+                className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'font-sans')}
+              >
+                {monitorLabel}
+              </Link>
+            )}
+          </div>
+        )}
         <JsonNode data={result} />
       </CardContent>
     </Card>

@@ -69,6 +69,43 @@ class PipelineOrchestrator:
     def _training_output_path(train_result: Dict[str, Any]) -> Optional[str]:
         return train_result.get("model_path") or train_result.get("final_model_path")
 
+    @staticmethod
+    def _collect_generation_errors(
+        file_path: str,
+        gen_result: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        errors: List[Dict[str, Any]] = []
+        for page_error in gen_result.get("page_errors") or []:
+            if not isinstance(page_error, dict):
+                continue
+            errors.append({
+                "file_path": file_path,
+                "file_name": Path(file_path).name,
+                **page_error,
+            })
+        return errors
+
+    @staticmethod
+    def _format_zero_generation_error(
+        generation_errors: List[Dict[str, Any]],
+    ) -> str:
+        if not generation_errors:
+            return "No data points generated from provided files."
+
+        first_error = generation_errors[0]
+        file_name = first_error.get("file_name") or Path(
+            str(first_error.get("file_path", "provided file"))
+        ).name
+        page = first_error.get("page")
+        error = str(first_error.get("error", "Unknown generation error"))
+        location = f"{file_name} page {page}" if page else file_name
+        extra_failures = len(generation_errors) - 1
+        extra_suffix = f" ({extra_failures} more page failures)" if extra_failures > 0 else ""
+        return (
+            f"No data points generated from provided files. "
+            f"First page failure in {location}: {error}{extra_suffix}"
+        )
+
     @classmethod
     def _training_uses_adapter(cls, train_result: Dict[str, Any]) -> bool:
         config = train_result.get("config")
@@ -206,6 +243,7 @@ class PipelineOrchestrator:
 
         all_data_points: List[Dict[str, Any]] = []
         per_file_counts: Dict[str, int] = {}
+        generation_errors: List[Dict[str, Any]] = []
 
         for index, fp in enumerate(file_paths, start=1):
             if self._is_cancelled(cancel_event):
@@ -248,10 +286,15 @@ class PipelineOrchestrator:
             pts = gen_result.get("data_points", [])
             all_data_points.extend(pts)
             per_file_counts[fp] = len(pts)
+            generation_errors.extend(self._collect_generation_errors(fp, gen_result))
 
         total_generated = len(all_data_points)
         if not all_data_points:
-            return {"success": False, "error": "No data points generated from provided files."}
+            return {
+                "success": False,
+                "error": self._format_zero_generation_error(generation_errors),
+                "generation_errors": generation_errors,
+            }
 
         if self._is_cancelled(cancel_event):
             return self._cancelled_result()
@@ -424,6 +467,7 @@ class PipelineOrchestrator:
         base_model: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
+        push_to_hub: Optional[str] = None,
         deploy: bool = False,
         deploy_port: int = 8001,
         quantization: Optional[str] = None,
@@ -516,6 +560,7 @@ class PipelineOrchestrator:
             base_model=base_model,
             num_epochs=num_epochs,
             use_lora=use_lora,
+            push_to_hub=push_to_hub,
             extra_callbacks=extra_callbacks,
         )
 
@@ -665,6 +710,7 @@ class PipelineOrchestrator:
         # ── 1-2. Extract + Generate from every file ───────────────────────
         all_data_points: List[Dict[str, Any]] = []
         per_file_counts: Dict[str, int] = {}
+        generation_errors: List[Dict[str, Any]] = []
 
         for fp in file_paths:
             gen_result = await self.generator.generate_from_document(
@@ -681,10 +727,15 @@ class PipelineOrchestrator:
             pts = gen_result.get("data_points", [])
             all_data_points.extend(pts)
             per_file_counts[fp] = len(pts)
+            generation_errors.extend(self._collect_generation_errors(fp, gen_result))
 
         total_generated = len(all_data_points)
         if not all_data_points:
-            return {"success": False, "error": "No data points generated from provided files."}
+            return {
+                "success": False,
+                "error": self._format_zero_generation_error(generation_errors),
+                "generation_errors": generation_errors,
+            }
 
         # ── 3. Clean ──────────────────────────────────────────────────────
         clean_result = await self.cleaner.clean_dataset(all_data_points, CleaningConfig())

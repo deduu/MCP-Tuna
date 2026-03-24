@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react'
-import { Cpu, Plus } from 'lucide-react'
+import { AlertTriangle, Cpu, Plus } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import type { TrainingJob } from '@/api/types'
-import { useTrainingJobs, useAvailableModels, useCancelTraining } from '@/api/hooks/useTraining'
+import { useTrainingJobs, useAvailableModels, useCancelTraining, useDeleteTrainingJob } from '@/api/hooks/useTraining'
+import { usePipelineJobs, useCancelPipeline } from '@/api/hooks/usePipeline'
 import { useSystemResources } from '@/api/hooks/useSystemResources'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,9 +13,11 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { includesTrainingStage } from '@/lib/training-progress'
 import { NewTrainingPanel } from './NewTrainingPanel'
 import { TrainingJobCard } from './TrainingJobCard'
 import { getDeployInitialValues } from './deployment-paths'
+import { PipelineJobCard } from '@/components/pipeline/PipelineJobCard'
 
 export function TrainingPage() {
   const [panelOpen, setPanelOpen] = useState(false)
@@ -22,14 +25,25 @@ export function TrainingPage() {
   const [selectedModelPath, setSelectedModelPath] = useState('')
   const navigate = useNavigate()
 
-  const { data: jobs = [], isLoading: jobsLoading } = useTrainingJobs()
+  const { data: jobs = [], isLoading: jobsLoading, error: jobsError } = useTrainingJobs()
+  const { data: pipelineJobs = [], isLoading: pipelineJobsLoading } = usePipelineJobs()
   const { data: resources } = useSystemResources()
   const { data: models = [] } = useAvailableModels()
   const cancelTraining = useCancelTraining()
+  const deleteTrainingJob = useDeleteTrainingJob()
+  const cancelPipeline = useCancelPipeline()
 
   const activeJobs = useMemo(
     () => jobs.filter((j) => j.status === 'running' || j.status === 'pending'),
     [jobs],
+  )
+  const pipelineTrainingJobs = useMemo(
+    () => pipelineJobs.filter((job) => includesTrainingStage(job.steps)),
+    [pipelineJobs],
+  )
+  const activePipelineJobs = useMemo(
+    () => pipelineTrainingJobs.filter((job) => job.status === 'running' || job.status === 'pending'),
+    [pipelineTrainingJobs],
   )
   const completedJobs = useMemo(
     () => jobs.filter((j) => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled'),
@@ -41,6 +55,7 @@ export function TrainingPage() {
   )
 
   const filteredJobs = activeTab === 'active' ? activeJobs : activeTab === 'completed' ? completedJobs : jobs
+  const totalActiveRuns = activeJobs.length + activePipelineJobs.length
 
   function handleCancel(jobId: string) {
     cancelTraining.mutate(jobId, {
@@ -65,23 +80,50 @@ export function TrainingPage() {
     })
   }
 
+  function handleDelete(jobId: string) {
+    deleteTrainingJob.mutate(jobId, {
+      onSuccess: () => toast.success('Training job deleted'),
+      onError: (err) => toast.error(`Delete failed: ${err.message}`),
+    })
+  }
+
+  function handleCancelPipeline(jobId: string) {
+    cancelPipeline.mutate(jobId, {
+      onSuccess: () => toast.success('Pipeline job cancelled'),
+      onError: (err) => toast.error(`Cancel failed: ${err.message}`),
+    })
+  }
+
   return (
     <div className="space-y-6 max-w-7xl">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Cpu className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold">Training</h1>
-        {activeJobs.length > 0 && (
-          <Badge variant="default">{activeJobs.length} active</Badge>
+        {totalActiveRuns > 0 && (
+          <Badge variant="default">{totalActiveRuns} active</Badge>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <Badge variant="outline">{jobs.length} retained jobs</Badge>
+        <Badge variant="secondary">{pipelineTrainingJobs.length} pipeline runs</Badge>
         <Badge variant="success">{completedJobs.filter((job) => job.status === 'completed').length} completed</Badge>
         {failedJobs.length > 0 && <Badge variant="error">{failedJobs.length} failed</Badge>}
         <span>History is loaded from persisted backend state after refresh and restart.</span>
       </div>
+
+      {jobsError && (
+        <Card className="border-amber-500/30 bg-amber-500/10">
+          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-200/90">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <p className="font-medium text-amber-300">Training jobs unavailable</p>
+              <p>{jobsError.message}</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Main content */}
@@ -109,6 +151,32 @@ export function TrainingPage() {
             </Button>
           )}
 
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">Pipeline Training Runs</h2>
+              <Badge variant="secondary">{pipelineTrainingJobs.length}</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Full and custom pipeline runs that include a training stage are tracked here as workflow jobs.
+            </p>
+            {pipelineJobsLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-32 w-full rounded-xl" />
+                <Skeleton className="h-32 w-full rounded-xl" />
+              </div>
+            ) : pipelineTrainingJobs.length === 0 ? (
+              <div className="text-sm text-muted-foreground py-6 text-center">
+                No pipeline-backed training runs yet
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pipelineTrainingJobs.map((job) => (
+                  <PipelineJobCard key={job.job_id} job={job} onCancel={handleCancelPipeline} />
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Job tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabList>
@@ -126,7 +194,7 @@ export function TrainingPage() {
                   </div>
                 ) : filteredJobs.length === 0 ? (
                   <div className="text-sm text-muted-foreground py-8 text-center">
-                    No {tabValue === 'all' ? '' : tabValue} training jobs
+                    No {tabValue === 'all' ? '' : tabValue} retained training jobs
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -135,6 +203,7 @@ export function TrainingPage() {
                         key={job.job_id}
                         job={job}
                         onCancel={handleCancel}
+                        onDelete={handleDelete}
                         onDeploy={handleDeploy}
                       />
                     ))}

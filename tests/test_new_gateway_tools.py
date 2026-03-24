@@ -94,6 +94,9 @@ class TestToolRegistration:
     def test_finetune_train_vlm_registered(self, tool_names):
         assert "finetune.train_vlm" in tool_names
 
+    def test_finetune_delete_job_registered(self, tool_names):
+        assert "finetune.delete_job" in tool_names
+
     def test_test_vlm_inference_registered(self, tool_names):
         assert "test.vlm_inference" in tool_names
 
@@ -123,6 +126,46 @@ class TestToolRegistration:
     # Total tool count increased
     def test_minimum_tool_count(self, tool_names):
         assert len(tool_names) >= 86
+
+
+def test_finetune_train_schema_includes_optional_defaults():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["finetune.train"]["schema"]
+    props = schema["properties"]
+
+    assert props["num_epochs"]["default"] == 3
+    assert props["use_lora"]["default"] is True
+    assert props["lora_r"]["default"] == 8
+    assert props["lora_dropout"]["default"] == 0.05
+    assert props["learning_rate"]["default"] == 2e-4
+    assert props["deploy"]["default"] is False
+    assert "default" not in props["base_model"]
+    assert "default" not in props["push_to_hub"]
+
+
+def test_finetune_async_schema_includes_optional_defaults():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["finetune.train_grpo_async"]["schema"]
+    props = schema["properties"]
+
+    assert props["num_epochs"]["default"] == 3
+    assert props["num_generations"]["default"] == 4
+    assert props["max_prompt_length"]["default"] == 512
+    assert props["max_completion_length"]["default"] == 256
+    assert props["load_in_4bit"]["default"] is True
+    assert "default" not in props["resume_from_checkpoint"]
+
+
+def test_test_inference_schema_includes_temperature_and_adapter():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["test.inference"]["schema"]
+    props = schema["properties"]
+
+    assert props["max_new_tokens"]["default"] == 512
+    assert props["temperature"]["default"] == 0.7
+    assert props["top_p"]["default"] == 0.9
+    assert props["top_k"]["default"] == 50
+    assert "adapter_path" in props
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { History, MessageSquare, Trash2, User } from 'lucide-react'
+import { History, MessageSquare, Pencil, Trash2, User } from 'lucide-react'
 import { useChatStore } from '@/stores/chat'
 import { useToolCount } from '@/api/hooks/useToolRegistry'
 import {
+  useDeleteConversation,
   useDeploymentConversation,
   useDeploymentConversations,
   useDeployments,
+  useRenameConversation,
 } from '@/api/hooks/useDeployments'
 import type { ChatContentBlock } from '@/lib/chat-content'
 import { persistedConversationToChatMessages } from '@/lib/persisted-conversations'
@@ -26,6 +28,8 @@ export function SingleChatView() {
   const replaceMessages = useChatStore((s) => s.replaceMessages)
   const { toolCount } = useToolCount()
   const { data: deployments = [] } = useDeployments()
+  const renameConversation = useRenameConversation()
+  const deleteConversation = useDeleteConversation()
   const [selectedHistoryConversationId, setSelectedHistoryConversationId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const selectedDeployment = deployments.find((deployment) => deployment.deployment_id === selectedDeploymentId) ?? null
@@ -80,6 +84,29 @@ export function SingleChatView() {
   const handleClear = () => {
     setSelectedHistoryConversationId(null)
     clearMessages()
+  }
+
+  const handleRenameConversation = (conversationId: string, currentTitle?: string | null) => {
+    const nextTitle = window.prompt('Rename conversation', currentTitle?.trim() || '')
+    if (!nextTitle) return
+
+    renameConversation.mutate(
+      { conversationId, title: nextTitle },
+    )
+  }
+
+  const handleDeleteConversation = (conversationId: string) => {
+    if (!window.confirm('Delete this conversation and its saved messages?')) {
+      return
+    }
+
+    deleteConversation.mutate(conversationId, {
+      onSuccess: () => {
+        if ((selectedHistoryConversationId ?? deploymentConversationId) === conversationId) {
+          handleClear()
+        }
+      },
+    })
   }
 
   const activeConversationLabel = activeConversationSummary?.updated_at
@@ -151,7 +178,7 @@ export function SingleChatView() {
                     key={conversation.conversation_id}
                     type="button"
                     onClick={() => setSelectedHistoryConversationId(conversation.conversation_id)}
-                    disabled={isStreaming}
+                    disabled={isStreaming || renameConversation.isPending || deleteConversation.isPending}
                     className={cn(
                       'w-full rounded-lg border px-3 py-2 text-left transition-colors',
                       isSelected
@@ -163,7 +190,31 @@ export function SingleChatView() {
                       <span className="truncate text-sm font-medium">
                         {conversation.title?.trim() || conversation.conversation_id}
                       </span>
-                      <Badge variant="outline">{conversation.message_count}</Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline">{conversation.message_count}</Badge>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            handleRenameConversation(conversation.conversation_id, conversation.title)
+                          }}
+                          className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                          title="Rename conversation"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            handleDeleteConversation(conversation.conversation_id)
+                          }}
+                          className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-destructive"
+                          title="Delete conversation"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
                     </div>
                     {conversation.title && (
                       <p className="mt-1 font-mono text-[10px] text-muted-foreground">

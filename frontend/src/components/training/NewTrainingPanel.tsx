@@ -56,6 +56,7 @@ export function NewTrainingPanel({
   const [batchSize, setBatchSize] = useState('4')
   const [loraR, setLoraR] = useState('16')
   const [loraAlpha, setLoraAlpha] = useState('32')
+  const [loraDropout, setLoraDropout] = useState('0.05')
 
   const [warmupRatio, setWarmupRatio] = useState('0')
   const [weightDecay, setWeightDecay] = useState('0.01')
@@ -116,9 +117,9 @@ export function NewTrainingPanel({
 
   useEffect(() => {
     if (!outputDirCustomized) {
-      setOutputDir(buildDefaultOutputDir(technique, sequential))
+      setOutputDir(buildDefaultOutputDir(technique, sequential, datasetPath))
     }
-  }, [technique, sequential, outputDirCustomized])
+  }, [technique, sequential, datasetPath, outputDirCustomized])
 
   useEffect(() => {
     if (!sequentialAllowed && sequential) {
@@ -197,13 +198,14 @@ export function NewTrainingPanel({
     const parsedBatchSize = parseInt(batchSize, 10)
     const parsedLoraR = parseInt(loraR, 10)
     const parsedLoraAlpha = parseInt(loraAlpha, 10)
+    const parsedLoraDropout = parseFloat(loraDropout)
     const parsedWarmupRatio = parseFloat(warmupRatio)
     const parsedWeightDecay = parseFloat(weightDecay)
     const parsedGradAccum = parseInt(gradAccum, 10)
     const parsedMaxSeqLength = parseInt(maxSeqLength, 10)
     const parsedLearningRate = parseFloat(learningRate)
     const parsedNumStages = parseInt(numStages, 10)
-    const resolvedOutputDir = outputDir.trim() || buildDefaultOutputDir(technique, sequential)
+    const resolvedOutputDir = outputDir.trim() || buildDefaultOutputDir(technique, sequential, datasetPath)
 
     const commonArgs: Record<string, unknown> = {
       output_dir: resolvedOutputDir,
@@ -221,6 +223,7 @@ export function NewTrainingPanel({
         per_device_train_batch_size: parsedBatchSize,
         lora_r: parsedLoraR,
         lora_alpha: parsedLoraAlpha,
+        lora_dropout: parsedLoraDropout,
         warmup_ratio: parsedWarmupRatio,
         weight_decay: parsedWeightDecay,
         gradient_accumulation_steps: parsedGradAccum,
@@ -263,6 +266,7 @@ export function NewTrainingPanel({
               per_device_train_batch_size: parsedBatchSize,
               lora_r: parsedLoraR,
               lora_alpha: parsedLoraAlpha,
+              lora_dropout: parsedLoraDropout,
               warmup_ratio: parsedWarmupRatio,
               weight_decay: parsedWeightDecay,
               gradient_accumulation_steps: parsedGradAccum,
@@ -290,7 +294,7 @@ export function NewTrainingPanel({
       {
         onSuccess: () => {
           toast.success('Training job started')
-          setOutputDir(buildDefaultOutputDir(technique, sequential))
+          setOutputDir(buildDefaultOutputDir(technique, sequential, datasetPath))
           setOutputDirCustomized(false)
           onSubmit()
         },
@@ -493,6 +497,17 @@ export function NewTrainingPanel({
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">lora_alpha</label>
                   <Input type="number" value={loraAlpha} onChange={(event) => setLoraAlpha(event.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">lora_dropout</label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={loraDropout}
+                    onChange={(event) => setLoraDropout(event.target.value)}
+                  />
                 </div>
               </>
             )}

@@ -3,6 +3,8 @@ import { Progress } from '@/components/ui/progress'
 import { Card, CardContent } from '@/components/ui/card'
 import { LossChart } from './LossChart'
 import { getDeployInitialValues, getTrainingOutputPath, trainingUsesAdapter } from './deployment-paths'
+import { InferenceTest } from '@/components/deployments/InferenceTest'
+import { buildLossChartData } from '@/lib/training-progress'
 
 interface TrainingJobDetailProps {
   job: TrainingJob
@@ -14,12 +16,7 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
   const outputPath = getTrainingOutputPath(job)
   const usesAdapter = trainingUsesAdapter(job.result)
 
-  const chartData =
-    p?.log_history?.map((entry) => ({
-      step: entry.step,
-      loss: entry.loss,
-      learning_rate: entry.learning_rate,
-    })) ?? []
+  const chartData = buildLossChartData(p)
 
   return (
     <div className="space-y-4 pt-3 border-t border-border">
@@ -117,6 +114,13 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {job.status === 'completed' && deployValues?.modelPath && (
+        <InferenceTest
+          modelPath={deployValues.modelPath}
+          adapterPath={deployValues.adapterPath}
+        />
       )}
 
       {/* Error message */}

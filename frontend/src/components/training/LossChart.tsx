@@ -1,13 +1,15 @@
 import { cn } from '@/lib/utils'
 
 interface LossChartProps {
-  data: Array<{ step: number; loss: number; learning_rate?: number }>
+  data: Array<{ step: number; loss?: number; evalLoss?: number; learning_rate?: number }>
   className?: string
 }
 
 export function LossChart({ data, className }: LossChartProps) {
   const chartData = data.filter(
-    (point) => Number.isFinite(point.step) && Number.isFinite(point.loss),
+    (point) =>
+      Number.isFinite(point.step) &&
+      (Number.isFinite(point.loss) || Number.isFinite(point.evalLoss)),
   )
 
   if (chartData.length === 0) {
@@ -23,18 +25,18 @@ export function LossChart({ data, className }: LossChartProps) {
     )
   }
 
-  const width = 400
-  const height = 120
-  const padLeft = 45
-  const padRight = 10
-  const padTop = 8
-  const padBottom = 20
+  const width = 1000
+  const height = 160
+  const padLeft = 56
+  const padRight = 18
+  const padTop = 14
+  const padBottom = 28
 
   const chartW = width - padLeft - padRight
   const chartH = height - padTop - padBottom
 
   const steps = chartData.map((d) => d.step)
-  const losses = chartData.map((d) => d.loss)
+  const losses = chartData.flatMap((d) => [d.loss, d.evalLoss]).filter(Number.isFinite) as number[]
   const minStep = Math.min(...steps)
   const maxStep = Math.max(...steps)
   const minLoss = Math.min(...losses)
@@ -43,10 +45,10 @@ export function LossChart({ data, className }: LossChartProps) {
   const useIndexForX = uniqueStepCount < 2
   const xRange = Math.max(chartData.length - 1, 1)
 
-  const lossRange = maxLoss - minLoss || 1
-  const lossPad = lossRange * 0.1
-  const yMin = minLoss - lossPad
-  const yMax = maxLoss + lossPad
+  const lossRange = maxLoss - minLoss
+  const lossPad = lossRange > 0 ? lossRange * 0.18 : Math.max(maxLoss * 0.35, 0.1)
+  const yMin = Math.max(0, minLoss - lossPad)
+  const yMax = Math.max(maxLoss + lossPad, yMin + 0.25)
   const yRange = yMax - yMin
 
   const stepRange = maxStep - minStep || 1
@@ -62,10 +64,44 @@ export function LossChart({ data, className }: LossChartProps) {
     return padTop + chartH - ((loss - yMin) / yRange) * chartH
   }
 
-  const points = chartData.map((d, index) => `${toX(d.step, index)},${toY(d.loss)}`).join(' ')
-  const strokeColor = 'var(--color-ns-finetune)'
+  const chartPoints = chartData.map((d, index) => ({
+    x: toX(d.step, index),
+    trainY: d.loss != null ? toY(d.loss) : undefined,
+    evalY: d.evalLoss != null ? toY(d.evalLoss) : undefined,
+  }))
+  const trainStrokeColor = 'var(--color-ns-finetune)'
+  const evalStrokeColor = 'var(--color-warning, #f59e0b)'
 
-  const gridLines = 3
+  function buildSmoothPath(coords: Array<{ x: number; y: number }>) {
+    if (coords.length === 0) return ''
+    if (coords.length === 1) return `M ${coords[0].x} ${coords[0].y}`
+    if (coords.length === 2) return `M ${coords[0].x} ${coords[0].y} L ${coords[1].x} ${coords[1].y}`
+
+    let path = `M ${coords[0].x} ${coords[0].y}`
+    for (let i = 0; i < coords.length - 1; i += 1) {
+      const current = coords[i]
+      const next = coords[i + 1]
+      const midX = (current.x + next.x) / 2
+      const midY = (current.y + next.y) / 2
+      path += ` Q ${current.x} ${current.y} ${midX} ${midY}`
+      if (i === coords.length - 2) {
+        path += ` T ${next.x} ${next.y}`
+      }
+    }
+    return path
+  }
+
+  const trainPoints = chartPoints.flatMap((point, index) =>
+    point.trainY == null ? [] : [{ x: point.x, y: point.trainY, key: `${chartData[index].step}-${index}` }],
+  )
+  const evalPoints = chartPoints.flatMap((point, index) =>
+    point.evalY == null ? [] : [{ x: point.x, y: point.evalY, key: `${chartData[index].step}-${index}` }],
+  )
+  const trainPath = buildSmoothPath(trainPoints)
+  const evalPath = buildSmoothPath(evalPoints)
+  const hasEvalSeries = evalPoints.length > 0
+
+  const gridLines = 4
   const gridYValues = Array.from({ length: gridLines }, (_, i) => {
     const frac = i / (gridLines - 1)
     return yMin + frac * yRange
@@ -73,10 +109,28 @@ export function LossChart({ data, className }: LossChartProps) {
 
   return (
     <div className={cn('w-full', className)}>
+      {hasEvalSeries && (
+        <div className="mb-2 flex items-center gap-4 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: trainStrokeColor }}
+            />
+            Train loss
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: evalStrokeColor }}
+            />
+            Validation loss
+          </span>
+        </div>
+      )}
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className="w-full"
-        style={{ height: 120 }}
+        style={{ height: 160 }}
         preserveAspectRatio="none"
       >
         {/* Grid lines */}
@@ -107,25 +161,47 @@ export function LossChart({ data, className }: LossChartProps) {
           )
         })}
 
-        {/* Loss polyline */}
-        {chartData.length > 1 && (
-          <polyline
+        {/* Loss path */}
+        {trainPoints.length > 1 && (
+          <path
             fill="none"
-            strokeWidth={1.5}
+            d={trainPath}
+            strokeWidth={2.25}
             strokeLinejoin="round"
             strokeLinecap="round"
-            points={points}
-            style={{ stroke: strokeColor }}
+            style={{ stroke: trainStrokeColor }}
           />
         )}
 
-        {chartData.map((point, index) => (
+        {evalPoints.length > 1 && (
+          <path
+            fill="none"
+            d={evalPath}
+            strokeWidth={2.25}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            strokeDasharray="5 4"
+            style={{ stroke: evalStrokeColor }}
+          />
+        )}
+
+        {trainPoints.map((point) => (
           <circle
-            key={`${point.step}-${index}`}
-            cx={toX(point.step, index)}
-            cy={toY(point.loss)}
-            r={chartData.length === 1 ? 3.5 : 2}
-            style={{ fill: strokeColor }}
+            key={`train-${point.key}`}
+            cx={point.x}
+            cy={point.y}
+            r={trainPoints.length === 1 ? 4 : 2.5}
+            style={{ fill: trainStrokeColor }}
+          />
+        ))}
+
+        {evalPoints.map((point) => (
+          <circle
+            key={`eval-${point.key}`}
+            cx={point.x}
+            cy={point.y}
+            r={evalPoints.length === 1 ? 4 : 2.5}
+            style={{ fill: evalStrokeColor }}
           />
         ))}
 

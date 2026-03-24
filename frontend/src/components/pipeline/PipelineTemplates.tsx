@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Play, Settings2, ChevronDown } from 'lucide-react'
 import { useRunFullPipeline, useRunPipeline } from '@/api/hooks/usePipeline'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
@@ -8,6 +8,7 @@ import { CustomPipelineForm } from './CustomPipelineForm'
 import { DocumentPathInput } from './DocumentPathInput'
 import { DocumentPathListInput } from './DocumentPathListInput'
 import { ModelPathField } from './ModelPathField'
+import { buildPipelineOutputDir } from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -28,10 +29,12 @@ export function PipelineTemplates() {
   const [modelPath, setModelPath] = useState('')
   const [lastResult, setLastResult] = useState<Record<string, unknown> | null>(null)
   const [showFullAdvanced, setShowFullAdvanced] = useState(false)
-  const [outputDir, setOutputDir] = useState('./output')
+  const [outputDir, setOutputDir] = useState(() => buildPipelineOutputDir('sft'))
+  const [outputDirCustomized, setOutputDirCustomized] = useState(false)
   const [qualityThreshold, setQualityThreshold] = useState('0.7')
   const [numEpochs, setNumEpochs] = useState('3')
   const [useLora, setUseLora] = useState(true)
+  const [pushToHub, setPushToHub] = useState('')
   const [deploy, setDeploy] = useState(false)
   const [deployPort, setDeployPort] = useState('8001')
   const [quantization, setQuantization] = useState('4bit')
@@ -39,6 +42,16 @@ export function PipelineTemplates() {
 
   const [customOpen, setCustomOpen] = useState(false)
   const customPipeline = useRunPipeline()
+  const parsedDocPaths = useMemo(() => parseDocumentPaths(multiDocPaths), [multiDocPaths])
+
+  useEffect(() => {
+    if (outputDirCustomized) return
+
+    const sourceHint = useMultipleDocuments
+      ? parsedDocPaths
+      : singleDocPath.trim()
+    setOutputDir(buildPipelineOutputDir(technique, sourceHint))
+  }, [outputDirCustomized, parsedDocPaths, singleDocPath, technique, useMultipleDocuments])
 
   function handleRunFull() {
     const docPaths = useMultipleDocuments ? parseDocumentPaths(multiDocPaths) : []
@@ -72,10 +85,11 @@ export function PipelineTemplates() {
 
     const args: Record<string, unknown> = {
       technique,
-      output_dir: outputDir.trim() || './output',
+      output_dir: outputDir.trim() || buildPipelineOutputDir(technique, useMultipleDocuments ? docPaths : singleDocPath.trim()),
       quality_threshold: parsedThreshold,
       num_epochs: parsedEpochs,
       use_lora: useLora,
+      ...(pushToHub.trim() ? { push_to_hub: pushToHub.trim() } : {}),
       deploy,
       ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
       ...(deploy ? { deploy_port: parsedDeployPort } : {}),
@@ -102,7 +116,7 @@ export function PipelineTemplates() {
     customPipeline.mutate(args, {
       onSuccess: (data) => {
         setLastResult(data as Record<string, unknown>)
-        toast.success('Custom pipeline started')
+        toast.success('Custom pipeline started. Track it on Training under Pipeline Training Runs.')
       },
       onError: (err) => toast.error(`Pipeline failed: ${err.message}`),
     })
@@ -212,7 +226,14 @@ export function PipelineTemplates() {
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1 block">Output Dir</label>
-                  <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} placeholder="./output" />
+                  <Input
+                    value={outputDir}
+                    onChange={(e) => {
+                      setOutputDir(e.target.value)
+                      setOutputDirCustomized(true)
+                    }}
+                    placeholder={buildPipelineOutputDir(technique, useMultipleDocuments ? parsedDocPaths : singleDocPath.trim())}
+                  />
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1 block">Quality Threshold</label>
@@ -244,6 +265,17 @@ export function PipelineTemplates() {
                   />
                   Train with LoRA adapter
                 </label>
+                <div className="sm:col-span-2">
+                  <label className="text-sm font-medium text-foreground mb-1 block">Push To Hub Repo</label>
+                  <Input
+                    value={pushToHub}
+                    onChange={(e) => setPushToHub(e.target.value)}
+                    placeholder="your-org/your-model-name"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Optional. If set, the trained model or adapter will be pushed to this Hugging Face Hub repo after training.
+                  </p>
+                </div>
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1 block">Deploy Port</label>
                   <Input

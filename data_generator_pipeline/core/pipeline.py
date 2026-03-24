@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Type
+from typing import Any, Dict, List, Type
 from dataclasses import asdict
 from .base import BaseGenerator
 from ..models.datapoints import BaseDataPoint
@@ -23,6 +23,7 @@ class FineTuningPipeline:
     ):
         self.generator = generator
         self.data_point_class = data_point_class
+        self.last_page_errors: List[Dict[str, Any]] = []
 
     async def run(
         self,
@@ -34,6 +35,7 @@ class FineTuningPipeline:
         """Process all pages and return structured data points."""
         results = []
         total = len(pages)
+        self.last_page_errors = []
 
         for idx, page in enumerate(pages, 1):
             try:
@@ -58,6 +60,11 @@ class FineTuningPipeline:
 
             except Exception as e:
                 logger.error("Page %d failed: %s", page["index"] + 1, e)
+                self.last_page_errors.append({
+                    "page": page["index"] + 1,
+                    "page_index": page["index"],
+                    "error": str(e),
+                })
                 if self.generator.debug:
                     raise
 

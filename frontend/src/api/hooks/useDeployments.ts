@@ -160,6 +160,30 @@ export function useDeploymentConversation(conversationId: string | null, enabled
   })
 }
 
+export function useRenameConversation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, title }: { conversationId: string; title: string }) =>
+      mcpCall('host.rename_conversation', { conversation_id: conversationId, title }),
+    onSuccess: (_result, variables) => {
+      qc.invalidateQueries({ queryKey: ['deployments', 'conversation', variables.conversationId] })
+      qc.invalidateQueries({ queryKey: ['deployments', 'conversations'] })
+    },
+  })
+}
+
+export function useDeleteConversation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (conversationId: string) =>
+      mcpCall('host.delete_conversation', { conversation_id: conversationId }),
+    onSuccess: (_result, conversationId) => {
+      qc.removeQueries({ queryKey: ['deployments', 'conversation', conversationId] })
+      qc.invalidateQueries({ queryKey: ['deployments', 'conversations'] })
+    },
+  })
+}
+
 type DeployParams = {
   type: 'mcp' | 'api'
   modality?: ModelModality
@@ -202,7 +226,7 @@ export function useUndeployment() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (deploymentId: string) =>
-      mcpCall('host.stop', { deployment_id: deploymentId }),
+      mcpCall('host.delete_deployment', { deployment_id: deploymentId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deployments'] })
     },

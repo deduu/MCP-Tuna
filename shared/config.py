@@ -96,6 +96,8 @@ class ChatConfig(BaseModel):
     adapter_path: Optional[str] = None
     max_new_tokens: int = 512
     temperature: float = 0.7
+    top_p: float = 0.95
+    top_k: int = 50
     system_prompt: Optional[str] = None
     streaming: bool = True
     modality: str = "text"  # text | vision-language
