@@ -4,6 +4,7 @@ import type {
   TrainingCapabilitySummary,
   TrainingTechnique,
 } from '@/api/types'
+import { compactSourceHint, compactTrainingPrefix } from '@/lib/output-naming'
 
 export type DifficultyOrder = 'easy_first' | 'hard_first'
 export type QuantizationOption = '4bit' | 'none'
@@ -14,18 +15,6 @@ export interface TrainingTechniqueOption {
   description: string
   enabled: boolean
   reason?: string
-}
-
-function sanitizeOutputSegment(value: string): string {
-  return value
-    .trim()
-    .replace(/\\/g, '/')
-    .split('/')
-    .pop()
-    ?.replace(/\.[^.]+$/, '')
-    .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    || ''
 }
 
 function buildTimestampedOutputDir(prefix: string, sourcePath?: string): string {
@@ -39,9 +28,10 @@ function buildTimestampedOutputDir(prefix: string, sourcePath?: string): string 
     String(now.getMinutes()).padStart(2, '0'),
     String(now.getSeconds()).padStart(2, '0'),
   ].join('')
-  const sourceSuffix = sanitizeOutputSegment(sourcePath || '')
+  const compactPrefix = compactTrainingPrefix(prefix, 18)
+  const sourceSuffix = sourcePath ? compactSourceHint(sourcePath, 18, 'src') : ''
 
-  return `./output/${prefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
+  return `./output/${compactPrefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
 }
 
 function resolvePathHint(value: unknown): string {

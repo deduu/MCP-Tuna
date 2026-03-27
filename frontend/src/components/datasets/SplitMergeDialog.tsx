@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import { getDefaultDatasetOutputDir } from '@/lib/dataset-output'
+import { compactSourceHint } from '@/lib/output-naming'
 
 interface SplitMergeDialogProps {
   open: boolean
@@ -51,9 +52,10 @@ export function SplitMergeDialog({
       return prefix.slice(0, i).replace(/[_-]+$/g, '')
     })
 
-    const suggested = sharedPrefix
-      ? `${defaultOutputDir}/${sharedPrefix}_merged`
-      : `${defaultOutputDir}/merged_${datasetPaths.length}_datasets`
+    const suggestedBase = sharedPrefix
+      ? compactSourceHint(sharedPrefix, 24, 'dataset')
+      : `${compactSourceHint(baseNames[0] ?? 'dataset', 18, 'dataset')}_mix${datasetPaths.length}`
+    const suggested = `${defaultOutputDir}/${suggestedBase}_merged`
 
     setOutputName(suggested)
   }, [datasetPaths, defaultOutputDir, mode, outputName])

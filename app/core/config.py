@@ -28,6 +28,7 @@ class DatabaseSettings:
     pool_size: int = int(os.getenv("DB_POOL_SIZE", "5"))
     max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
     pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    use_null_pool: bool = os.getenv("DB_USE_NULL_POOL", "false").lower() in {"1", "true", "yes"}
 
     # @property
     # def url(self) -> str:

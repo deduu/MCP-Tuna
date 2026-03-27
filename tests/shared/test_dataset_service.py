@@ -424,6 +424,38 @@ async def test_split_invalid_ratios_returns_error(svc: DatasetService, sft_data:
     assert result["success"] is False
 
 
+async def test_split_compacts_long_jsonl_output_names(svc: DatasetService, sft_data: list, tmp_path: Path):
+    src = tmp_path / (
+        "this_is_a_very_long_dataset_name_that_is_hard_to_scan_in_split_outputs.jsonl"
+    )
+    await svc.save(sft_data, str(src))
+
+    result = await svc.split(str(src), str(tmp_path / "splits"))
+
+    assert result["success"] is True
+    for split_name in ("train", "val", "test"):
+        split_path = Path(result["splits"][split_name]["path"])
+        assert split_path.exists()
+        assert split_path.name.endswith(f"_{split_name}.jsonl")
+        assert len(split_path.stem) <= 30
+
+
+async def test_split_compacts_long_non_jsonl_output_names(svc: DatasetService, sft_data: list, tmp_path: Path):
+    src = tmp_path / (
+        "this_is_a_very_long_dataset_name_that_is_hard_to_scan_in_split_outputs.json"
+    )
+    await svc.save(sft_data, str(src), format="json")
+
+    result = await svc.split(str(src), str(tmp_path / "splits-json"), format="json")
+
+    assert result["success"] is True
+    for split_name in ("train", "val", "test"):
+        split_path = Path(result["splits"][split_name]["path"])
+        assert split_path.exists()
+        assert split_path.name.endswith(f"_{split_name}.json")
+        assert len(split_path.stem) <= 30
+
+
 # ---------------------------------------------------------------------------
 # merge
 # ---------------------------------------------------------------------------

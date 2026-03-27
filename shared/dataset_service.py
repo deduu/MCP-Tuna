@@ -17,6 +17,7 @@ from shared.multimodal_models import (
     extract_text_from_content,
     is_vlm_sample,
 )
+from shared.output_naming import compact_source_hint
 from shared.workspace_paths import resolve_workspace_path, to_workspace_relative_path
 
 
@@ -333,7 +334,7 @@ class DatasetService:
 
         out = resolve_workspace_path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        stem = p.stem
+        stem = compact_source_hint(p.name, 24, "dataset")
 
         splits: Dict[str, Dict[str, Any]] = {}
         for name, subset in [("train", train_data), ("val", val_data), ("test", test_data)]:
@@ -382,7 +383,7 @@ class DatasetService:
         # Pass 2 — stream into split files
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        stem = src.stem
+        stem = compact_source_hint(src.name, 24, "dataset")
 
         counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
         paths: Dict[str, Path] = {}

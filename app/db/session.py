@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine
 )
+from sqlalchemy.pool import NullPool
 
 from ..core.config import settings
 
@@ -48,13 +49,22 @@ class DatabaseSessionManager:
             await conn.run_sync(Base.metadata.create_all)
 
 
+_engine_kwargs = {
+    "pool_pre_ping": True,
+    "pool_recycle": 3600,
+}
+
+if settings.database.use_null_pool:
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs["pool_size"] = settings.database.pool_size
+    _engine_kwargs["max_overflow"] = settings.database.max_overflow
+
+
 # Global instance
 session_manager = DatabaseSessionManager(
     str(settings.database.url),
-    pool_size=settings.database.pool_size,
-    max_overflow=settings.database.max_overflow,
-    pool_pre_ping=True,
-    pool_recycle=3600,
+    **_engine_kwargs,
 )
 
 

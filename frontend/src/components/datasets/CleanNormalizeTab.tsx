@@ -188,8 +188,7 @@ export function CleanNormalizeTab() {
   }
 
   function buildOutputPath(filePath: string, toolName: string): string {
-    const shortTool = toolName.split('.').pop() ?? 'processed'
-    return buildDatasetOutputPath(filePath, shortTool)
+    return buildDatasetOutputPath(filePath, toolName)
   }
 
   async function runTool(

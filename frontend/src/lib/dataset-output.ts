@@ -1,3 +1,5 @@
+import { compactDatasetSuffix, compactSourceHint } from '@/lib/output-naming'
+
 const DATASET_OUTPUT_DIR_STORAGE_KEY = 'agentsoul.datasetOutputDir'
 const DEFAULT_DATASET_OUTPUT_DIR = 'data'
 
@@ -7,10 +9,6 @@ function normalizeSegment(value: string): string {
     .replace(/\\/g, '/')
     .replace(/\/+/g, '/')
     .replace(/\/$/, '')
-}
-
-function sanitizeStem(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'dataset'
 }
 
 export function getDefaultDatasetOutputDir(): string {
@@ -39,13 +37,8 @@ export function buildDatasetOutputPath(
   extension = 'jsonl',
   outputDir = getDefaultDatasetOutputDir(),
 ): string {
-  const normalizedSource = sourcePath.replace(/\\/g, '/')
-  const filename = normalizedSource.split('/').pop() || sourcePath
-  const dot = filename.lastIndexOf('.')
-  const stem = dot >= 0 ? filename.slice(0, dot) : filename
-  const readableStem = stem.replace(/^[0-9a-fA-F-]{36}_/, '')
-  const safeStem = sanitizeStem(readableStem)
-  const safeSuffix = sanitizeStem(suffix)
+  const safeStem = compactSourceHint(sourcePath, 24, 'dataset')
+  const safeSuffix = compactDatasetSuffix(suffix, 14)
   const dir = normalizeSegment(outputDir) || DEFAULT_DATASET_OUTPUT_DIR
   const safeExtension = extension.replace(/^\.+/, '') || 'jsonl'
   return `${dir}/${safeStem}_${safeSuffix}.${safeExtension}`
