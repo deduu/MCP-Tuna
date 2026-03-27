@@ -23,6 +23,7 @@ from .vlm_utils import (
     get_processor_tokenizer,
     resolve_dataset_base_dir,
 )
+from .training_recipe_service import TrainingRecipeService
 
 
 class TrainingService:
@@ -65,6 +66,45 @@ class TrainingService:
             return False, False
 
     @staticmethod
+    def _set_global_seed(seed: Optional[int]) -> None:
+        """Seed Python, NumPy, Torch, and Transformers before model/adapters are built."""
+        if seed is None:
+            return
+
+        seed = int(seed)
+
+        try:
+            import random
+
+            random.seed(seed)
+        except Exception:
+            pass
+
+        try:
+            import numpy as np
+
+            np.random.seed(seed % (2**32))
+        except Exception:
+            pass
+
+        try:
+            import torch
+
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+                torch.cuda.manual_seed_all(seed)
+        except Exception:
+            pass
+
+        try:
+            from transformers import set_seed
+
+            set_seed(seed)
+        except Exception:
+            pass
+
+    @staticmethod
     def _resolve_model_path(model_name: str) -> str:
         """Resolve HF cache wrapper dirs to a concrete snapshot path when needed."""
         path = Path(model_name)
@@ -99,10 +139,12 @@ class TrainingService:
                 kwargs.pop("gradient_accumulation_steps", 4)
             ),
             "learning_rate": float(kwargs.pop("learning_rate", 2e-4)),
+            "max_steps": int(kwargs.pop("max_steps", -1)),
             "weight_decay": float(kwargs.pop("weight_decay", 0.0)),
             "max_grad_norm": float(kwargs.pop("max_grad_norm", 1.0)),
             "lr_scheduler_type": str(kwargs.pop("lr_scheduler_type", "linear")),
             "warmup_ratio": float(kwargs.pop("warmup_ratio", 0.0)),
+            "warmup_steps": int(kwargs.pop("warmup_steps", 0)),
             "logging_steps": int(kwargs.pop("logging_steps", 10)),
             "save_steps": int(kwargs.pop("save_steps", 200)),
             "save_total_limit": int(kwargs.pop("save_total_limit", 2)),
@@ -122,6 +164,16 @@ class TrainingService:
         if isinstance(exc, KeyError) and exc.args == ("completion",):
             return True
         return str(exc).strip().strip('"').strip("'") == "completion"
+
+    @staticmethod
+    def _is_completion_only_loss_incompatible_error(exc: Exception) -> bool:
+        """Detect TRL stacks that reject completion-only loss with formatted datasets."""
+        message = str(exc)
+        return (
+            "completion_only_loss=True" in message
+            and "formatting function was provided" in message
+            and "incompatible" in message
+        )
 
     def _build_config(
         self,
@@ -177,6 +229,56 @@ class TrainingService:
         )
 
     @staticmethod
+    def _cast_trainable_parameters_to_fp32(model: Any) -> int:
+        """Match the notebook LoRA path by keeping trainable adapter weights in fp32."""
+        try:
+            import torch
+        except Exception:
+            return 0
+
+        cast_count = 0
+        named_parameters = getattr(model, "named_parameters", None)
+        if not callable(named_parameters):
+            return 0
+
+        for _name, param in named_parameters():
+            if not getattr(param, "requires_grad", False):
+                continue
+            if getattr(param, "dtype", None) == torch.float32:
+                cast_count += 1
+                continue
+            try:
+                param.data = param.data.to(torch.float32)
+                cast_count += 1
+            except Exception:
+                continue
+        return cast_count
+
+    def _apply_lora_to_model(
+        self,
+        model: Any,
+        peft_config: Any,
+        *,
+        cast_trainable_fp32: bool = True,
+    ) -> tuple[Any, Optional[Any], int]:
+        """Prefer explicit LoRA wrapping and fall back to trainer-managed PEFT when unavailable."""
+        try:
+            from peft import get_peft_model
+        except ImportError:
+            return model, peft_config, 0
+
+        try:
+            wrapped_model = get_peft_model(model, peft_config)
+        except Exception:
+            return model, peft_config, 0
+        cast_count = (
+            self._cast_trainable_parameters_to_fp32(wrapped_model)
+            if cast_trainable_fp32
+            else 0
+        )
+        return wrapped_model, None, cast_count
+
+    @staticmethod
     def _preflight_bnb_check() -> bool:
         """Verify bitsandbytes CUDA kernels in a subprocess.
 
@@ -219,11 +321,12 @@ class TrainingService:
         try:
             import bitsandbytes  # noqa: F401
             from transformers import BitsAndBytesConfig
+            compute_dtype = getattr(torch_module, "float16", torch_module.float32)
 
             return BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch_module.bfloat16,
+                bnb_4bit_compute_dtype=compute_dtype,
                 bnb_4bit_use_double_quant=True,
             )
         except Exception:
@@ -273,9 +376,10 @@ class TrainingService:
             )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
 
-        quantization_config = None
-        if load_in_4bit:
+        quantization_config = self._build_quantization_config(load_in_4bit, torch)
+        if load_in_4bit and quantization_config is None:
             # Preflight: verify bitsandbytes kernels in an isolated subprocess
             # so a CUDA segfault doesn't kill the MCP server.
             if not self._preflight_bnb_check():
@@ -291,7 +395,7 @@ class TrainingService:
                     quantization_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
-                        bnb_4bit_compute_dtype=torch.bfloat16,
+                        bnb_4bit_compute_dtype=torch.float16,
                         bnb_4bit_use_double_quant=True,
                     )
                 except Exception:
@@ -305,6 +409,8 @@ class TrainingService:
             local_files_only=local_files_only,
             low_cpu_mem_usage=True,
         )
+        if hasattr(model, "config"):
+            model.config.use_cache = False
 
         # Prepare quantized model for stable gradient computation
         if quantization_config is not None:
@@ -336,25 +442,81 @@ class TrainingService:
                 pass
 
     @staticmethod
+    def _merge_system_prompts(
+        default_system_prompt: Optional[str],
+        row_system_prompt: Optional[str],
+    ) -> Optional[str]:
+        default_text = str(default_system_prompt or "").strip()
+        row_text = str(row_system_prompt or "").strip()
+        if default_text and row_text:
+            return f"{default_text}\n\n{row_text}"
+        if row_text:
+            return row_text
+        if default_text:
+            return default_text
+        return None
+
+    @staticmethod
+    def _resolve_sft_schema(
+        dataset: Any,
+        prompt_column: str,
+        response_column: str,
+    ) -> Dict[str, Any]:
+        column_names = set(getattr(dataset, "column_names", []) or [])
+        if prompt_column in column_names and response_column in column_names:
+            return {
+                "kind": "prompt_response",
+                "prompt_column": prompt_column,
+                "response_column": response_column,
+            }
+        if {"system", "user", "assistant"}.issubset(column_names):
+            return {
+                "kind": "chat_triplet",
+                "system_column": "system",
+                "user_column": "user",
+                "assistant_column": "assistant",
+            }
+        return {"kind": "unsupported", "columns": sorted(column_names)}
+
+    @staticmethod
     def _prepare_sft_text_dataset(
         dataset: Any,
         tokenizer: Any,
         prompt_column: str,
         response_column: str,
+        system_prompt: Optional[str] = None,
+        system_column: Optional[str] = None,
+        user_column: Optional[str] = None,
+        assistant_column: Optional[str] = None,
+        text_only: bool = False,
     ) -> Any:
         """Normalize SFT rows to prompt/completion/text for TRL compatibility."""
 
         def to_sft_record(example: Dict[str, Any]) -> Dict[str, str]:
-            prompt = str(example.get(prompt_column) or "").strip()
-            completion = str(example.get(response_column) or "").strip()
-            messages = [
+            if user_column and assistant_column:
+                prompt = str(example.get(user_column) or "").strip()
+                completion = str(example.get(assistant_column) or "").strip()
+                effective_system_prompt = TrainingService._merge_system_prompts(
+                    system_prompt,
+                    example.get(system_column) if system_column else None,
+                )
+            else:
+                prompt = str(example.get(prompt_column) or "").strip()
+                completion = str(example.get(response_column) or "").strip()
+                effective_system_prompt = system_prompt
+
+            messages = []
+            if effective_system_prompt:
+                messages.append({"role": "system", "content": effective_system_prompt})
+            messages.extend([
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": completion},
-            ]
+            ])
             if hasattr(tokenizer, "apply_chat_template"):
                 text = tokenizer.apply_chat_template(messages, tokenize=False)
             else:
-                text = f"User: {prompt}\nAssistant: {completion}"
+                prefix = f"System: {effective_system_prompt}\n" if effective_system_prompt else ""
+                text = f"{prefix}User: {prompt}\nAssistant: {completion}"
             return {
                 "prompt": prompt,
                 "completion": completion,
@@ -362,11 +524,37 @@ class TrainingService:
             }
 
         dataset = dataset.map(to_sft_record)
-        keep_columns = {"prompt", "completion", "text"}
+        keep_columns = {"text"} if text_only else {"prompt", "completion", "text"}
         cols_to_remove = [c for c in dataset.column_names if c not in keep_columns]
         if cols_to_remove:
             dataset = dataset.remove_columns(cols_to_remove)
         return dataset
+
+    @staticmethod
+    def _register_special_tokens(
+        model: Any,
+        tokenizer: Any,
+        special_tokens: Optional[List[str]],
+    ) -> List[str]:
+        if not special_tokens or not hasattr(tokenizer, "add_special_tokens"):
+            return []
+
+        unique_tokens = [
+            token for token in dict.fromkeys(
+                str(token).strip() for token in special_tokens if str(token).strip()
+            )
+        ]
+        if not unique_tokens:
+            return []
+
+        added = tokenizer.add_special_tokens(
+            {"additional_special_tokens": unique_tokens}
+        )
+        if added and hasattr(model, "resize_token_embeddings"):
+            model.resize_token_embeddings(len(tokenizer))
+            if hasattr(model, "config"):
+                model.config.vocab_size = len(tokenizer)
+        return unique_tokens if added else []
 
     @staticmethod
     def _extract_latest_log_metric(
@@ -454,12 +642,8 @@ class TrainingService:
         resolved_model_name = self._resolve_model_path(model_name)
         local_files_only = bool(kwargs.pop("local_files_only", False))
         load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
-        cuda_available, bf16_supported = self._detect_precision()
-        model_dtype = (
-            torch.bfloat16
-            if bf16_supported
-            else (torch.float16 if cuda_available else torch.float32)
-        )
+        cuda_available, _bf16_supported = self._detect_precision()
+        model_dtype = torch.float16 if load_in_4bit and cuda_available else torch.float32
 
         processor = AutoProcessor.from_pretrained(
             resolved_model_name,
@@ -512,14 +696,23 @@ class TrainingService:
     ) -> None:
         """Best-effort checkpoint save when training is interrupted."""
         try:
-            trainer.save_model(output_dir)
+            self._save_trainer_model(trainer, output_dir)
             tokenizer.save_pretrained(output_dir)
         except Exception:
             pass
 
     @staticmethod
-    def _save_model_artifacts(trainer: Any, tokenizer: Any, output_dir: str) -> None:
+    def _save_trainer_model(trainer: Any, output_dir: str) -> None:
+        model = getattr(trainer, "model", None)
+        save_pretrained = getattr(model, "save_pretrained", None)
+        if callable(save_pretrained):
+            save_pretrained(output_dir)
+            return
         trainer.save_model(output_dir)
+
+    @staticmethod
+    def _save_model_artifacts(trainer: Any, tokenizer: Any, output_dir: str) -> None:
+        TrainingService._save_trainer_model(trainer, output_dir)
         tokenizer.save_pretrained(output_dir)
 
     @staticmethod
@@ -672,6 +865,8 @@ class TrainingService:
         completion_only_loss: bool = True,
         early_stopping_patience: Optional[int] = None,
         push_to_hub: Optional[str] = None,
+        recipe: Optional[str] = None,
+        special_tokens: Optional[List[str]] = None,
         extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -706,24 +901,35 @@ class TrainingService:
             }
 
         try:
+            kwargs = TrainingRecipeService.apply_defaults(
+                recipe_name=recipe,
+                trainer_type="sft",
+                kwargs=kwargs,
+            )
+            training_seed = int(kwargs.get("seed", 42))
+            requested_load_in_4bit = bool(kwargs.get("load_in_4bit", True))
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
             original_dataset = dataset
             original_evaluation_dataset = evaluation_dataset
 
-            if (
-                prompt_column not in dataset.column_names
-                or response_column not in dataset.column_names
-            ):
+            dataset_schema = self._resolve_sft_schema(
+                dataset,
+                prompt_column=prompt_column,
+                response_column=response_column,
+            )
+            if dataset_schema["kind"] == "unsupported":
                 return {
                     "success": False,
                     "error": (
-                        f"Dataset must contain '{prompt_column}' and"
-                        f" '{response_column}' columns"
+                        f"Dataset must contain '{prompt_column}' and "
+                        f"'{response_column}' columns or a chat-triplet schema "
+                        "with 'system', 'user', and 'assistant' columns"
                     ),
-                    "columns": list(getattr(dataset, "column_names", [])),
+                    "columns": dataset_schema["columns"],
                 }
 
+            self._set_global_seed(training_seed)
             # Load eval dataset from file if provided (and no in-memory eval dataset)
             if evaluation_dataset is None and eval_file_path:
                 eval_result = await self.load_dataset_from_file(
@@ -737,30 +943,89 @@ class TrainingService:
                 self._load_model_and_tokenizer, model_name, kwargs
             )
             cuda_available, bf16_supported = self._detect_precision()
+            recipe_config = TrainingRecipeService.get_recipe(recipe)
+            effective_special_tokens = list(special_tokens or [])
+            if recipe_config:
+                effective_special_tokens.extend(recipe_config.get("special_tokens", []))
+            applied_special_tokens = self._register_special_tokens(
+                model,
+                tokenizer,
+                effective_special_tokens,
+            )
+            system_prompt = (
+                recipe_config.get("system_prompt")
+                if isinstance(recipe_config, dict)
+                else None
+            )
+            use_notebook_text_only_dataset = (
+                dataset_schema["kind"] == "chat_triplet" and not completion_only_loss
+            )
 
             dataset = self._prepare_sft_text_dataset(
                 dataset=dataset,
                 tokenizer=tokenizer,
                 prompt_column=prompt_column,
                 response_column=response_column,
+                system_prompt=system_prompt,
+                system_column=dataset_schema.get("system_column"),
+                user_column=dataset_schema.get("user_column"),
+                assistant_column=dataset_schema.get("assistant_column"),
+                text_only=use_notebook_text_only_dataset,
             )
 
             # Format eval dataset the same way
             if evaluation_dataset is not None:
                 if isinstance(evaluation_dataset, list):
                     evaluation_dataset = Dataset.from_list(evaluation_dataset)
+                evaluation_schema = self._resolve_sft_schema(
+                    evaluation_dataset,
+                    prompt_column=prompt_column,
+                    response_column=response_column,
+                )
+                if evaluation_schema["kind"] == "unsupported":
+                    return {
+                        "success": False,
+                        "error": (
+                            "Evaluation dataset must contain prompt/response columns "
+                            "or a chat-triplet schema with system/user/assistant columns"
+                        ),
+                        "columns": evaluation_schema["columns"],
+                    }
                 evaluation_dataset = self._prepare_sft_text_dataset(
                     dataset=evaluation_dataset,
                     tokenizer=tokenizer,
                     prompt_column=prompt_column,
                     response_column=response_column,
+                    system_prompt=system_prompt,
+                    system_column=evaluation_schema.get("system_column"),
+                    user_column=evaluation_schema.get("user_column"),
+                    assistant_column=evaluation_schema.get("assistant_column"),
+                    text_only=(
+                        evaluation_schema["kind"] == "chat_triplet"
+                        and not completion_only_loss
+                    ),
                 )
 
             peft_config = None
+            lora_cast_count = 0
             if use_lora:
                 peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
+                model, peft_config, lora_cast_count = self._apply_lora_to_model(
+                    model,
+                    peft_config,
+                )
 
             has_eval = enable_evaluation and evaluation_dataset is not None
+            max_seq_length = int(kwargs.pop("max_seq_length", 2048))
+            packing = bool(kwargs.pop("packing", False))
+            if (
+                use_notebook_text_only_dataset
+                and requested_load_in_4bit
+                and "fp16" not in kwargs
+                and "bf16" not in kwargs
+            ):
+                kwargs["fp16"] = False
+                kwargs["bf16"] = False
             training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
 
             # Build SFTConfig-specific extra kwargs
@@ -768,6 +1033,14 @@ class TrainingService:
             sft_config_sig = inspect.signature(SFTConfig.__init__).parameters
             if "completion_only_loss" in sft_config_sig:
                 sft_extra["completion_only_loss"] = completion_only_loss
+            if "dataset_text_field" in sft_config_sig:
+                sft_extra["dataset_text_field"] = "text"
+            if "max_length" in sft_config_sig:
+                sft_extra["max_length"] = max_seq_length
+            elif "max_seq_length" in sft_config_sig:
+                sft_extra["max_seq_length"] = max_seq_length
+            if "packing" in sft_config_sig:
+                sft_extra["packing"] = packing
 
             training_args = self._build_config(
                 SFTConfig,
@@ -800,9 +1073,9 @@ class TrainingService:
                 # dataset already has a "text" column so newer TRL auto-detects it.
                 trainer_kwargs["formatting_func"] = lambda examples: examples["text"]
             if "max_seq_length" in trainer_sig:
-                trainer_kwargs["max_seq_length"] = int(kwargs.pop("max_seq_length", 2048))
+                trainer_kwargs["max_seq_length"] = max_seq_length
             if "packing" in trainer_sig:
-                trainer_kwargs["packing"] = bool(kwargs.pop("packing", False))
+                trainer_kwargs["packing"] = packing
             if "tokenizer" in trainer_sig:
                 trainer_kwargs["tokenizer"] = tokenizer
             elif "processing_class" in trainer_sig:
@@ -882,8 +1155,17 @@ class TrainingService:
                     "lora_r": lora_r,
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
+                    "lora_trainable_fp32_tensors": lora_cast_count,
                     "completion_only_loss": completion_only_loss,
+                    "dataset_format": (
+                        "text_only" if use_notebook_text_only_dataset else "structured"
+                    ),
+                    "max_steps": training_kwargs.get("max_steps"),
+                    "warmup_steps": training_kwargs.get("warmup_steps"),
+                    "seed": training_kwargs.get("seed"),
                     "resumed_from": checkpoint,
+                    "recipe": recipe,
+                    "special_tokens": applied_special_tokens,
                 },
                 "metrics": metrics,
                 "evaluation_results": eval_results,
@@ -893,9 +1175,12 @@ class TrainingService:
                 result["hub_url"] = hub_url
             return result
         except Exception as e:
-            if completion_only_loss and self._is_missing_completion_error(e):
+            if completion_only_loss and (
+                self._is_missing_completion_error(e)
+                or self._is_completion_only_loss_incompatible_error(e)
+            ):
                 logging.getLogger(__name__).warning(
-                    "SFT trainer expected a 'completion' column; retrying with "
+                    "SFT trainer rejected completion_only_loss; retrying with "
                     "completion_only_loss disabled for compatibility"
                 )
                 fallback = await self.train_model(
@@ -919,6 +1204,8 @@ class TrainingService:
                     completion_only_loss=False,
                     early_stopping_patience=early_stopping_patience,
                     push_to_hub=push_to_hub,
+                    recipe=recipe,
+                    special_tokens=special_tokens,
                     extra_callbacks=extra_callbacks,
                     **original_kwargs,
                 )
@@ -1154,6 +1441,7 @@ class TrainingService:
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         save_best_model: bool = True,
         evaluation_dataset: Optional[Any] = None,
+        recipe: Optional[str] = None,
         extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -1178,6 +1466,11 @@ class TrainingService:
             }
 
         try:
+            kwargs = TrainingRecipeService.apply_defaults(
+                recipe_name=recipe,
+                trainer_type="dpo",
+                kwargs=kwargs,
+            )
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
 
@@ -1274,6 +1567,7 @@ class TrainingService:
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
                     "resumed_from": checkpoint,
+                    "recipe": recipe,
                 },
                 "num_training_examples": len(dataset),
             }

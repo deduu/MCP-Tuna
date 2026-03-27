@@ -88,4 +88,5 @@ roadmap/
 
 # Misc
 uploads/
-
+notebooks/
+.cache/

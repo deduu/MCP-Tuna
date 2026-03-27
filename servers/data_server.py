@@ -212,6 +212,26 @@ class DataPrepServer:
         async def standardize_keys(data_points: List[Dict], target_format: str = "sft") -> str:
             return json.dumps(await self.normalizer.standardize_keys(data_points, target_format), indent=2)
 
+        @self.mcp.tool(
+            name="normalize.remap_fields",
+            description="Convert common chat or QA schemas into training-ready rows using a preset",
+        )
+        async def remap_fields(
+            data_points: List[Dict],
+            preset: str = "chat_triplet_to_sft",
+            keep_unmapped_fields: bool = False,
+            strip_whitespace: bool = True,
+        ) -> str:
+            return json.dumps(
+                await self.normalizer.remap_fields(
+                    data_points,
+                    preset=preset,
+                    keep_unmapped_fields=keep_unmapped_fields,
+                    strip_whitespace=strip_whitespace,
+                ),
+                indent=2,
+            )
+
         @self.mcp.tool(name="normalize.strip_text", description="Strip whitespace and normalize unicode")
         async def strip_text(data_points: List[Dict]) -> str:
             return json.dumps(await self.normalizer.strip_and_clean_text(data_points), indent=2)

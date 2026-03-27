@@ -55,7 +55,7 @@ export function TrainingDatasetField({
           >
             <option value="">▾</option>
             {datasets.map((dataset) => (
-              <option key={dataset.dataset_id} value={dataset.file_path}>
+              <option key={dataset.file_path} value={dataset.file_path}>
                 {dataset.file_path} ({dataset.row_count} rows)
               </option>
             ))}

@@ -141,6 +141,11 @@ export interface TrainingProgress {
   percent_complete: number
   gpu_memory_used_gb?: number
   gpu_memory_total_gb?: number
+  current_stage?: string
+  status_message?: string
+  stage_current?: number
+  stage_total?: number
+  stage_unit?: string
   log_history: Array<{
     loss: number
     learning_rate: number
@@ -152,6 +157,7 @@ export interface TrainingProgress {
 export interface Deployment {
   deployment_id: string
   name?: string
+  system_prompt?: string | null
   model_path: string
   adapter_path?: string
   endpoint: string

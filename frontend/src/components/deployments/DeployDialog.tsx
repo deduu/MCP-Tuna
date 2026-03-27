@@ -8,6 +8,7 @@ import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 export interface DeployDialogInitialValues {
   name?: string
+  systemPrompt?: string | null
   modelPath?: string
   adapterPath?: string
   port?: number
@@ -42,6 +43,7 @@ function inferDeploymentName(modelPath: string, adapterPath: string): string {
 
 export function DeployDialog({ open, onClose, type, initialValues }: DeployDialogProps) {
   const [name, setName] = useState('')
+  const [systemPrompt, setSystemPrompt] = useState('')
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
   const [port, setPort] = useState('8001')
@@ -59,6 +61,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
     const nextName = initialValues?.name ?? inferDeploymentName(nextModelPath, nextAdapterPath)
 
     setName(nextName)
+    setSystemPrompt(initialValues?.systemPrompt ?? '')
     setModelPath(initialValues?.modelPath ?? '')
     setAdapterPath(initialValues?.adapterPath ?? '')
     setPort(String(initialValues?.port ?? 8001))
@@ -84,6 +87,9 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
 
     if (name.trim()) {
       args.name = name.trim()
+    }
+    if (systemPrompt.trim()) {
+      args.system_prompt = systemPrompt.trim()
     }
 
     if (adapterPath.trim()) {
@@ -113,6 +119,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
 
   const resetForm = () => {
     setName('')
+    setSystemPrompt('')
     setModelPath('')
     setAdapterPath('')
     setPort('8001')
@@ -142,6 +149,20 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           />
           <p className="text-xs text-muted-foreground">
             Optional. Defaults to the model name, or a base-model plus adapter label for LoRA deployments.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium">Default System Prompt</label>
+          <textarea
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            rows={4}
+            placeholder="Optional. Set a default instruction for deployment chat."
+            className="flex min-h-[96px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional. This is reused as the default chat system prompt for this deployment and can still be overridden per conversation.
           </p>
         </div>
 

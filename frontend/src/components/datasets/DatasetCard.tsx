@@ -27,6 +27,7 @@ export function DatasetCard({ dataset, selected = false, onToggleSelect }: Datas
 
   const fileName = dataset.file_path.split(/[\\/]/).pop() ?? dataset.file_path
   const fileBaseName = fileName.includes('.') ? fileName.slice(0, fileName.lastIndexOf('.')) : fileName
+  const parentPath = dataset.file_path.replace(/[\\/][^\\/]+$/, '')
   const modifiedLabel = formatTimeAgo(dataset.modified_at)
 
   function downloadText(content: string, downloadName: string, mimeType: string) {
@@ -95,9 +96,14 @@ export function DatasetCard({ dataset, selected = false, onToggleSelect }: Datas
       <Card>
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="font-semibold text-sm truncate" title={dataset.file_path}>
-              {fileName}
-            </h3>
+            <div className="min-w-0 space-y-1">
+              <h3 className="font-semibold text-sm truncate" title={dataset.file_path}>
+                {fileName}
+              </h3>
+              <p className="text-[11px] text-muted-foreground truncate" title={dataset.file_path}>
+                {parentPath}
+              </p>
+            </div>
             <div className="flex items-center gap-2 shrink-0">
               {onToggleSelect && (
                 <label className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer">

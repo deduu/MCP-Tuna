@@ -17,6 +17,24 @@ interface OperationResult {
   [key: string]: unknown
 }
 
+const REMAP_PRESET_OPTIONS = [
+  {
+    value: 'chat_triplet_to_sft',
+    label: 'Chat Triplet -> SFT',
+    description: 'Maps system/user/assistant into instruction/input/output rows for direct SFT training.',
+  },
+  {
+    value: 'prompt_response_to_sft',
+    label: 'Prompt/Response -> SFT',
+    description: 'Maps prompt/response datasets into instruction/input/output rows.',
+  },
+  {
+    value: 'qa_to_sft',
+    label: 'Q/A -> SFT',
+    description: 'Maps question/answer datasets into instruction/input/output rows.',
+  },
+] as const
+
 export function CleanNormalizeTab() {
   const queryClient = useQueryClient()
   const { mutateAsync: executeTool, isPending } = useToolExecution()
@@ -24,6 +42,7 @@ export function CleanNormalizeTab() {
   const [selectedDataset, setSelectedDataset] = useState('')
   const [showCleanControls, setShowCleanControls] = useState(false)
   const [showNormControls, setShowNormControls] = useState(false)
+  const [remapPreset, setRemapPreset] = useState<(typeof REMAP_PRESET_OPTIONS)[number]['value']>('chat_triplet_to_sft')
   const [lastResult, setLastResult] = useState<OperationResult | null>(null)
 
   function toNumber(value: unknown, fallback = 0): number {
@@ -139,6 +158,22 @@ export function CleanNormalizeTab() {
       return insights
     }
 
+    if (toolName === 'normalize.remap_fields') {
+      insights.push(
+        `Schema conversion changed ${toNumber(result.changed_rows)} row(s) using preset ${String(result.preset ?? 'unknown')}.`,
+      )
+      const createdFields = Array.isArray(result.created_fields) ? result.created_fields.map(String).join(', ') : ''
+      const droppedFields = Array.isArray(result.dropped_fields) ? result.dropped_fields.map(String).join(', ') : ''
+      if (createdFields) {
+        insights.push(`Created fields: ${createdFields}.`)
+      }
+      if (droppedFields) {
+        insights.push(`Dropped source fields: ${droppedFields}.`)
+      }
+      insights.push(`Converted rows are ready for ${String(result.target_format ?? 'sft').toUpperCase()} training.`)
+      return insights
+    }
+
     if (toolName === 'normalize.strip_text') {
       insights.push(
         `Text cleanup changed ${toNumber(result.changed_rows)} row(s) across ${toNumber(result.changed_fields)} field(s).`,
@@ -157,7 +192,11 @@ export function CleanNormalizeTab() {
     return buildDatasetOutputPath(filePath, shortTool)
   }
 
-  async function runTool(toolName: string) {
+  async function runTool(
+    toolName: string,
+    extraArgs: Record<string, unknown> = {},
+    outputSuffix?: string,
+  ) {
     if (!selectedDataset) return
     try {
       const loaded = await executeTool({
@@ -175,13 +214,20 @@ export function CleanNormalizeTab() {
 
       const result = await executeTool({
         toolName,
-        args: { data_points: dataPoints },
+        args: { data_points: dataPoints, ...extraArgs },
       })
       const resultObj = result as Record<string, unknown>
+      if (resultObj.success === false) {
+        throw new Error(
+          typeof resultObj.error === 'string' && resultObj.error.trim()
+            ? resultObj.error
+            : `${toolName} failed`,
+        )
+      }
       const processed = Array.isArray(resultObj.data_points)
         ? (resultObj.data_points as Array<Record<string, unknown>>)
         : []
-      const outputPath = buildOutputPath(selectedDataset, toolName)
+      const outputPath = buildOutputPath(selectedDataset, outputSuffix ?? toolName)
 
       if (processed.length > 0) {
         await executeTool({
@@ -373,6 +419,42 @@ export function CleanNormalizeTab() {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4" />
+              Convert Schema
+            </CardTitle>
+            <CardDescription>Turn chat or QA datasets into instruction/input/output rows you can train on directly</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Preset</label>
+              <select
+                value={remapPreset}
+                onChange={(e) => setRemapPreset(e.target.value as (typeof REMAP_PRESET_OPTIONS)[number]['value'])}
+                className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                disabled={isPending || !selectedDataset}
+              >
+                {REMAP_PRESET_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {REMAP_PRESET_OPTIONS.find((option) => option.value === remapPreset)?.description}
+            </p>
+            <Button
+              onClick={() => runTool('normalize.remap_fields', { preset: remapPreset }, `remap_${remapPreset}`)}
+              disabled={isPending || !selectedDataset}
+            >
+              Convert And Save
+            </Button>
           </CardContent>
         </Card>
       </div>

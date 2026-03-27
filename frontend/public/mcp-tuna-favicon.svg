@@ -1,0 +1,35 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>MCP Tuna favicon</title>
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E0F2FE"/>
+      <stop offset="1" stop-color="#DBEAFE"/>
+    </linearGradient>
+    <linearGradient id="body" x1="10" y1="14" x2="50" y2="46" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#06B6D4"/>
+      <stop offset="0.55" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="22" y1="18" x2="38" y2="36" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#bg)"/>
+  <path d="M16 33C20 24 30 17 42 17C47 17 52 18 56 21L61 16L60 27C62 29 64 31 65 33C64 35 62 38 60 40L61 51L56 46C52 48 47 49 42 49C30 49 20 42 16 33H8L12 29L16 33Z" fill="url(#body)" transform="translate(-5 -1)"/>
+  <path d="M19 32C22 26 29 22 37 22C40 22 43 23 46 24C44 29 44 36 46 41C43 42 40 43 37 43C29 43 22 39 19 33V32Z" fill="url(#accent)"/>
+  <path d="M38 26C43 26 47 28 49 32C47 36 43 39 38 39C33 39 29 36 27 32C29 28 33 26 38 26Z" fill="#0F172A" fill-opacity="0.14"/>
+  <circle cx="41" cy="31" r="3.2" fill="#E0F2FE"/>
+  <circle cx="42.2" cy="30" r="1.1" fill="#0F172A" fill-opacity="0.5"/>
+
+  <circle cx="15" cy="18" r="3.2" fill="#22D3EE"/>
+  <circle cx="12" cy="42" r="3" fill="#3B82F6"/>
+  <circle cx="51" cy="16" r="3" fill="#60A5FA"/>
+  <circle cx="51" cy="48" r="3" fill="#2563EB"/>
+
+  <path d="M20 25L16.5 20" stroke="#7DD3FC" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M18 38L14 41" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M47 24L49 19" stroke="#93C5FD" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M47 40L49 45" stroke="#60A5FA" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

@@ -83,6 +83,7 @@ class HostingConfig(BaseModel):
     model_path: str
     adapter_path: Optional[str] = None
     name: Optional[str] = None
+    system_prompt: Optional[str] = None
     host: str = "0.0.0.0"
     port: int = 8001
     transport: str = "http"  # http | stdio
@@ -99,6 +100,8 @@ class ChatConfig(BaseModel):
     top_p: float = 0.95
     top_k: int = 50
     system_prompt: Optional[str] = None
+    quantization: Optional[str] = None
     streaming: bool = True
     modality: str = "text"  # text | vision-language
     api_path: Optional[str] = None
+    use_tokenizer_chat_template: bool = False

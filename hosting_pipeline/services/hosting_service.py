@@ -58,6 +58,19 @@ def _deployment_name(deployment: Dict[str, Any]) -> str | None:
     return None
 
 
+def _deployment_system_prompt(deployment: Dict[str, Any]) -> str | None:
+    system_prompt = deployment.get("system_prompt")
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        return system_prompt.strip()
+
+    metadata = deployment.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_prompt = metadata.get("system_prompt")
+        if isinstance(metadata_prompt, str) and metadata_prompt.strip():
+            return metadata_prompt.strip()
+    return None
+
+
 class HostingService:
     """Manages model deployments as MCP servers or FastAPI endpoints."""
 
@@ -70,6 +83,12 @@ class HostingService:
         name = _deployment_name(deployment)
         if name:
             metadata["name"] = name
+        system_prompt = _deployment_system_prompt(deployment)
+        if system_prompt:
+            metadata["system_prompt"] = system_prompt
+        quantization = deployment.get("quantization")
+        if isinstance(quantization, str) and quantization.strip():
+            metadata["quantization"] = quantization.strip()
         payload = {
             "deployment_id": deployment["id"],
             "status": status,
@@ -224,6 +243,8 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "name": config.name,
+                "system_prompt": config.system_prompt,
+                "quantization": config.quantization,
                 "type": "mcp",
                 "modality": config.modality,
                 "model_path": config.model_path,
@@ -456,6 +477,8 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "name": config.name,
+                "system_prompt": config.system_prompt,
+                "quantization": config.quantization,
                 "type": "api",
                 "modality": config.modality,
                 "model_path": config.model_path,
@@ -554,6 +577,7 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "name": config.name,
+                "system_prompt": config.system_prompt,
                 "type": "mcp",
                 "modality": "vision-language",
                 "model_path": config.model_path,
@@ -664,6 +688,7 @@ class HostingService:
             self._deployments[deployment_id] = {
                 "id": deployment_id,
                 "name": config.name,
+                "system_prompt": config.system_prompt,
                 "type": "api",
                 "modality": "vision-language",
                 "model_path": config.model_path,
@@ -738,6 +763,8 @@ class HostingService:
             }
             if _deployment_name(dep):
                 deployment["name"] = _deployment_name(dep)
+            if _deployment_system_prompt(dep):
+                deployment["system_prompt"] = _deployment_system_prompt(dep)
             routes = dep.get("routes")
             if routes:
                 deployment["routes"] = routes
@@ -761,6 +788,11 @@ class HostingService:
                     "transport": dep.get("transport", "http"),
                     "status": "stopped",
                     "endpoint": dep.get("endpoint", ""),
+                    **(
+                        {"system_prompt": _deployment_system_prompt(dep)}
+                        if _deployment_system_prompt(dep)
+                        else {}
+                    ),
                     **({"name": _deployment_name(dep)} if _deployment_name(dep) else {}),
                     **({"routes": dep.get("routes", [])} if dep.get("routes") else {}),
                 }
@@ -842,6 +874,7 @@ class HostingService:
                 "model_path": persisted.get("model_path"),
                 "adapter_path": persisted.get("adapter_path"),
                 "endpoint": persisted.get("endpoint"),
+                "system_prompt": _deployment_system_prompt(persisted),
                 "created_at": persisted.get("created_at"),
                 "updated_at": persisted.get("updated_at"),
                 "stopped_at": persisted.get("stopped_at"),
@@ -878,6 +911,8 @@ class HostingService:
             result["stopped_at"] = persisted.get("stopped_at")
         if _deployment_name(dep):
             result["name"] = _deployment_name(dep)
+        if _deployment_system_prompt(dep):
+            result["system_prompt"] = _deployment_system_prompt(dep)
         if dep.get("routes"):
             result["routes"] = dep["routes"]
 

@@ -1,24 +1,48 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { DatasetInfo } from '@/api/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Layers2, Search, Upload, X } from 'lucide-react'
+import { Layers2, RefreshCw, Search, Upload, X } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  formatDatasetLibraryRootsInput,
+  parseDatasetLibraryRootsInput,
+  resetDatasetLibraryRoots,
+  setDatasetLibraryRoots,
+} from '@/lib/dataset-library-roots'
 import { DatasetCard } from './DatasetCard'
 import { SplitMergeDialog } from './SplitMergeDialog'
 
 interface DatasetLibraryProps {
   datasets: DatasetInfo[]
   isLoading: boolean
+  scanRoots: string[]
+  prunedStaleRecords: number
+  onRefresh: () => void
+  onScanRootsChange: (roots: string[]) => void
   onSwitchToImport: () => void
 }
 
-export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: DatasetLibraryProps) {
+export function DatasetLibrary({
+  datasets,
+  isLoading,
+  scanRoots,
+  prunedStaleRecords,
+  onRefresh,
+  onScanRootsChange,
+  onSwitchToImport,
+}: DatasetLibraryProps) {
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('name')
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [showMerge, setShowMerge] = useState(false)
+  const [rootsDraft, setRootsDraft] = useState(() => formatDatasetLibraryRootsInput(scanRoots))
+
+  useEffect(() => {
+    setRootsDraft(formatDatasetLibraryRootsInput(scanRoots))
+  }, [scanRoots])
 
   const filtered = useMemo(() => {
     let result = datasets
@@ -58,6 +82,20 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
     })
   }
 
+  function handleSaveRoots() {
+    const nextRoots = setDatasetLibraryRoots(parseDatasetLibraryRootsInput(rootsDraft))
+    setRootsDraft(formatDatasetLibraryRootsInput(nextRoots))
+    onScanRootsChange(nextRoots)
+    toast.success(`Library now scans ${nextRoots.length} path${nextRoots.length === 1 ? '' : 's'}`)
+  }
+
+  function handleResetRoots() {
+    const nextRoots = resetDatasetLibraryRoots()
+    setRootsDraft(formatDatasetLibraryRootsInput(nextRoots))
+    onScanRootsChange(nextRoots)
+    toast.success('Library paths reset to the default scan roots')
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -73,6 +111,45 @@ export function DatasetLibrary({ datasets, isLoading, onSwitchToImport }: Datase
 
   return (
     <div className="space-y-4">
+      <div className="rounded-lg border border-border/60 bg-secondary/10 p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold">Library Paths</h3>
+            <p className="text-xs text-muted-foreground">
+              One file or directory path per line. Relative paths resolve from the workspace root.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRefresh}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+
+        <textarea
+          value={rootsDraft}
+          onChange={(e) => setRootsDraft(e.target.value)}
+          className="min-h-28 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          placeholder={'data\noutput\nuploads\nnotebooks'}
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">
+            {scanRoots.length} scan path{scanRoots.length === 1 ? '' : 's'}
+          </Badge>
+          {prunedStaleRecords > 0 && (
+            <Badge variant="warning">
+              Removed {prunedStaleRecords} stale record{prunedStaleRecords === 1 ? '' : 's'}
+            </Badge>
+          )}
+          <Button size="sm" onClick={handleSaveRoots}>
+            Save Paths
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleResetRoots}>
+            Reset Defaults
+          </Button>
+        </div>
+      </div>
+
       <div className="flex items-center gap-3">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

@@ -71,6 +71,7 @@ class TunaGateway:
 
         # Lazily-initialized services (avoid heavy imports at gateway startup)
         self._generator_svc = None
+        self._hf_recipe_svc = None
         self._cleaning_svc = None
         self._normalization_svc = None
         self._evaluator_svc = None
@@ -83,6 +84,7 @@ class TunaGateway:
         self._ft_evaluator_svc = None
         self._job_manager_instance = None
         self._workflow_job_manager_instance = None
+        self._dataset_job_manager_instance = None
         self._dataset_svc = None
         self._file_svc = None
         self._chat_sessions: Dict[str, Any] = {}
@@ -104,6 +106,19 @@ class TunaGateway:
         if deployment.get("transport") != "http" or not deployment_host:
             return None
         return f"http://{deployment_host}:{deployment['port']}"
+
+    @staticmethod
+    def _deployment_system_prompt(deployment: Dict[str, Any]) -> Optional[str]:
+        system_prompt = deployment.get("system_prompt")
+        if isinstance(system_prompt, str) and system_prompt.strip():
+            return system_prompt.strip()
+
+        metadata = deployment.get("metadata")
+        if isinstance(metadata, dict):
+            metadata_prompt = metadata.get("system_prompt")
+            if isinstance(metadata_prompt, str) and metadata_prompt.strip():
+                return metadata_prompt.strip()
+        return None
 
     @staticmethod
     def _conversation_title(content: Any) -> Optional[str]:
@@ -219,6 +234,7 @@ class TunaGateway:
         top_p: float = 0.95,
         top_k: int = 50,
         system_prompt: Optional[str] = None,
+        quantization: Optional[str] = None,
         prefer_runtime_metrics: bool = False,
     ) -> Dict[str, Any]:
         from hosting_pipeline.services.chat_service import ChatSession
@@ -253,6 +269,7 @@ class TunaGateway:
         resolved_adapter_path = adapter_path
         resolved_api_path = "/generate"
         modality = "text"
+        use_tokenizer_chat_template = False
         persisted_conversation = None
 
         if conversation_id:
@@ -276,6 +293,7 @@ class TunaGateway:
                         "success": False,
                         "error": f"Deployment {deployment_id} not found",
                     }
+            system_prompt = system_prompt or self._deployment_system_prompt(deployment)
 
             deployment_endpoint = self._deployment_endpoint(deployment)
             modality = deployment.get("modality", "text")
@@ -291,8 +309,12 @@ class TunaGateway:
             else:
                 resolved_model_path = deployment.get("model_path")
                 resolved_adapter_path = deployment.get("adapter_path")
+                quantization = quantization or deployment.get("quantization")
                 provider = deployment.get("provider")
                 inference_service = deployment.get("inference_service")
+                use_tokenizer_chat_template = True
+        elif resolved_model_path:
+            use_tokenizer_chat_template = True
 
         config = ChatConfig(
             endpoint=resolved_endpoint,
@@ -303,8 +325,10 @@ class TunaGateway:
             top_p=top_p,
             top_k=top_k,
             system_prompt=system_prompt,
+            quantization=quantization,
             modality=modality,
             api_path=resolved_api_path,
+            use_tokenizer_chat_template=use_tokenizer_chat_template,
         )
         session = ChatSession(
             config,
@@ -354,6 +378,7 @@ class TunaGateway:
                 top_p=float(payload.get("top_p", 0.95)),
                 top_k=int(payload.get("top_k", 50)),
                 system_prompt=payload.get("system_prompt"),
+                quantization=payload.get("quantization"),
                 prefer_runtime_metrics=bool(payload.get("prefer_runtime_metrics", False)),
             )
             if not session_result.get("success"):
@@ -421,6 +446,16 @@ class TunaGateway:
             llm = create_llm(gen_config)
             self._generator_svc = PipelineService(llm, gen_config)
         return self._generator_svc
+
+    @property
+    def hf_recipe_service(self):
+        if self._hf_recipe_svc is None:
+            from data_generator_pipeline.services.hf_recipe_service import (
+                HFDatasetRecipeService,
+            )
+
+            self._hf_recipe_svc = HFDatasetRecipeService()
+        return self._hf_recipe_svc
 
     @property
     def cleaner(self):
@@ -576,6 +611,13 @@ class TunaGateway:
             from shared.training_jobs import TrainingJobManager
             self._workflow_job_manager_instance = TrainingJobManager(max_concurrent=1, namespace="workflow")
         return self._workflow_job_manager_instance
+
+    @property
+    def dataset_job_manager(self):
+        if self._dataset_job_manager_instance is None:
+            from shared.training_jobs import TrainingJobManager
+            self._dataset_job_manager_instance = TrainingJobManager(max_concurrent=1, namespace="dataset")
+        return self._dataset_job_manager_instance
 
     @property
     def dataset_service(self):
@@ -2013,6 +2055,220 @@ class TunaGateway:
             except Exception as e:
                 return json.dumps({"success": False, "error": str(e)}, indent=2)
 
+        @self.mcp.tool(
+            name="generate.list_hf_recipes",
+            description=(
+                "List built-in Hugging Face dataset composition recipes. "
+                "These presets are additive conveniences for multi-source dataset assembly."
+            ),
+        )
+        async def list_hf_recipes() -> str:
+            result = await self.hf_recipe_service.list_recipes()
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="generate.get_hf_recipe",
+            description="Get the full definition of a built-in Hugging Face dataset recipe.",
+        )
+        async def get_hf_recipe(recipe_name: str) -> str:
+            result = await self.hf_recipe_service.get_recipe(recipe_name)
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="generate.compose_hf_dataset",
+            description=(
+                "Compose one or more Hugging Face datasets into training-ready rows. "
+                "Accepts either a built-in recipe_name or a JSON string of sources. "
+                "Supports source-level row caps, rename/drop rules, traceability columns, "
+                "and normalization to SFT or DPO formats."
+            ),
+        )
+        async def compose_hf_dataset(
+            recipe_name: Optional[str] = None,
+            sources: Optional[str] = None,
+            shuffle: bool = True,
+            seed: int = 42,
+            max_rows_per_source: Optional[int] = None,
+            target_format: Optional[TechniqueName] = None,
+        ) -> str:
+            parsed_sources = json.loads(sources) if sources else None
+            result = await self.hf_recipe_service.compose_dataset(
+                recipe_name=recipe_name,
+                sources=parsed_sources,
+                shuffle=shuffle,
+                seed=seed,
+                max_rows_per_source=max_rows_per_source,
+                target_format=target_format,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="generate.compose_hf_dataset_async",
+            description=(
+                "Start a background Hugging Face dataset blend job and save the result to disk. "
+                "Use generate.hf_blend_job_status(job_id) to monitor progress. "
+                "Accepts either a built-in recipe_name or a JSON string of sources."
+            ),
+        )
+        async def compose_hf_dataset_async(
+            output_path: str,
+            recipe_name: Optional[str] = None,
+            sources: Optional[str] = None,
+            shuffle: bool = True,
+            seed: int = 42,
+            max_rows_per_source: Optional[int] = None,
+            target_format: Optional[TechniqueName] = None,
+            format: DatasetSaveFormat = "jsonl",
+        ) -> str:
+            parsed_sources = json.loads(sources) if sources else None
+            job = self.dataset_job_manager.create_job(
+                trainer_type="hf_blend",
+                base_model="",
+                output_dir=str(Path(output_path).parent),
+                config_summary={
+                    "recipe_name": recipe_name,
+                    "target_format": target_format,
+                    "output_path": output_path,
+                    "format": format,
+                    "shuffle": shuffle,
+                    "seed": seed,
+                    "max_rows_per_source": max_rows_per_source,
+                    "source_count": len(parsed_sources or []),
+                },
+            )
+
+            async def _run_blend(extra_callbacks=None):
+                self.dataset_job_manager.update_progress(
+                    job.job_id,
+                    current_step=0,
+                    max_steps=2,
+                    percent_complete=5.0,
+                    status_message="Composing Hugging Face dataset blend",
+                    stage_current=1,
+                    stage_total=2,
+                    stage_unit="step",
+                    current_stage="compose",
+                )
+                result = await self.hf_recipe_service.compose_dataset(
+                    recipe_name=recipe_name,
+                    sources=parsed_sources,
+                    shuffle=shuffle,
+                    seed=seed,
+                    max_rows_per_source=max_rows_per_source,
+                    target_format=target_format,
+                )
+                if not result.get("success"):
+                    raise RuntimeError(str(result.get("error") or "HF dataset composition failed"))
+
+                self.dataset_job_manager.update_progress(
+                    job.job_id,
+                    current_step=1,
+                    max_steps=2,
+                    percent_complete=75.0,
+                    status_message="Saving composed dataset",
+                    stage_current=2,
+                    stage_total=2,
+                    stage_unit="step",
+                    current_stage="save",
+                )
+                save_result = await self.dataset_service.save(
+                    data_points=result["data_points"],
+                    output_path=output_path,
+                    format=format,
+                )
+                if not save_result.get("success"):
+                    raise RuntimeError(str(save_result.get("error") or "Dataset save failed"))
+
+                self.dataset_job_manager.update_progress(
+                    job.job_id,
+                    current_step=2,
+                    max_steps=2,
+                    percent_complete=100.0,
+                    status_message="Dataset blend completed",
+                    stage_current=2,
+                    stage_total=2,
+                    stage_unit="step",
+                    current_stage="completed",
+                )
+                return {
+                    "recipe_name": recipe_name,
+                    "target_format": result.get("target_format"),
+                    "count": result.get("count"),
+                    "per_source_counts": result.get("per_source_counts"),
+                    "save_result": save_result,
+                }
+
+            await self.dataset_job_manager.start_job(job.job_id, _run_blend)
+            return json.dumps({
+                "success": True,
+                "job_id": job.job_id,
+                "status": "running",
+                "message": (
+                    "HF dataset blend started. Use generate.hf_blend_job_status to monitor progress."
+                ),
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="generate.hf_blend_job_status",
+            description="Get the current status of a background Hugging Face dataset blend job.",
+        )
+        async def hf_blend_job_status(job_id: str) -> str:
+            job = await self.dataset_job_manager.aget_job(job_id)
+            if job is None:
+                return json.dumps({"success": False, "error": f"Job not found: {job_id}"}, indent=2)
+            return json.dumps({"success": True, **job.model_dump()}, indent=2)
+
+        @self.mcp.tool(
+            name="generate.list_hf_blend_jobs",
+            description="List background Hugging Face dataset blend jobs.",
+        )
+        async def list_hf_blend_jobs(
+            status: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            from shared.training_jobs import JobStatus as JS
+            status_enum = JS(status) if status else None
+            jobs = await self.dataset_job_manager.alist_jobs(status=status_enum, limit=limit)
+            return json.dumps({
+                "success": True,
+                "count": len(jobs),
+                "jobs": [j.model_dump() for j in jobs],
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="generate.cancel_hf_blend_job",
+            description="Cancel a running Hugging Face dataset blend job.",
+        )
+        async def cancel_hf_blend_job(job_id: str) -> str:
+            success = await self.dataset_job_manager.acancel_job(job_id)
+            if not success:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or not running: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Cancellation requested.",
+            }, indent=2)
+
+        @self.mcp.tool(
+            name="generate.delete_hf_blend_job",
+            description="Delete a finished Hugging Face dataset blend job record.",
+        )
+        async def delete_hf_blend_job(job_id: str) -> str:
+            deleted = await self.dataset_job_manager.adelete_job(job_id)
+            if not deleted:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Job not found or still active: {job_id}",
+                }, indent=2)
+            return json.dumps({
+                "success": True,
+                "job_id": job_id,
+                "message": "Dataset blend job deleted.",
+            }, indent=2)
+
     # -- Clean --
     def _register_clean_tools(self):
         @self.mcp.tool(name="clean.dataset",
@@ -2073,6 +2329,26 @@ class TunaGateway:
                        description="Rename keys to match target format")
         async def standardize_keys(data_points: List[Dict], target_format: TechniqueName = "sft") -> str:
             return json.dumps(await self.normalizer.standardize_keys(data_points, target_format), indent=2)
+
+        @self.mcp.tool(
+            name="normalize.remap_fields",
+            description="Convert common chat or QA schemas into training-ready rows using a preset",
+        )
+        async def remap_fields(
+            data_points: List[Dict],
+            preset: str = "chat_triplet_to_sft",
+            keep_unmapped_fields: bool = False,
+            strip_whitespace: bool = True,
+        ) -> str:
+            return json.dumps(
+                await self.normalizer.remap_fields(
+                    data_points,
+                    preset=preset,
+                    keep_unmapped_fields=keep_unmapped_fields,
+                    strip_whitespace=strip_whitespace,
+                ),
+                indent=2,
+            )
 
         @self.mcp.tool(name="normalize.strip_text",
                        description="Strip whitespace and normalize unicode")
@@ -2234,6 +2510,7 @@ class TunaGateway:
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
             num_epochs: int = 3,
+            max_steps: int = -1,
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
@@ -2244,16 +2521,24 @@ class TunaGateway:
             push_to_hub: Optional[str] = None,
             lr_scheduler_type: str = "linear",
             warmup_ratio: float = 0.0,
+            warmup_steps: int = 0,
             weight_decay: float = 0.0,
             max_grad_norm: float = 1.0,
             learning_rate: float = 2e-4,
             report_to: Optional[str] = None,
+            logging_steps: int = 10,
+            save_steps: int = 200,
+            seed: int = 42,
+            bf16: bool = False,
+            fp16: bool = False,
             max_seq_length: int = 2048,
             per_device_train_batch_size: int = 1,
             gradient_accumulation_steps: int = 4,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
             load_in_4bit: bool = True,
+            recipe: Optional[str] = None,
+            special_tokens: Optional[List[str]] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -2274,17 +2559,26 @@ class TunaGateway:
                 eval_file_path=eval_file_path,
                 push_to_hub=push_to_hub,
                 lr_scheduler_type=lr_scheduler_type,
+                max_steps=max_steps,
                 warmup_ratio=warmup_ratio,
+                warmup_steps=warmup_steps,
                 weight_decay=weight_decay,
                 max_grad_norm=max_grad_norm,
                 learning_rate=learning_rate,
                 report_to=report_to or [],
+                logging_steps=logging_steps,
+                save_steps=save_steps,
+                seed=seed,
+                bf16=bf16,
+                fp16=fp16,
                 max_seq_length=max_seq_length,
                 per_device_train_batch_size=per_device_train_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 optim=optim,
                 load_in_4bit=load_in_4bit,
+                recipe=recipe,
+                special_tokens=special_tokens,
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2353,6 +2647,7 @@ class TunaGateway:
             lora_r: int = 8,
             load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
+            recipe: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -2369,6 +2664,7 @@ class TunaGateway:
                 lora_r=lora_r,
                 load_in_4bit=load_in_4bit,
                 resume_from_checkpoint=resume_from_checkpoint,
+                recipe=recipe,
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2623,6 +2919,7 @@ class TunaGateway:
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
             num_epochs: int = 3,
+            max_steps: int = -1,
             use_lora: bool = True,
             lora_r: int = 8,
             lora_alpha: int = 16,
@@ -2633,16 +2930,24 @@ class TunaGateway:
             push_to_hub: Optional[str] = None,
             lr_scheduler_type: str = "linear",
             warmup_ratio: float = 0.0,
+            warmup_steps: int = 0,
             weight_decay: float = 0.0,
             max_grad_norm: float = 1.0,
             learning_rate: float = 2e-4,
             report_to: Optional[str] = None,
+            logging_steps: int = 10,
+            save_steps: int = 200,
+            seed: int = 42,
+            bf16: bool = False,
+            fp16: bool = False,
             max_seq_length: int = 2048,
             per_device_train_batch_size: int = 1,
             gradient_accumulation_steps: int = 4,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
             load_in_4bit: bool = True,
+            recipe: Optional[str] = None,
+            special_tokens: Optional[List[str]] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -2658,6 +2963,7 @@ class TunaGateway:
                     "batch_size": per_device_train_batch_size,
                     "learning_rate": learning_rate,
                     "lora_dropout": lora_dropout,
+                    "max_steps": max_steps,
                     "load_in_4bit": load_in_4bit,
                 },
             )
@@ -2678,19 +2984,28 @@ class TunaGateway:
                     eval_file_path=eval_file_path,
                     push_to_hub=push_to_hub,
                     lr_scheduler_type=lr_scheduler_type,
+                    max_steps=max_steps,
                     warmup_ratio=warmup_ratio,
+                    warmup_steps=warmup_steps,
                     weight_decay=weight_decay,
                     max_grad_norm=max_grad_norm,
                     learning_rate=learning_rate,
                     report_to=report_to or [],
+                    logging_steps=logging_steps,
+                    save_steps=save_steps,
+                    seed=seed,
+                    bf16=bf16,
+                    fp16=fp16,
                     max_seq_length=max_seq_length,
                     per_device_train_batch_size=per_device_train_batch_size,
                     gradient_accumulation_steps=gradient_accumulation_steps,
-                    gradient_checkpointing=gradient_checkpointing,
-                    optim=optim,
-                    load_in_4bit=load_in_4bit,
-                    extra_callbacks=extra_callbacks,
-                )
+                     gradient_checkpointing=gradient_checkpointing,
+                     optim=optim,
+                     load_in_4bit=load_in_4bit,
+                     recipe=recipe,
+                     special_tokens=special_tokens,
+                     extra_callbacks=extra_callbacks,
+                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
             return json.dumps({
@@ -2783,6 +3098,7 @@ class TunaGateway:
             lora_r: int = 8,
             load_in_4bit: bool = True,
             resume_from_checkpoint: Optional[str] = None,
+            recipe: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -2812,6 +3128,7 @@ class TunaGateway:
                     lora_r=lora_r,
                     load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
+                    recipe=recipe,
                     extra_callbacks=extra_callbacks,
                 )
 
@@ -3342,11 +3659,12 @@ class TunaGateway:
             name: Optional[str] = None,
             port: int = 8001,
             quantization: Optional[str] = None,
+            system_prompt: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
                 name=name,
-                port=port, quantization=quantization,
+                port=port, quantization=quantization, system_prompt=system_prompt,
             )
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
 
@@ -3362,6 +3680,7 @@ class TunaGateway:
             adapter_path: Optional[str] = None,
             name: Optional[str] = None,
             port: int = 8001,
+            system_prompt: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
@@ -3369,6 +3688,7 @@ class TunaGateway:
                 name=name,
                 port=port,
                 modality="vision-language",
+                system_prompt=system_prompt,
             )
             return json.dumps(await self.hoster.deploy_vlm_as_mcp(config), indent=2)
 
@@ -3385,11 +3705,12 @@ class TunaGateway:
             name: Optional[str] = None,
             port: int = 8001,
             quantization: Optional[str] = None,
+            system_prompt: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
                 name=name,
-                port=port, quantization=quantization,
+                port=port, quantization=quantization, system_prompt=system_prompt,
             )
             return json.dumps(await self.hoster.deploy_as_api(config), indent=2)
 
@@ -3405,6 +3726,7 @@ class TunaGateway:
             adapter_path: Optional[str] = None,
             name: Optional[str] = None,
             port: int = 8001,
+            system_prompt: Optional[str] = None,
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
@@ -3412,6 +3734,7 @@ class TunaGateway:
                 name=name,
                 port=port,
                 modality="vision-language",
+                system_prompt=system_prompt,
             )
             return json.dumps(await self.hoster.deploy_vlm_as_api(config), indent=2)
 
@@ -3463,6 +3786,7 @@ class TunaGateway:
             top_p: float = 0.95,
             top_k: int = 50,
             system_prompt: Optional[str] = None,
+            quantization: Optional[str] = None,
             prefer_runtime_metrics: bool = False,
         ) -> str:
             session_result = await self._get_or_create_text_chat_session(
@@ -3476,6 +3800,7 @@ class TunaGateway:
                 top_p=top_p,
                 top_k=top_k,
                 system_prompt=system_prompt,
+                quantization=quantization,
                 prefer_runtime_metrics=prefer_runtime_metrics,
             )
             if not session_result.get("success"):
@@ -3596,6 +3921,7 @@ class TunaGateway:
                                 {"success": False, "error": f"Deployment {deployment_id} not found"},
                                 indent=2,
                             )
+                    system_prompt = system_prompt or self._deployment_system_prompt(deployment)
                     deployment_host = deployment.get("host")
                     if deployment_host in {"0.0.0.0", "::"}:
                         deployment_host = "127.0.0.1"
@@ -4692,50 +5018,85 @@ class TunaGateway:
         @self.mcp.tool(
             name="dataset.list",
             description=(
-                "List all dataset files in the data directory. Returns metadata "
-                "(id, path, format, row_count, columns, technique) for each file."
+                "List dataset files from persisted metadata plus configurable workspace "
+                "dataset directories."
             ),
         )
         async def dataset_list(
             data_dir: str = "data",
+            scan_roots: Optional[List[str]] = None,
         ) -> str:
-            import os
             from pathlib import Path as _Path
 
+            requested_roots: list[str] = []
+            for candidate in scan_roots or [data_dir, "output", "uploads", "notebooks"]:
+                if isinstance(candidate, str):
+                    normalized = candidate.strip()
+                    if normalized and normalized not in requested_roots:
+                        requested_roots.append(normalized)
+
+            project_root = _Path(__file__).resolve().parent
+            candidate_roots: list[_Path] = []
+            for candidate in requested_roots:
+                root = _Path(candidate).expanduser()
+                if not root.is_absolute():
+                    root = project_root / root
+                resolved = root.resolve()
+                if resolved not in candidate_roots:
+                    candidate_roots.append(resolved)
+
             persisted = await self._persistence.list_datasets()
-            datasets_by_path = {
-                str(item.get("file_path")): item
-                for item in persisted
-                if item.get("file_path")
-            }
-            root = _Path(data_dir)
-            if not root.exists():
-                root = _Path(os.getcwd()) / data_dir
-            if not root.exists():
+            datasets_by_path: dict[str, dict[str, Any]] = {}
+            pruned_stale_records = 0
+            for item in persisted:
+                file_path = str(item.get("file_path") or "").strip()
+                if not file_path:
+                    continue
+                resolved_path = str(_Path(file_path).expanduser().resolve())
+                if _Path(resolved_path).is_file():
+                    normalized_item = dict(item)
+                    normalized_item["file_path"] = resolved_path
+                    datasets_by_path[resolved_path] = normalized_item
+                    continue
+                if await self._persistence.mark_dataset_deleted(resolved_path):
+                    pruned_stale_records += 1
+
+            datasets = list(datasets_by_path.values())
+            existing_candidate_roots = [root for root in candidate_roots if root.exists()]
+            if not existing_candidate_roots:
                 return json.dumps(
                     {
                         "success": True,
-                        "datasets": list(datasets_by_path.values()),
-                        "count": len(datasets_by_path),
+                        "datasets": datasets,
+                        "count": len(datasets),
+                        "scan_roots": [str(root) for root in candidate_roots],
+                        "pruned_stale_records": pruned_stale_records,
                     },
                     indent=2,
                 )
 
             supported = (".jsonl", ".json", ".csv", ".parquet")
-            datasets = list(datasets_by_path.values())
-            for f in sorted(root.rglob("*")):
-                if f.is_file() and f.suffix.lower() in supported:
-                    file_path = str(f.resolve())
-                    if file_path in datasets_by_path:
-                        continue
-                    meta = await self.dataset_service.info(file_path)
-                    if meta.get("success"):
-                        datasets.append(meta["metadata"])
+            for root in existing_candidate_roots:
+                scan_files = [root] if root.is_file() else sorted(root.rglob("*"))
+                for f in scan_files:
+                    if f.is_file() and f.suffix.lower() in supported:
+                        file_path = str(f.resolve())
+                        if file_path in datasets_by_path:
+                            continue
+                        try:
+                            meta = await self.dataset_service.info(file_path)
+                        except Exception:
+                            continue
+                        if meta.get("success"):
+                            datasets.append(meta["metadata"])
+                            datasets_by_path[file_path] = meta["metadata"]
 
             return json.dumps({
                 "success": True,
                 "datasets": datasets,
                 "count": len(datasets),
+                "scan_roots": [str(root) for root in candidate_roots],
+                "pruned_stale_records": pruned_stale_records,
             }, indent=2)
 
     # ------------------------------------------------------------------ #

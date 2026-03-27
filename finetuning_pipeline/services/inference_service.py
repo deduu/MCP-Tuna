@@ -73,6 +73,157 @@ class InferenceService:
             tokenizer_like.pad_token = tokenizer_like.eos_token
         return model, processor
 
+    @staticmethod
+    def _load_text_tokenizer(model_path: str):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+        except Exception as exc:
+            message = str(exc).lower()
+            fallback_markers = (
+                "backend tokenizer",
+                "convert a slow tokenizer to a fast one",
+                "sentencepiece",
+                "tiktoken",
+            )
+            if not any(marker in message for marker in fallback_markers):
+                raise
+
+            log.warning(
+                "Fast tokenizer unavailable for %s; falling back to slow tokenizer: %s",
+                model_path,
+                exc,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+
+        if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+        return tokenizer
+
+    @staticmethod
+    def _text_inference_dtype() -> Any:
+        if torch.cuda.is_available():
+            return torch.float16
+        return torch.float32
+
+    @classmethod
+    def _build_text_quantization_config(cls, quantization: Optional[str]) -> Any:
+        if not quantization or quantization == "none":
+            return None
+
+        try:
+            from transformers import BitsAndBytesConfig
+        except Exception:
+            return None
+
+        if quantization in {"4bit", "bitsandbytes"}:
+            return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=cls._text_inference_dtype(),
+            )
+        if quantization == "8bit":
+            return BitsAndBytesConfig(load_in_8bit=True)
+        return None
+
+    def _load_text_model_and_tokenizer(
+        self,
+        model_path: str,
+        adapter_path: Optional[str] = None,
+        quantization: Optional[str] = "4bit",
+    ) -> tuple[Any, Any]:
+        resolved_model_path = self._resolve_model_path(model_path)
+        tokenizer = self._load_text_tokenizer(resolved_model_path)
+
+        quantization_config = self._build_text_quantization_config(quantization)
+        model = AutoModelForCausalLM.from_pretrained(
+            resolved_model_path,
+            device_map="auto",
+            quantization_config=quantization_config,
+            max_memory=self.gpu.max_memory,
+            torch_dtype=self._text_inference_dtype(),
+        )
+        if adapter_path:
+            model = PeftModel.from_pretrained(model, adapter_path)
+        if hasattr(model, "eval"):
+            model.eval()
+        return model, tokenizer
+
+    async def run_text_messages_inference(
+        self,
+        messages: List[Dict[str, Any]],
+        model_path: str,
+        adapter_path: Optional[str] = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        quantization: Optional[str] = "4bit",
+    ) -> Dict[str, Any]:
+        """Run a single text generation request from structured chat messages."""
+        model = None
+        tokenizer = None
+        gpu_lock = GPULock.get()
+        await gpu_lock.acquire("inference")
+        try:
+            model, tokenizer = self._load_text_model_and_tokenizer(
+                model_path=model_path,
+                adapter_path=adapter_path,
+                quantization=quantization,
+            )
+
+            start_time = time.time()
+            input_text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            model_inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+
+            with torch.no_grad():
+                generated_ids = model.generate(
+                    **model_inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    do_sample=do_sample,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+
+            prompt_len = model_inputs.input_ids.shape[-1]
+            new_ids = generated_ids[0][prompt_len:]
+            response_text = tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            gen_time = time.time() - start_time
+            completion_tokens = len(new_ids)
+            prompt_tokens = int(prompt_len)
+            total_tokens = prompt_tokens + completion_tokens
+
+            return {
+                "success": True,
+                "response": response_text,
+                "generation_time_seconds": gen_time,
+                "tokens_generated": completion_tokens,
+                "tokens_per_second": completion_tokens / gen_time if gen_time > 0 else 0,
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                },
+                "model_path": model_path,
+                "adapter_path": adapter_path,
+                "quantization": quantization,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "model_path": model_path}
+        finally:
+            del model, tokenizer
+            self.gpu.clear_gpu_memory()
+            gpu_lock.release()
+
     async def run_inference(
         self,
         prompts: List[str],
@@ -83,94 +234,46 @@ class InferenceService:
         top_p: float = 0.9,
         top_k: int = 50,
         do_sample: bool = True,
+        system_prompt: Optional[str] = None,
+        quantization: Optional[str] = "4bit",
     ) -> Dict[str, Any]:
         """Run inference on a list of prompts."""
-        model = None
-        tokenizer = None
-        gpu_lock = GPULock.get()
-        await gpu_lock.acquire("inference")
-        try:
-            resolved_model_path = self._resolve_model_path(model_path)
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(resolved_model_path, use_fast=True)
-            except Exception as exc:
-                message = str(exc).lower()
-                fallback_markers = (
-                    "backend tokenizer",
-                    "convert a slow tokenizer to a fast one",
-                    "sentencepiece",
-                    "tiktoken",
-                )
-                if not any(marker in message for marker in fallback_markers):
-                    raise
-
-                log.warning(
-                    "Fast tokenizer unavailable for %s; falling back to slow tokenizer: %s",
-                    resolved_model_path,
-                    exc,
-                )
-                tokenizer = AutoTokenizer.from_pretrained(resolved_model_path, use_fast=False)
-            model = AutoModelForCausalLM.from_pretrained(
-                resolved_model_path,
-                device_map="auto",
-                quantization_config=self.gpu.bnb_config,
-                max_memory=self.gpu.max_memory,
-                torch_dtype=torch.bfloat16,
+        results = []
+        for prompt_text in prompts:
+            messages: List[Dict[str, Any]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt_text})
+            result = await self.run_text_messages_inference(
+                messages=messages,
+                model_path=model_path,
+                adapter_path=adapter_path,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                do_sample=do_sample,
+                quantization=quantization,
             )
+            if not result.get("success"):
+                return result
+            results.append({
+                "prompt": prompt_text,
+                "response": result["response"],
+                "generation_time_seconds": result["generation_time_seconds"],
+                "tokens_generated": result["tokens_generated"],
+                "tokens_per_second": result["tokens_per_second"],
+                "usage": result.get("usage"),
+            })
 
-            if adapter_path:
-                model = PeftModel.from_pretrained(model, adapter_path)
-
-            results = []
-            for prompt_text in prompts:
-                start_time = time.time()
-
-                messages = [{"role": "user", "content": prompt_text}]
-                input_text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
-                )
-                model_inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
-
-                with torch.no_grad():
-                    generated_ids = model.generate(
-                        **model_inputs,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        do_sample=do_sample,
-                        pad_token_id=tokenizer.eos_token_id,
-                    )
-
-                prompt_len = model_inputs.input_ids.shape[-1]
-                new_ids = generated_ids[0][prompt_len:]
-                response_text = tokenizer.decode(new_ids, skip_special_tokens=True)
-
-                gen_time = time.time() - start_time
-                tokens_generated = len(new_ids)
-                tps = tokens_generated / gen_time if gen_time > 0 else 0
-
-                results.append({
-                    "prompt": prompt_text,
-                    "response": response_text,
-                    "generation_time_seconds": gen_time,
-                    "tokens_generated": tokens_generated,
-                    "tokens_per_second": tps,
-                })
-
-            return {
-                "success": True,
-                "results": results,
-                "model_path": model_path,
-                "adapter_path": adapter_path,
-                "num_prompts": len(prompts),
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e), "model_path": model_path}
-        finally:
-            del model, tokenizer
-            self.gpu.clear_gpu_memory()
-            gpu_lock.release()
+        return {
+            "success": True,
+            "results": results,
+            "model_path": model_path,
+            "adapter_path": adapter_path,
+            "num_prompts": len(prompts),
+            "quantization": quantization,
+        }
 
     async def compare_models(
         self,

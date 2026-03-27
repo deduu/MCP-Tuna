@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 # --------------------------------------------------
 load_dotenv()
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 # --------------------------------------------------
 # Database
@@ -55,6 +57,10 @@ class FileSettings:
     images_dir: Path = field(init=False)
 
     def __post_init__(self):
+        if not self.upload_root.is_absolute():
+            self.upload_root = (PROJECT_ROOT / self.upload_root).resolve()
+        else:
+            self.upload_root = self.upload_root.resolve()
         self.images_dir = self.upload_root / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
 

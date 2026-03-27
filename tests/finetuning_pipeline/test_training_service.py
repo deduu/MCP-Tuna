@@ -57,6 +57,21 @@ def _sample_sft_data():
     ]
 
 
+def _sample_chat_triplet_data():
+    return [
+        {
+            "system": "You are a concise WhatsApp sales assistant.",
+            "user": "Salestify itu apa?",
+            "assistant": "Salestify membantu bisnis menangani chat WhatsApp lebih cepat.",
+        },
+        {
+            "system": "Tetap singkat dan sopan.",
+            "user": "Bisa bantu follow-up customer?",
+            "assistant": "Bisa, supaya follow-up lebih konsisten dan cepat.",
+        },
+    ]
+
+
 def _make_fake_sft_config(**extra_params):
     """Create a fake SFTConfig class with configurable __init__ signature."""
     def init(self, **kwargs):
@@ -134,6 +149,34 @@ def _intercept_trl_import(fake_sft_config, fake_sft_trainer):
         yield
 
 
+@contextmanager
+def _intercept_peft_import(fake_peft_module):
+    """Intercept runtime PEFT imports used by training helpers."""
+    real_import = builtins.__import__
+
+    def patched_import(name, *args, **kwargs):
+        if name == "peft":
+            return fake_peft_module
+        return real_import(name, *args, **kwargs)
+
+    with patch.object(builtins, "__import__", side_effect=patched_import):
+        yield
+
+
+@contextmanager
+def _intercept_imports(module_map):
+    """Intercept selected runtime imports without mutating sys.modules."""
+    real_import = builtins.__import__
+
+    def patched_import(name, *args, **kwargs):
+        if name in module_map:
+            return module_map[name]
+        return real_import(name, *args, **kwargs)
+
+    with patch.object(builtins, "__import__", side_effect=patched_import):
+        yield
+
+
 # ──────────────────────────────────────────────
 # _pop_training_kwargs tests
 # ──────────────────────────────────────────────
@@ -174,6 +217,16 @@ class TestPopTrainingKwargs:
         result = svc._pop_training_kwargs({"warmup_ratio": 0.1}, cuda_available=False, bf16_supported=False)
         assert result["warmup_ratio"] == 0.1
 
+    def test_warmup_steps_and_max_steps_custom(self):
+        svc = TrainingService()
+        result = svc._pop_training_kwargs(
+            {"warmup_steps": 5, "max_steps": 60},
+            cuda_available=False,
+            bf16_supported=False,
+        )
+        assert result["warmup_steps"] == 5
+        assert result["max_steps"] == 60
+
     def test_weight_decay_and_max_grad_norm(self):
         svc = TrainingService()
         result = svc._pop_training_kwargs({"weight_decay": 0.01, "max_grad_norm": 0.3}, cuda_available=False, bf16_supported=False)
@@ -196,6 +249,54 @@ class TestPopTrainingKwargs:
 # ──────────────────────────────────────────────
 
 class TestTrainModelSFTConfig:
+    def test_apply_lora_to_model_wraps_and_casts_trainable_params(self):
+        svc = TrainingService()
+        import torch
+
+        param = torch.nn.Parameter(torch.ones(1, dtype=torch.float16))
+        frozen = torch.nn.Parameter(torch.ones(1, dtype=torch.float16), requires_grad=False)
+        wrapped_model = MagicMock()
+        wrapped_model.named_parameters.return_value = [
+            ("adapter", param),
+            ("frozen", frozen),
+        ]
+        fake_peft = types.ModuleType("peft")
+        fake_peft.get_peft_model = MagicMock(return_value=wrapped_model)
+
+        with _intercept_peft_import(fake_peft):
+            result_model, trainer_peft_config, cast_count = svc._apply_lora_to_model(
+                model=MagicMock(),
+                peft_config=MagicMock(),
+            )
+
+        assert result_model is wrapped_model
+        assert trainer_peft_config is None
+        assert cast_count == 1
+        assert param.dtype == torch.float32
+        assert frozen.dtype == torch.float16
+
+    def test_apply_lora_to_model_falls_back_when_peft_wrap_unavailable(self):
+        svc = TrainingService()
+        model = MagicMock()
+        peft_config = MagicMock()
+
+        real_import = builtins.__import__
+
+        def patched_import(name, *args, **kwargs):
+            if name == "peft":
+                raise ImportError("missing peft")
+            return real_import(name, *args, **kwargs)
+
+        with patch.object(builtins, "__import__", side_effect=patched_import):
+            result_model, trainer_peft_config, cast_count = svc._apply_lora_to_model(
+                model=model,
+                peft_config=peft_config,
+            )
+
+        assert result_model is model
+        assert trainer_peft_config is peft_config
+        assert cast_count == 0
+
     @pytest.mark.asyncio
     async def test_sft_config_receives_completion_only_loss(self):
         """Verify completion_only_loss is passed to _build_config as extra_kwargs."""
@@ -228,6 +329,305 @@ class TestTrainModelSFTConfig:
         assert len(captured_build_config_calls) == 1
         extra = captured_build_config_calls[0]["kwargs"].get("extra_kwargs", {})
         assert extra.get("completion_only_loss") is True
+
+    @pytest.mark.asyncio
+    async def test_sft_config_receives_notebook_parity_training_knobs(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_build_config_calls: list = []
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return MagicMock()
+
+        fake_config = _make_fake_sft_config(
+            completion_only_loss=False,
+            dataset_text_field=None,
+            max_length=2048,
+            packing=False,
+        )
+        fake_trainer = _make_fake_sft_trainer()
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            await svc.train_model(
+                dataset=dataset,
+                output_dir="/tmp/test_sft_parity_knobs",
+                max_steps=60,
+                warmup_steps=5,
+                logging_steps=1,
+                save_steps=30,
+                seed=3407,
+                max_seq_length=384,
+                packing=False,
+            )
+
+        build_call = captured_build_config_calls[0]["kwargs"]
+        training_kwargs = build_call["training_kwargs"]
+        extra = build_call.get("extra_kwargs", {})
+        assert training_kwargs["max_steps"] == 60
+        assert training_kwargs["warmup_steps"] == 5
+        assert training_kwargs["logging_steps"] == 1
+        assert training_kwargs["save_steps"] == 30
+        assert training_kwargs["seed"] == 3407
+        assert extra["dataset_text_field"] == "text"
+        assert extra["max_length"] == 384
+        assert extra["packing"] is False
+
+    @pytest.mark.asyncio
+    async def test_train_model_seeds_before_loading_model(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_order: list = []
+
+        def record_seed(seed):
+            captured_order.append(("seed", seed))
+
+        def record_load(*args, **kwargs):
+            captured_order.append(("load", args[0]))
+            return mock_model, mock_tokenizer
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer()
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_set_global_seed", side_effect=record_seed),
+            patch.object(svc, "_load_model_and_tokenizer", side_effect=record_load),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_seed_before_load"),
+                seed=3407,
+            )
+
+        assert captured_order[:2] == [
+            ("seed", 3407),
+            ("load", svc.config.base_model),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sft_config_disables_mixed_precision_for_notebook_chat_triplet_path(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_chat_triplet_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_build_config_calls: list = []
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return MagicMock()
+
+        fake_config = _make_fake_sft_config(
+            completion_only_loss=False,
+            dataset_text_field=None,
+            max_length=2048,
+            packing=False,
+        )
+        fake_trainer = _make_fake_sft_trainer()
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(True, True)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            await svc.train_model(
+                dataset=dataset,
+                output_dir="/tmp/test_sft_chat_triplet_precision",
+                completion_only_loss=False,
+                load_in_4bit=True,
+            )
+
+        training_kwargs = captured_build_config_calls[0]["kwargs"]["training_kwargs"]
+        assert training_kwargs["fp16"] is False
+        assert training_kwargs["bf16"] is False
+
+    def test_prepare_sft_dataset_includes_system_prompt_when_provided(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        _mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_messages: list = []
+
+        def capture_template(messages, tokenize=False):
+            captured_messages.append(messages)
+            return "templated"
+
+        mock_tokenizer.apply_chat_template = MagicMock(side_effect=capture_template)
+
+        prepared = svc._prepare_sft_text_dataset(
+            dataset=dataset,
+            tokenizer=mock_tokenizer,
+            prompt_column="prompt",
+            response_column="response",
+            system_prompt="Use <think> tags when reasoning is useful.",
+        )
+
+        assert prepared.column_names == ["prompt", "completion", "text"]
+        assert captured_messages
+        assert captured_messages[0][0]["role"] == "system"
+        assert "<think>" in captured_messages[0][0]["content"]
+
+    def test_prepare_sft_dataset_supports_chat_triplet_rows(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_chat_triplet_data())
+        _mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_messages: list = []
+
+        def capture_template(messages, tokenize=False):
+            captured_messages.append(messages)
+            return "templated"
+
+        mock_tokenizer.apply_chat_template = MagicMock(side_effect=capture_template)
+
+        prepared = svc._prepare_sft_text_dataset(
+            dataset=dataset,
+            tokenizer=mock_tokenizer,
+            prompt_column="prompt",
+            response_column="response",
+            system_prompt="Jawab singkat.",
+            system_column="system",
+            user_column="user",
+            assistant_column="assistant",
+        )
+
+        assert prepared.column_names == ["prompt", "completion", "text"]
+        assert captured_messages
+        assert [message["role"] for message in captured_messages[0]] == [
+            "system",
+            "user",
+            "assistant",
+        ]
+        assert "Jawab singkat." in captured_messages[0][0]["content"]
+        assert "You are a concise WhatsApp sales assistant." in captured_messages[0][0]["content"]
+
+    def test_prepare_sft_dataset_supports_text_only_notebook_mode(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_chat_triplet_data())
+        _mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        prepared = svc._prepare_sft_text_dataset(
+            dataset=dataset,
+            tokenizer=mock_tokenizer,
+            prompt_column="prompt",
+            response_column="response",
+            system_prompt=None,
+            system_column="system",
+            user_column="user",
+            assistant_column="assistant",
+            text_only=True,
+        )
+
+        assert prepared.column_names == ["text"]
+
+    @pytest.mark.asyncio
+    async def test_train_model_accepts_chat_triplet_dataset(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_chat_triplet_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_trainer_kwargs: dict = {}
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer(captured_trainer_kwargs)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_chat_triplet"),
+                system_prompt="Prioritaskan pain point bisnis.",
+            )
+
+        train_dataset = captured_trainer_kwargs["train_dataset"]
+        assert set(train_dataset.column_names) == {"prompt", "completion", "text"}
+
+    @pytest.mark.asyncio
+    async def test_train_model_uses_text_only_dataset_for_chat_triplet_notebook_mode(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_chat_triplet_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_trainer_kwargs: dict = {}
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer(captured_trainer_kwargs)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_chat_triplet_text_only"),
+                completion_only_loss=False,
+            )
+
+        train_dataset = captured_trainer_kwargs["train_dataset"]
+        assert set(train_dataset.column_names) == {"text"}
+        assert result["config"]["dataset_format"] == "text_only"
+
+    @pytest.mark.asyncio
+    async def test_train_model_prefers_explicit_lora_wrapping(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        wrapped_model = MagicMock()
+        captured_trainer_kwargs: dict = {}
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer(captured_trainer_kwargs)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_apply_lora_to_model", return_value=(wrapped_model, None, 3)),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_explicit_lora"),
+            )
+
+        assert captured_trainer_kwargs["model"] is wrapped_model
+        assert "peft_config" not in captured_trainer_kwargs
+        assert result["config"]["lora_trainable_fp32_tensors"] == 3
+
+    def test_register_special_tokens_resizes_embeddings(self):
+        svc = TrainingService()
+        mock_model = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.add_special_tokens.return_value = 2
+        mock_tokenizer.__len__.return_value = 321
+        mock_model.config = MagicMock()
+
+        applied = svc._register_special_tokens(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            special_tokens=["<think>", "</think>"],
+        )
+
+        assert applied == ["<think>", "</think>"]
+        mock_tokenizer.add_special_tokens.assert_called_once_with(
+            {"additional_special_tokens": ["<think>", "</think>"]}
+        )
+        mock_model.resize_token_embeddings.assert_called_once_with(321)
 
     @pytest.mark.asyncio
     async def test_sft_dataset_keeps_prompt_completion_and_text_columns(self, tmp_path):
@@ -374,6 +774,72 @@ class TestTrainModelSFTConfig:
         assert captured_build_config_calls[0]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is True
         assert captured_build_config_calls[1]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is False
 
+    @pytest.mark.asyncio
+    async def test_retries_without_completion_only_loss_when_trl_rejects_formatting_func(self, tmp_path):
+        """Fallback for TRL stacks that reject formatted datasets with completion-only loss."""
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_build_config_calls: list = []
+        trainer_init_calls = {"count": 0}
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return MagicMock()
+
+        def flaky_init(self, **kwargs):
+            trainer_init_calls["count"] += 1
+            if trainer_init_calls["count"] == 1:
+                raise ValueError(
+                    "A formatting function was provided while `completion_only_loss=True`, "
+                    "which is incompatible. Using a formatter converts the dataset to a "
+                    "language modeling type, conflicting with completion-only loss."
+                )
+
+        fake_trainer = type("SFTTrainer", (), {
+            "__init__": flaky_init,
+            "train": MagicMock(),
+            "save_model": MagicMock(),
+        })
+        fake_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("eval_dataset", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("formatting_func", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("max_seq_length", inspect.Parameter.KEYWORD_ONLY, default=2048),
+            inspect.Parameter("packing", inspect.Parameter.KEYWORD_ONLY, default=False),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_retry_formatting_func"),
+                completion_only_loss=True,
+            )
+
+        assert result["success"] is True
+        assert trainer_init_calls["count"] == 2
+        assert "warnings" in result
+        assert "completion_only_loss" in result["warnings"][0]
+        assert result["config"]["completion_only_loss_requested"] is True
+        assert result["config"]["completion_only_loss_effective"] is False
+        assert len(captured_build_config_calls) == 2
+        assert captured_build_config_calls[0]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is True
+        assert captured_build_config_calls[1]["kwargs"].get("extra_kwargs", {}).get("completion_only_loss") is False
+
     def test_train_model_source_uses_sft_config(self):
         """Verify source code imports SFTConfig (not TrainingArguments) for SFT."""
         source = inspect.getsource(TrainingService.train_model)
@@ -397,6 +863,47 @@ class TestPrepareModelForKbitTraining:
         kwargs = {"load_in_4bit": False}
         load_in_4bit = bool(kwargs.pop("load_in_4bit", True))
         assert load_in_4bit is False
+
+    def test_build_quantization_config_uses_fp16_like_notebook(self):
+        """Notebook parity keeps 4-bit compute dtype on fp16 rather than bf16."""
+        svc = TrainingService()
+        fake_transformers = types.ModuleType("transformers")
+        captured_kwargs = {}
+
+        class FakeBitsAndBytesConfig:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+        fake_transformers.BitsAndBytesConfig = FakeBitsAndBytesConfig
+        fake_bitsandbytes = types.ModuleType("bitsandbytes")
+        fake_torch = types.SimpleNamespace(float16="fp16", float32="fp32")
+
+        with (
+            _intercept_imports({
+                "transformers": fake_transformers,
+                "bitsandbytes": fake_bitsandbytes,
+            }),
+            patch.object(svc, "_preflight_bnb_check", return_value=True),
+        ):
+            config = svc._build_quantization_config(True, fake_torch)
+
+        assert config is not None
+        assert captured_kwargs["bnb_4bit_compute_dtype"] == "fp16"
+
+
+class TestModelSaving:
+    def test_save_model_artifacts_prefers_trainer_model_save_pretrained(self):
+        trainer = MagicMock()
+        trainer.model = MagicMock()
+        trainer.model.save_pretrained = MagicMock()
+        trainer.save_model = MagicMock()
+        tokenizer = MagicMock()
+
+        TrainingService._save_model_artifacts(trainer, tokenizer, "/tmp/out")
+
+        trainer.model.save_pretrained.assert_called_once_with("/tmp/out")
+        trainer.save_model.assert_not_called()
+        tokenizer.save_pretrained.assert_called_once_with("/tmp/out")
 
 
 # ──────────────────────────────────────────────

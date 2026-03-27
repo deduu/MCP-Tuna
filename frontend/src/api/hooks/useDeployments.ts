@@ -27,6 +27,7 @@ function normalizeDeployment(raw: Record<string, unknown>): Deployment {
   return {
     deployment_id: deploymentId,
     name: typeof raw.name === 'string' ? raw.name : undefined,
+    system_prompt: typeof raw.system_prompt === 'string' ? raw.system_prompt : null,
     model_path: typeof raw.model_path === 'string' ? raw.model_path : '',
     adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : undefined,
     endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
@@ -190,6 +191,8 @@ type DeployParams = {
   args: Record<string, unknown>
 }
 
+const DEPLOY_TIMEOUT_MS = 120_000
+
 export function useDeploy() {
   const qc = useQueryClient()
   return useMutation({
@@ -203,7 +206,7 @@ export function useDeploy() {
           : resolvedModality === 'vision-language'
             ? 'host.deploy_vlm_api'
             : 'host.deploy_api'
-      return mcpCall(toolName, args)
+      return mcpCall(toolName, args, { timeoutMs: DEPLOY_TIMEOUT_MS })
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deployments'] })
@@ -236,6 +239,7 @@ export function useUndeployment() {
 export function getRedeployInitialValues(deployment: Deployment) {
   return {
     name: deployment.name,
+    systemPrompt: deployment.system_prompt,
     modelPath: deployment.model_path,
     adapterPath: deployment.adapter_path,
     modality: deployment.modality === 'vision-language' ? 'vision-language' : 'text',

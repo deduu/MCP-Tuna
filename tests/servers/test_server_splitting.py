@@ -42,6 +42,7 @@ class TestDataServer:
     def test_has_normalize_tools(self, tool_names):
         assert "normalize.dataset" in tool_names
         assert "normalize.standardize_keys" in tool_names
+        assert "normalize.remap_fields" in tool_names
 
     def test_has_dataset_tools(self, tool_names):
         assert "dataset.save" in tool_names

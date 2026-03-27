@@ -1,5 +1,6 @@
-"""Data normalization service — format standardization, key renaming, text cleanup."""
+"""Data normalization service for key renaming, text cleanup, and schema remapping."""
 
+import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
@@ -10,12 +11,61 @@ from shared.config import NormalizationConfig
 class DataNormalizationService:
     """Normalizes datasets to a consistent format for downstream pipelines."""
 
+    _REMAPPABLE_PRESETS: Dict[str, Dict[str, Any]] = {
+        "chat_triplet_to_sft": {
+            "target_format": "sft",
+            "templates": {
+                "instruction": "System: {{system}}\n\nUser: {{user}}",
+                "input": "",
+                "output": "{{assistant}}",
+            },
+        },
+        "prompt_response_to_sft": {
+            "target_format": "sft",
+            "templates": {
+                "instruction": "{{prompt}}",
+                "input": "",
+                "output": "{{response}}",
+            },
+        },
+        "qa_to_sft": {
+            "target_format": "sft",
+            "templates": {
+                "instruction": "{{question}}",
+                "input": "",
+                "output": "{{answer}}",
+            },
+        },
+    }
+    _TEMPLATE_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
     @staticmethod
     def _count_changed_rows(
         before: List[Dict[str, Any]],
         after: List[Dict[str, Any]],
     ) -> int:
         return sum(1 for prev, curr in zip(before, after) if prev != curr)
+
+    @staticmethod
+    def _clean_text_value(value: str) -> str:
+        return unicodedata.normalize("NFC", value.strip())
+
+    def _render_template(
+        self,
+        template: str,
+        data_point: Dict[str, Any],
+        strip_whitespace: bool,
+    ) -> str:
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            value = data_point.get(key, "")
+            if value is None:
+                return ""
+            text = value if isinstance(value, str) else str(value)
+            return self._clean_text_value(text) if strip_whitespace else text
+
+        rendered = self._TEMPLATE_PATTERN.sub(replace, template)
+        return self._clean_text_value(rendered) if strip_whitespace else rendered
 
     async def normalize_dataset(
         self,
@@ -89,7 +139,7 @@ class DataNormalizationService:
         merged = []
         merged_rows = 0
         for dp in data_points:
-            dp = dict(dp)  # shallow copy
+            dp = dict(dp)
             instruction = dp.get("instruction", "")
             inp = dp.get("input", "")
             if inp:
@@ -172,6 +222,22 @@ class DataNormalizationService:
         """Strip whitespace, normalize unicode, fix encoding issues."""
         return await run_sync(self._strip_and_clean_text_sync, data_points)
 
+    async def remap_fields(
+        self,
+        data_points: List[Dict[str, Any]],
+        preset: str = "chat_triplet_to_sft",
+        keep_unmapped_fields: bool = False,
+        strip_whitespace: bool = True,
+    ) -> Dict[str, Any]:
+        """Reshape rows into a target schema using a named preset."""
+        return await run_sync(
+            self._remap_fields_sync,
+            data_points,
+            preset,
+            keep_unmapped_fields,
+            strip_whitespace,
+        )
+
     def _strip_and_clean_text_sync(
         self,
         data_points: List[Dict[str, Any]],
@@ -185,8 +251,7 @@ class DataNormalizationService:
             for key in ("instruction", "input", "output", "prompt", "chosen", "rejected"):
                 if key in dp and isinstance(dp[key], str):
                     original = dp[key]
-                    text = original.strip()
-                    text = unicodedata.normalize("NFC", text)
+                    text = self._clean_text_value(original)
                     dp[key] = text
                     if text != original:
                         row_changed = True
@@ -201,4 +266,60 @@ class DataNormalizationService:
             "count": len(cleaned),
             "changed_rows": changed_rows,
             "changed_fields": changed_fields,
+        }
+
+    def _remap_fields_sync(
+        self,
+        data_points: List[Dict[str, Any]],
+        preset: str,
+        keep_unmapped_fields: bool,
+        strip_whitespace: bool,
+    ) -> Dict[str, Any]:
+        preset_config = self._REMAPPABLE_PRESETS.get(preset)
+        if preset_config is None:
+            return {
+                "success": False,
+                "error": f"Unknown remap preset: {preset}",
+                "available_presets": sorted(self._REMAPPABLE_PRESETS),
+            }
+
+        templates = preset_config["templates"]
+        target_format = preset_config["target_format"]
+        remapped: List[Dict[str, Any]] = []
+        changed_rows = 0
+        dropped_fields: set[str] = set()
+        created_fields = list(templates.keys())
+
+        for data_point in data_points:
+            new_point: Dict[str, Any] = {}
+            for field_name, template in templates.items():
+                new_point[field_name] = self._render_template(
+                    template,
+                    data_point,
+                    strip_whitespace,
+                )
+
+            if keep_unmapped_fields:
+                for key, value in data_point.items():
+                    if key not in new_point:
+                        new_point[key] = value
+            else:
+                dropped_fields.update(
+                    key for key in data_point.keys() if key not in new_point
+                )
+
+            if new_point != data_point:
+                changed_rows += 1
+            remapped.append(new_point)
+
+        return {
+            "success": True,
+            "data_points": remapped,
+            "count": len(remapped),
+            "changed_rows": changed_rows,
+            "preset": preset,
+            "target_format": target_format,
+            "created_fields": created_fields,
+            "dropped_fields": sorted(dropped_fields),
+            "unchanged": changed_rows == 0,
         }

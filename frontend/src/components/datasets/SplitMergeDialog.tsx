@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
+import { getDefaultDatasetOutputDir } from '@/lib/dataset-output'
 
 interface SplitMergeDialogProps {
   open: boolean
@@ -24,10 +25,17 @@ export function SplitMergeDialog({
 }: SplitMergeDialogProps) {
   const queryClient = useQueryClient()
   const { mutateAsync: executeTool, isPending } = useToolExecution()
+  const defaultOutputDir = getDefaultDatasetOutputDir()
 
   const [splitRatio, setSplitRatio] = useState(0.8)
-  const [outputDir, setOutputDir] = useState('data')
+  const [outputDir, setOutputDir] = useState(`${defaultOutputDir}/splits`)
   const [outputName, setOutputName] = useState('')
+
+  useEffect(() => {
+    if (mode === 'split') {
+      setOutputDir(`${defaultOutputDir}/splits`)
+    }
+  }, [defaultOutputDir, mode, open])
 
   useEffect(() => {
     if (mode !== 'merge' || !datasetPaths?.length || outputName.trim()) {
@@ -44,11 +52,11 @@ export function SplitMergeDialog({
     })
 
     const suggested = sharedPrefix
-      ? `data/${sharedPrefix}_merged`
-      : `data/merged_${datasetPaths.length}_datasets`
+      ? `${defaultOutputDir}/${sharedPrefix}_merged`
+      : `${defaultOutputDir}/merged_${datasetPaths.length}_datasets`
 
     setOutputName(suggested)
-  }, [mode, datasetPaths, outputName])
+  }, [datasetPaths, defaultOutputDir, mode, outputName])
 
   async function handleExecute() {
     try {
@@ -117,7 +125,7 @@ export function SplitMergeDialog({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Output directory</label>
               <Input
-                placeholder="data/splits"
+                placeholder={`${defaultOutputDir}/splits`}
                 value={outputDir}
                 onChange={(e) => setOutputDir(e.target.value)}
               />
@@ -143,7 +151,7 @@ export function SplitMergeDialog({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Output path</label>
               <Input
-                placeholder="data/merged_dataset"
+                placeholder={`${defaultOutputDir}/merged_dataset`}
                 value={outputName}
                 onChange={(e) => setOutputName(e.target.value)}
               />

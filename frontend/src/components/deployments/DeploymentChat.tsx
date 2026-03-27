@@ -49,6 +49,7 @@ interface DeploymentChatProps {
 export function DeploymentChat({ deployment }: DeploymentChatProps) {
   const [messages, setMessages] = useState<DeploymentChatMessage[]>([])
   const [input, setInput] = useState('')
+  const [systemPrompt, setSystemPrompt] = useState(deployment.system_prompt ?? '')
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
@@ -83,6 +84,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
         top_p: resolveTopP(topP),
         top_k: resolveTopK(topK),
         max_new_tokens: resolveMaxNewTokens(maxNewTokens),
+        ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
       }),
     onSuccess: (result) => {
@@ -115,6 +117,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     textAbortControllerRef.current?.abort()
     setMessages([])
     setInput('')
+    setSystemPrompt(deployment.system_prompt ?? '')
     setConversationId(null)
     setSelectedHistoryConversationId(null)
     setIsTextStreaming(false)
@@ -128,8 +131,9 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     }
 
     setConversationId(selectedConversation.conversation_id)
+    setSystemPrompt(selectedConversation.system_prompt ?? deployment.system_prompt ?? '')
     setMessages(selectedConversation.messages.map(toDeploymentChatMessage))
-  }, [selectedConversation])
+  }, [deployment.system_prompt, selectedConversation])
 
   const handleSubmit = () => {
     const trimmed = input.trim()
@@ -232,6 +236,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
           top_p: resolveTopP(topP),
           top_k: resolveTopK(topK),
           max_new_tokens: resolveMaxNewTokens(maxNewTokens),
+          prefer_runtime_metrics: deployment.type === 'api',
+          ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
           signal: abortController.signal,
         },
         {
@@ -570,6 +576,21 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     disabled={isPending}
                   />
                 </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">System Prompt</label>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(event) => setSystemPrompt(event.target.value)}
+                  rows={4}
+                  disabled={isPending}
+                  placeholder="Optional. Use this to mirror notebook-style system instructions."
+                  className="flex min-h-[96px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Applied to new or cleared conversations. If you change it mid-thread, clear the conversation to guarantee a fresh system prompt.
+                </p>
               </div>
 
               <textarea

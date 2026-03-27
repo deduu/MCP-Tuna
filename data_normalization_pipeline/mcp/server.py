@@ -47,6 +47,24 @@ class NormalizationMCPServer:
             result = await svc.standardize_keys(data_points, target_format)
             return json.dumps(result, indent=2)
 
+        @self.mcp.tool(
+            name="normalize.remap_fields",
+            description="Convert common chat or QA schemas into training-ready rows using a preset",
+        )
+        async def remap_fields(
+            data_points: List[Dict],
+            preset: str = "chat_triplet_to_sft",
+            keep_unmapped_fields: bool = False,
+            strip_whitespace: bool = True,
+        ) -> str:
+            result = await svc.remap_fields(
+                data_points,
+                preset=preset,
+                keep_unmapped_fields=keep_unmapped_fields,
+                strip_whitespace=strip_whitespace,
+            )
+            return json.dumps(result, indent=2)
+
         @self.mcp.tool(name="normalize.strip_text",
                        description="Strip whitespace and normalize unicode in text fields")
         async def strip_text(data_points: List[Dict]) -> str:

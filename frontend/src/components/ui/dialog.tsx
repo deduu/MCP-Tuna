@@ -37,7 +37,7 @@ export function Dialog({ open, onClose, children, className, title }: DialogProp
   return createPortal(
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center"
       onClick={(e) => {
         if (e.target === overlayRef.current) onClose()
       }}
@@ -47,7 +47,7 @@ export function Dialog({ open, onClose, children, className, title }: DialogProp
         ref={contentRef}
         tabIndex={-1}
         className={cn(
-          'relative z-50 w-full max-w-lg rounded-xl border bg-card p-6 shadow-xl focus:outline-none',
+          'relative z-50 my-8 w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border bg-card p-6 shadow-xl focus:outline-none',
           className,
         )}
       >

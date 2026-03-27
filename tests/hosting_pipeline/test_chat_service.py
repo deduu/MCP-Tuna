@@ -256,6 +256,24 @@ class TestChatSessionDirectMode:
         assert info["shared_provider"] is True
 
     @pytest.mark.asyncio
+    async def test_initialize_direct_mode_uses_inference_service_for_tokenizer_template(self):
+        cfg = ChatConfig(model_path="test/model", use_tokenizer_chat_template=True)
+        session = ChatSession(cfg)
+        mock_inference_service = MagicMock()
+
+        with (
+            patch("finetuning_pipeline.services.inference_service.InferenceService", return_value=mock_inference_service) as mock_inference_cls,
+            patch("agentsoul.providers.hf.HuggingFaceProvider") as mock_provider_cls,
+        ):
+            info = await session.initialize()
+
+        mock_inference_cls.assert_called_once_with()
+        mock_provider_cls.assert_not_called()
+        assert session._inference_service is mock_inference_service
+        assert info["mode"] == "direct"
+        assert info["model_path"] == "test/model"
+
+    @pytest.mark.asyncio
     async def test_send_message_direct_mode(self):
         cfg = ChatConfig(model_path="test/model")
         session = ChatSession(cfg)
@@ -298,6 +316,42 @@ class TestChatSessionDirectMode:
         assert mock_provider.chat.await_args.kwargs["do_sample"] is False
 
     @pytest.mark.asyncio
+    async def test_send_message_direct_mode_uses_tokenizer_template_runtime(self):
+        cfg = ChatConfig(
+            model_path="test/model",
+            system_prompt="Be concise.",
+            temperature=0.0,
+            quantization="4bit",
+            use_tokenizer_chat_template=True,
+        )
+        inference_service = AsyncMock()
+        inference_service.run_text_messages_inference = AsyncMock(
+            return_value={
+                "success": True,
+                "response": "Notebook-style answer",
+                "generation_time_seconds": 0.5,
+                "tokens_per_second": 12.0,
+                "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+            }
+        )
+        session = ChatSession(cfg, inference_service=inference_service)
+        session._mode = "direct"
+        session._initialized = True
+
+        result = await session.send_message_result("Hi")
+
+        assert result["response"] == "Notebook-style answer"
+        inference_service.run_text_messages_inference.assert_awaited_once()
+        call = inference_service.run_text_messages_inference.await_args.kwargs
+        assert call["messages"] == [
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "Hi"},
+        ]
+        assert call["quantization"] == "4bit"
+        assert call["do_sample"] is False
+        assert session._history[-1]["content"] == "Notebook-style answer"
+
+    @pytest.mark.asyncio
     async def test_update_generation_config_overrides_session_defaults(self):
         cfg = ChatConfig(model_path="test/model")
         session = ChatSession(cfg)
@@ -331,6 +385,36 @@ class TestChatSessionDirectMode:
         assert tokens == ["Hello", " world", "!"]
         assert len(session._history) == 2
         assert session._history[1]["content"] == "Hello world!"
+
+    @pytest.mark.asyncio
+    async def test_stream_message_direct_mode_uses_tokenizer_template_runtime(self):
+        cfg = ChatConfig(
+            model_path="test/model",
+            use_tokenizer_chat_template=True,
+            quantization="8bit",
+        )
+        inference_service = AsyncMock()
+        inference_service.run_text_messages_inference = AsyncMock(
+            return_value={
+                "success": True,
+                "response": "Single chunk reply",
+                "generation_time_seconds": 0.5,
+                "tokens_per_second": 10.0,
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+            }
+        )
+        session = ChatSession(cfg, inference_service=inference_service)
+        session._mode = "direct"
+        session._initialized = True
+
+        tokens = []
+        async for token in session.stream_message("Hi"):
+            tokens.append(token)
+
+        assert tokens == ["Single chunk reply"]
+        call = inference_service.run_text_messages_inference.await_args.kwargs
+        assert call["quantization"] == "8bit"
+        assert session._history[-1]["content"] == "Single chunk reply"
 
     @pytest.mark.asyncio
     async def test_stream_message_api_mode_falls_back_to_full_response(self):
@@ -431,6 +515,22 @@ class TestChatSessionCommands:
         assert info["model_path"] == "test/model"
         assert info["adapter_path"] == "./lora"
         assert info["turns"] == 0
+
+    def test_get_info_direct_mode_includes_tokenizer_runtime_metadata(self):
+        cfg = ChatConfig(
+            model_path="test/model",
+            adapter_path="./lora",
+            quantization="4bit",
+            use_tokenizer_chat_template=True,
+        )
+        session = ChatSession(cfg)
+        session._mode = "direct"
+        session._initialized = True
+
+        info = session.get_info()
+
+        assert info["use_tokenizer_chat_template"] is True
+        assert info["quantization"] == "4bit"
 
     @pytest.mark.asyncio
     async def test_shutdown_api_mode_closes_client(self):

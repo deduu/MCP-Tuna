@@ -211,6 +211,8 @@ class PersistenceService:
         return {
             "deployment_id": record.deployment_id,
             "name": metadata.get("name"),
+            "system_prompt": metadata.get("system_prompt"),
+            "quantization": metadata.get("quantization"),
             "status": record.status,
             "type": record.type,
             "modality": record.modality,

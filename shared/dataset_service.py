@@ -17,6 +17,7 @@ from shared.multimodal_models import (
     extract_text_from_content,
     is_vlm_sample,
 )
+from shared.workspace_paths import resolve_workspace_path, to_workspace_relative_path
 
 
 class DatasetService:
@@ -33,6 +34,14 @@ class DatasetService:
         self.config = config or DatasetConfig()
         self._persistence = get_persistence_service()
         self._object_storage = get_object_storage_service()
+
+    @staticmethod
+    def _validate_loaded_rows(data: Any, file_path: str) -> tuple[bool, List[Dict[str, Any]] | str]:
+        if not isinstance(data, list):
+            return False, f"Dataset file must contain a list of rows: {file_path}"
+        if any(not isinstance(row, dict) for row in data):
+            return False, f"Dataset rows must be JSON objects: {file_path}"
+        return True, data
 
     @staticmethod
     def _resolve_dir(dir_path: Path) -> Optional[Path]:
@@ -64,7 +73,7 @@ class DatasetService:
                 "error": f"Unsupported format: {format}. Use one of {sorted(self._SUPPORTED_SAVE_FORMATS)}",
             }
 
-        path = Path(output_path)
+        path = resolve_workspace_path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if format == "jsonl":
@@ -105,7 +114,7 @@ class DatasetService:
 
     async def load(self, file_path: str) -> Dict[str, Any]:
         """Load dataset from disk — auto-detects format from extension."""
-        path = Path(file_path)
+        path = resolve_workspace_path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
 
@@ -129,6 +138,11 @@ class DatasetService:
         else:
             return {"success": False, "error": f"Unsupported extension: {ext}"}
 
+        is_valid, validated = self._validate_loaded_rows(data_points, str(path.resolve()))
+        if not is_valid:
+            return {"success": False, "error": str(validated)}
+        data_points = validated
+
         columns = list(data_points[0].keys()) if data_points else []
         return {
             "success": True,
@@ -144,7 +158,7 @@ class DatasetService:
 
     async def preview(self, file_path: str, n: int = 5) -> Dict[str, Any]:
         """Return first *n* rows without loading the entire file (JSONL-optimised)."""
-        path = Path(file_path)
+        path = resolve_workspace_path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
 
@@ -175,7 +189,7 @@ class DatasetService:
 
     async def info(self, file_path: str) -> Dict[str, Any]:
         """Return metadata about a dataset file (or first dataset in a dir)."""
-        path = Path(file_path)
+        path = resolve_workspace_path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
 
@@ -229,8 +243,21 @@ class DatasetService:
 
     async def delete(self, file_path: str) -> Dict[str, Any]:
         """Delete a dataset file from disk."""
-        path = Path(file_path)
+        path = resolve_workspace_path(file_path)
+        resolved = str(path.resolve())
+        persisted = await self._persistence.get_dataset(resolved)
+
         if not path.exists():
+            if persisted:
+                if persisted.get("object_key"):
+                    await self._object_storage.delete_object(persisted.get("object_key"))
+                await self._persistence.mark_dataset_deleted(resolved)
+                return {
+                    "success": True,
+                    "file_path": resolved,
+                    "deleted": False,
+                    "record_deleted": True,
+                }
             return {"success": False, "error": f"File not found: {file_path}"}
 
         if path.is_dir():
@@ -246,7 +273,8 @@ class DatasetService:
             return {"success": False, "error": f"Unsupported extension: {ext}"}
 
         resolved = str(path.resolve())
-        persisted = await self._persistence.get_dataset(resolved)
+        if persisted is None or resolved != str(resolve_workspace_path(file_path)):
+            persisted = await self._persistence.get_dataset(resolved)
         await asyncio.to_thread(path.unlink)
         if persisted and persisted.get("object_key"):
             await self._object_storage.delete_object(persisted.get("object_key"))
@@ -278,13 +306,13 @@ class DatasetService:
                 "error": f"Ratios must sum to 1.0, got {train_ratio + val_ratio + test_ratio:.4f}",
             }
 
-        p = Path(file_path)
+        p = resolve_workspace_path(file_path)
         is_jsonl = p.suffix.lower() in (".jsonl",) and format == "jsonl"
 
         if is_jsonl:
             return await asyncio.to_thread(
                 self._split_jsonl_streaming,
-                p, output_dir, train_ratio, val_ratio, seed,
+                p, str(resolve_workspace_path(output_dir)), train_ratio, val_ratio, seed,
             )
 
         # Fallback: load full dataset for non-JSONL formats
@@ -303,9 +331,9 @@ class DatasetService:
         val_data = data[n_train : n_train + n_val]
         test_data = data[n_train + n_val :]
 
-        out = Path(output_dir)
+        out = resolve_workspace_path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        stem = Path(file_path).stem
+        stem = p.stem
 
         splits: Dict[str, Dict[str, Any]] = {}
         for name, subset in [("train", train_data), ("val", val_data), ("test", test_data)]:
@@ -404,14 +432,16 @@ class DatasetService:
         if not file_paths:
             return {"success": False, "error": "No file paths provided"}
 
-        out_fmt = Path(output_path).suffix.lstrip(".") or "jsonl"
+        resolved_output_path = resolve_workspace_path(output_path)
+        resolved_file_paths = [str(resolve_workspace_path(fp)) for fp in file_paths]
+        out_fmt = resolved_output_path.suffix.lstrip(".") or "jsonl"
         all_jsonl = out_fmt == "jsonl" and all(
-            Path(fp).suffix.lower() == ".jsonl" for fp in file_paths
+            Path(fp).suffix.lower() == ".jsonl" for fp in resolved_file_paths
         )
 
         if all_jsonl:
             return await asyncio.to_thread(
-                self._merge_jsonl_streaming, file_paths, output_path,
+                self._merge_jsonl_streaming, resolved_file_paths, str(resolved_output_path),
                 deduplicate, dedup_key,
             )
 
@@ -419,7 +449,7 @@ class DatasetService:
         all_points: List[Dict[str, Any]] = []
         per_file: Dict[str, int] = {}
 
-        for fp in file_paths:
+        for fp in resolved_file_paths:
             loaded = await self.load(fp)
             if not loaded["success"]:
                 return {"success": False, "error": f"Failed to load {fp}: {loaded.get('error')}"}
@@ -437,13 +467,13 @@ class DatasetService:
                     unique.append(dp)
             all_points = unique
 
-        save_result = await self.save(all_points, output_path, format=out_fmt)
+        save_result = await self.save(all_points, str(resolved_output_path), format=out_fmt)
         if not save_result["success"]:
             return save_result
 
         return {
             "success": True,
-            "file_path": str(Path(output_path).resolve()),
+            "file_path": str(resolved_output_path),
             "total_rows": len(all_points),
             "per_file_counts": per_file,
         }
@@ -610,7 +640,7 @@ class DatasetService:
         primary text fields (instruction/prompt + input/output/response).
         Returns avg_length, max_length, and p95_length.
         """
-        path = Path(file_path)
+        path = resolve_workspace_path(file_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
 
@@ -676,8 +706,7 @@ class DatasetService:
             return {"success": False, "disabled": True}
 
         try:
-            relative = path.resolve().relative_to(Path.cwd().resolve())
-            relative_path = str(relative).replace("\\", "/")
+            relative_path = to_workspace_relative_path(path)
         except ValueError:
             relative_path = path.name
 

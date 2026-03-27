@@ -55,7 +55,7 @@ export function DatasetStorageSection() {
           </div>
           <p className="text-xs text-muted-foreground">
             Stored in this browser. It currently applies to Generate from Document,
-            clean/normalize outputs, and quality-filtered datasets.
+            clean/normalize outputs, quality-filtered datasets, HF blends, and split/merge defaults.
           </p>
         </div>
       </CardContent>

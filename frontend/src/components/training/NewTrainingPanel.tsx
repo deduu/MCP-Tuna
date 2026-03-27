@@ -35,6 +35,25 @@ interface NewTrainingPanelProps {
   onModelPathChange: (value: string) => void
 }
 
+const TRAINING_RECIPE_OPTIONS = [
+  { value: 'none', label: 'No Recipe', helper: 'Use the generic MCP Tuna training path.' },
+  {
+    value: 'tiny_reasoning_stage_1',
+    label: 'Tiny Reasoning Stage 1',
+    helper: 'Adds the stage-1 system prompt preset for non-reasoning SFT.',
+  },
+  {
+    value: 'tiny_reasoning_stage_2',
+    label: 'Tiny Reasoning Stage 2',
+    helper: 'Adds reasoning system-prompt formatting and registers <think> tags.',
+  },
+  {
+    value: 'tiny_reasoning_stage_3',
+    label: 'Tiny Reasoning Stage 3',
+    helper: 'Applies the stage-3 DPO preset defaults when supported by the backend.',
+  },
+] as const
+
 export function NewTrainingPanel({
   open,
   onToggle: _onToggle,
@@ -65,6 +84,7 @@ export function NewTrainingPanel({
   const [numStages, setNumStages] = useState('3')
   const [scoreColumn, setScoreColumn] = useState('weighted_score')
   const [difficultyOrder, setDifficultyOrder] = useState<'easy_first' | 'hard_first'>('easy_first')
+  const [trainingRecipe, setTrainingRecipe] = useState<(typeof TRAINING_RECIPE_OPTIONS)[number]['value']>('none')
 
   const [schemaValid, setSchemaValid] = useState<'pass' | 'warn' | null>(null)
   const [qualityValid, setQualityValid] = useState<'pass' | 'warn' | null>(null)
@@ -207,18 +227,20 @@ export function NewTrainingPanel({
     const parsedNumStages = parseInt(numStages, 10)
     const resolvedOutputDir = outputDir.trim() || buildDefaultOutputDir(technique, sequential, datasetPath)
 
-    const commonArgs: Record<string, unknown> = {
-      output_dir: resolvedOutputDir,
-      base_model: modelPath.trim(),
-      dataset_path: datasetPath.trim(),
-      load_in_4bit: quantization === '4bit',
-    }
+      const commonArgs: Record<string, unknown> = {
+        output_dir: resolvedOutputDir,
+        base_model: modelPath.trim(),
+        dataset_path: datasetPath.trim(),
+        load_in_4bit: quantization === '4bit',
+        ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
+      }
 
     let args: Record<string, unknown> = { ...commonArgs }
 
     if (technique === 'sft' || technique === 'vlm_sft') {
       args = {
         ...commonArgs,
+        num_epochs: parsedEpochs,
         learning_rate: parsedLearningRate,
         per_device_train_batch_size: parsedBatchSize,
         lora_r: parsedLoraR,
@@ -260,6 +282,7 @@ export function NewTrainingPanel({
         technique,
         dataset_path: datasetPath.trim(),
         num_epochs: parsedEpochs,
+        ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
         ...(technique === 'sft'
           ? {
               learning_rate: parsedLearningRate,
@@ -277,6 +300,7 @@ export function NewTrainingPanel({
           ? {
               use_lora: true,
               lora_r: parsedLoraR,
+              ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
             }
           : {}),
         load_in_4bit: quantization === '4bit',
@@ -318,6 +342,24 @@ export function NewTrainingPanel({
           value={technique}
           onChange={setTechnique}
         />
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Training Recipe</label>
+          <select
+            value={trainingRecipe}
+            onChange={(event) => setTrainingRecipe(event.target.value as (typeof TRAINING_RECIPE_OPTIONS)[number]['value'])}
+            className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground"
+          >
+            {TRAINING_RECIPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {TRAINING_RECIPE_OPTIONS.find((option) => option.value === trainingRecipe)?.helper}
+          </p>
+        </div>
 
         <label className="flex items-center gap-2 text-sm cursor-pointer">
           <input

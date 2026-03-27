@@ -191,6 +191,7 @@ async def test_host_chat_uses_live_provider_for_mcp_deployment():
     assert _FakeChatSession.last_config.endpoint is None
     assert _FakeChatSession.last_config.model_path == "base/model"
     assert _FakeChatSession.last_config.adapter_path == "./adapter"
+    assert _FakeChatSession.last_config.use_tokenizer_chat_template is True
 
 
 @pytest.mark.asyncio
@@ -219,6 +220,7 @@ async def test_host_chat_uses_endpoint_for_api_deployment():
     assert _FakeChatSession.last_provider is None
     assert _FakeChatSession.last_config.endpoint == "http://127.0.0.1:8010"
     assert _FakeChatSession.last_config.model_path is None
+    assert _FakeChatSession.last_config.use_tokenizer_chat_template is False
 
 
 @pytest.mark.asyncio
@@ -256,6 +258,35 @@ async def test_host_chat_applies_generation_overrides():
     assert _FakeChatSession.last_config.max_new_tokens == 1024
     assert _FakeChatSession.last_config.top_p == 0.8
     assert _FakeChatSession.last_config.top_k == 20
+
+
+@pytest.mark.asyncio
+async def test_host_chat_uses_deployment_default_system_prompt():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway.hoster._deployments["dep-api-system"] = {
+        "id": "dep-api-system",
+        "type": "api",
+        "model_path": "base/model",
+        "adapter_path": "./adapter",
+        "system_prompt": "Kamu adalah asisten sales WhatsApp untuk Salestify.",
+        "transport": "http",
+        "host": "127.0.0.1",
+        "port": 8018,
+    }
+
+    host_chat = gateway.mcp._tools["host.chat"]["func"]
+
+    with patch("hosting_pipeline.services.chat_service.ChatSession", _FakeChatSession):
+        result = json.loads(await host_chat(message="hello", deployment_id="dep-api-system"))
+
+    assert result["success"] is True
+    assert (
+        _FakeChatSession.last_config.system_prompt
+        == "Kamu adalah asisten sales WhatsApp untuk Salestify."
+    )
 
 
 @pytest.mark.asyncio
@@ -421,6 +452,41 @@ async def test_host_chat_can_prefer_runtime_metrics_for_api_deployment():
     assert result["success"] is True
     assert _FakeStructuredChatSession.last_provider is provider
     assert _FakeStructuredChatSession.last_config.endpoint is None
+    assert _FakeStructuredChatSession.last_config.use_tokenizer_chat_template is True
+
+
+@pytest.mark.asyncio
+async def test_host_chat_uses_deployment_quantization_for_runtime_session():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    provider = object()
+    gateway.hoster._deployments["dep-api-quant"] = {
+        "id": "dep-api-quant",
+        "type": "api",
+        "model_path": "base/model",
+        "adapter_path": "./adapter",
+        "provider": provider,
+        "transport": "http",
+        "host": "127.0.0.1",
+        "port": 8020,
+        "quantization": "4bit",
+    }
+
+    host_chat = gateway.mcp._tools["host.chat"]["func"]
+
+    with patch("hosting_pipeline.services.chat_service.ChatSession", _FakeStructuredChatSession):
+        result = json.loads(
+            await host_chat(
+                message="hello",
+                deployment_id="dep-api-quant",
+                prefer_runtime_metrics=True,
+            )
+        )
+
+    assert result["success"] is True
+    assert _FakeStructuredChatSession.last_config.quantization == "4bit"
 
 
 @pytest.mark.asyncio

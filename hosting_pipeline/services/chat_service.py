@@ -82,6 +82,11 @@ class ChatSession:
                 from finetuning_pipeline.services.inference_service import InferenceService
 
                 self._inference_service = InferenceService()
+        elif self._config.use_tokenizer_chat_template:
+            if self._inference_service is None:
+                from finetuning_pipeline.services.inference_service import InferenceService
+
+                self._inference_service = InferenceService()
         elif self._provider is None:
             from agentsoul.providers.hf import HuggingFaceProvider
 
@@ -211,6 +216,9 @@ class ChatSession:
 
     async def _send_direct(self) -> Dict[str, Any]:
         """Generate via the in-process HuggingFace provider."""
+        if self._config.use_tokenizer_chat_template:
+            return await self._generate_direct_text_result()
+
         resp = await self._provider.chat(
             messages=list(self._history),
             max_new_tokens=self._config.max_new_tokens,
@@ -226,6 +234,39 @@ class ChatSession:
             "usage": usage,
             "metrics": self._build_text_metrics(provider_metrics, usage),
             "model_id": getattr(self._provider, "model_id", None) or self._config.model_path,
+        }
+
+    async def _generate_direct_text_result(self) -> Dict[str, Any]:
+        """Generate text with the local tokenizer chat-template runtime."""
+        result = await self._inference_service.run_text_messages_inference(
+            messages=list(self._history),
+            model_path=self._config.model_path,
+            adapter_path=self._config.adapter_path,
+            max_new_tokens=self._config.max_new_tokens,
+            temperature=self._config.temperature,
+            top_p=self._config.top_p,
+            top_k=self._config.top_k,
+            do_sample=self._config.temperature > 0,
+            quantization=self._config.quantization or "4bit",
+        )
+        if not result.get("success"):
+            raise RuntimeError(result.get("error", "Text generation failed"))
+
+        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+        return {
+            "response": result.get("response", ""),
+            "usage": usage,
+            "metrics": {
+                "latency_ms": self._to_ms(result.get("generation_time_seconds")),
+                "ttft_ms": None,
+                "output_tokens_per_second": self._to_float(result.get("tokens_per_second")),
+                "perplexity": None,
+                "confidence": None,
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+            },
+            "model_id": self._config.model_path,
         }
 
     async def _send_api_messages(self) -> Dict[str, Any]:
@@ -361,6 +402,14 @@ class ChatSession:
             yield {"type": "complete", **result}
 
     async def _stream_direct_events(self) -> AsyncGenerator[Dict[str, Any], None]:
+        if self._config.use_tokenizer_chat_template:
+            result = await self._generate_direct_text_result()
+            if result["response"]:
+                yield {"type": "token", "content": result["response"]}
+            self._finalize_text_result(result)
+            yield {"type": "complete", **result}
+            return
+
         full_response = ""
         streamed_usage: Optional[Dict[str, Any]] = None
 
@@ -533,6 +582,9 @@ class ChatSession:
             info["model_path"] = self._config.model_path
             info["adapter_path"] = self._config.adapter_path
             info["shared_provider"] = not self._owns_provider
+            info["use_tokenizer_chat_template"] = self._config.use_tokenizer_chat_template
+            if self._config.quantization:
+                info["quantization"] = self._config.quantization
         if self._config.system_prompt:
             info["system_prompt"] = self._config.system_prompt
         if self._last_result:

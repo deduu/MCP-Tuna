@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from shared.dataset_service import DatasetService
+import shared.workspace_paths as workspace_paths
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +113,51 @@ async def test_save_creates_parent_dirs(svc: DatasetService, sft_data: list, tmp
     assert out.exists()
 
 
+async def test_save_relative_path_uses_workspace_root(
+    svc: DatasetService,
+    sft_data: list,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    foreign_cwd = tmp_path / "elsewhere"
+    foreign_cwd.mkdir()
+    monkeypatch.chdir(foreign_cwd)
+    monkeypatch.setattr(workspace_paths, "WORKSPACE_ROOT", workspace_root)
+
+    result = await svc.save(sft_data, "data/relative.jsonl")
+
+    expected = workspace_root / "data" / "relative.jsonl"
+    assert result["success"] is True
+    assert expected.exists()
+    assert result["file_path"] == str(expected.resolve())
+
+
+async def test_load_relative_path_uses_workspace_root(
+    svc: DatasetService,
+    sft_data: list,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace_root = tmp_path / "workspace"
+    dataset_path = workspace_root / "data" / "relative.jsonl"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_text(
+        "\n".join(json.dumps(row) for row in sft_data) + "\n",
+        encoding="utf-8",
+    )
+    foreign_cwd = tmp_path / "elsewhere"
+    foreign_cwd.mkdir()
+    monkeypatch.chdir(foreign_cwd)
+    monkeypatch.setattr(workspace_paths, "WORKSPACE_ROOT", workspace_root)
+
+    result = await svc.load("data/relative.jsonl")
+
+    assert result["success"] is True
+    assert result["row_count"] == len(sft_data)
+
+
 async def test_save_returns_correct_dataset_id(svc: DatasetService, sft_data: list, tmp_path: Path):
     out = tmp_path / "my_sft_data.jsonl"
     result = await svc.save(sft_data, str(out))
@@ -174,6 +221,16 @@ async def test_load_auto_detects_format(svc: DatasetService, sft_data: list, tmp
     result = await svc.load(str(out))
     assert result["success"] is True
     assert result["row_count"] == 3
+
+
+async def test_load_json_object_returns_error_for_non_dataset_file(svc: DatasetService, tmp_path: Path):
+    out = tmp_path / "adapter_config.json"
+    out.write_text(json.dumps({"base_model_name_or_path": "demo-model"}), encoding="utf-8")
+
+    result = await svc.load(str(out))
+
+    assert result["success"] is False
+    assert "list of rows" in result["error"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +346,28 @@ async def test_delete_missing_file_returns_error(svc: DatasetService, tmp_path: 
     result = await svc.delete(str(tmp_path / "missing.jsonl"))
     assert result["success"] is False
     assert "not found" in result["error"].lower()
+
+
+async def test_delete_missing_file_prunes_persisted_dataset_record(
+    svc: DatasetService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    missing = tmp_path / "missing.jsonl"
+    persistence = AsyncMock()
+    persistence.get_dataset.return_value = {"object_key": "datasets/missing.jsonl"}
+    persistence.mark_dataset_deleted.return_value = True
+    object_storage = AsyncMock()
+
+    monkeypatch.setattr(svc, "_persistence", persistence)
+    monkeypatch.setattr(svc, "_object_storage", object_storage)
+
+    result = await svc.delete(str(missing))
+
+    assert result["success"] is True
+    assert result["record_deleted"] is True
+    persistence.mark_dataset_deleted.assert_awaited_once_with(str(missing.resolve()))
+    object_storage.delete_object.assert_awaited_once_with("datasets/missing.jsonl")
 
 
 # ---------------------------------------------------------------------------
