@@ -1,6 +1,7 @@
 import type {
   LocalModelCandidate,
   ModelModality,
+  PreferenceTechnique,
   TrainingCapabilitySummary,
   TrainingTechnique,
 } from '@/api/types'
@@ -8,6 +9,21 @@ import { compactSourceHint, compactTrainingPrefix } from '@/lib/output-naming'
 
 export type DifficultyOrder = 'easy_first' | 'hard_first'
 export type QuantizationOption = '4bit' | 'none'
+
+export const DEFAULT_NUM_EPOCHS = 3
+export const DEFAULT_LEARNING_RATE = 2e-4
+export const DEFAULT_LORA_R = 16
+export const DEFAULT_LORA_ALPHA = 32
+export const DEFAULT_LORA_DROPOUT = 0.05
+export const DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE = 1
+export const DEFAULT_GRADIENT_ACCUMULATION_STEPS = 4
+export const PREFERENCE_TECHNIQUES: PreferenceTechnique[] = ['dpo', 'grpo', 'kto']
+
+export interface PreferenceStartingRecipePatch {
+  num_epochs?: number
+  learning_rate?: number
+  start_from_sft_checkpoint?: boolean
+}
 
 export interface TrainingTechniqueOption {
   value: TrainingTechnique
@@ -120,6 +136,82 @@ const TEXT_TECHNIQUE_OPTIONS: TrainingTechniqueOption[] = [
     reason: 'Select a vision-language model to review multimodal training support.',
   },
 ]
+
+const TRAINING_TOOL_NAMES: Partial<Record<TrainingTechnique, { sync: string; async: string }>> = {
+  sft: { sync: 'finetune.train', async: 'finetune.train_async' },
+  dpo: { sync: 'finetune.train_dpo', async: 'finetune.train_dpo_async' },
+  grpo: { sync: 'finetune.train_grpo', async: 'finetune.train_grpo_async' },
+  kto: { sync: 'finetune.train_kto', async: 'finetune.train_kto_async' },
+  curriculum: { sync: 'finetune.train_curriculum', async: 'finetune.train_curriculum_async' },
+  vlm_sft: { sync: 'finetune.train_vlm', async: 'finetune.train_vlm_async' },
+  sequential: { sync: 'finetune.sequential_train', async: 'finetune.sequential_train_async' },
+}
+
+export function resolveTrainingToolName(
+  technique: TrainingTechnique,
+  asyncMode: boolean,
+): string | null {
+  const mapping = TRAINING_TOOL_NAMES[technique]
+  if (!mapping) return null
+  return asyncMode ? mapping.async : mapping.sync
+}
+
+export function supportsAdapterInitialization(technique: TrainingTechnique): boolean {
+  return technique === 'sft' || technique === 'dpo' || technique === 'grpo' || technique === 'kto'
+}
+
+export function isPreferenceTechnique(value: string | null | undefined): value is PreferenceTechnique {
+  return value === 'dpo' || value === 'grpo' || value === 'kto'
+}
+
+function parseRecipeNumber(value: string | number | boolean | undefined): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
+export function extractPreferenceStartingRecipePatch(
+  recipe?: Record<string, string | number | boolean>,
+): PreferenceStartingRecipePatch {
+  if (!recipe) return {}
+
+  const patch: PreferenceStartingRecipePatch = {}
+  const epochs = parseRecipeNumber(recipe.epochs)
+  const learningRate = parseRecipeNumber(recipe.learning_rate)
+
+  if (epochs !== undefined) {
+    patch.num_epochs = epochs
+  }
+  if (learningRate !== undefined) {
+    patch.learning_rate = learningRate
+  }
+  if (recipe.start_from_sft_checkpoint === true) {
+    patch.start_from_sft_checkpoint = true
+  }
+
+  return patch
+}
+
+export function resolvePreferenceTechniqueFromTool(
+  toolName: string,
+  explicitTechnique?: unknown,
+): PreferenceTechnique | null {
+  if (typeof explicitTechnique === 'string' && isPreferenceTechnique(explicitTechnique)) {
+    return explicitTechnique
+  }
+
+  if (toolName.includes('train_dpo') || toolName.includes('benchmark_dpo')) return 'dpo'
+  if (toolName.includes('train_grpo') || toolName.includes('benchmark_grpo')) return 'grpo'
+  if (toolName.includes('train_kto')) return 'kto'
+  return null
+}
+
+export function defaultsToLoraTraining(technique: TrainingTechnique): boolean {
+  return technique !== 'vlm_sft'
+}
 
 export function buildDefaultOutputDir(
   technique: TrainingTechnique,

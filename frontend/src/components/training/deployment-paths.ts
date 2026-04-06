@@ -29,7 +29,6 @@ export function trainingUsesAdapter(result: unknown): boolean {
   const config = isRecord(result.config) ? result.config : null
   if (config) {
     if (typeof config.use_lora === 'boolean') return config.use_lora
-    if (config.trainer === 'grpo') return false
   }
 
   const stageResults = result.stage_results

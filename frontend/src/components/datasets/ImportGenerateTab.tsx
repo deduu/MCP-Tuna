@@ -7,7 +7,9 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { PreferenceDatasetAnalysisCard } from '@/components/shared/PreferenceDatasetAnalysisCard'
 import { buildDatasetOutputPath, getDefaultDatasetOutputDir } from '@/lib/dataset-output'
+import { isPreferenceTechnique } from '@/lib/training-capabilities'
 import {
   FileUp,
   Sparkles,
@@ -751,16 +753,24 @@ export function ImportGenerateTab() {
               </p>
             )}
             {generationSummary && (
-              <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="success">Generated: {generationSummary.count} rows</Badge>
-                  <Badge variant="outline">
-                    Saved: {generationSummary.outputPath.split(/[\\/]/).pop()}
-                  </Badge>
+              <div className="space-y-3">
+                <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="success">Generated: {generationSummary.count} rows</Badge>
+                    <Badge variant="outline">
+                      Saved: {generationSummary.outputPath.split(/[\\/]/).pop()}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground break-all">
+                    {generationSummary.outputPath}
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground break-all">
-                  {generationSummary.outputPath}
-                </p>
+                {isPreferenceTechnique(technique) && (
+                  <PreferenceDatasetAnalysisCard
+                    datasetPath={generationSummary.outputPath}
+                    technique={technique}
+                  />
+                )}
               </div>
             )}
             {genResult && (
@@ -986,14 +996,22 @@ export function ImportGenerateTab() {
             </div>
           )}
           {hfGenerationSummary && (
-            <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="success">Generated: {hfGenerationSummary.count} rows</Badge>
-                <Badge variant="outline">
-                  Saved: {hfGenerationSummary.outputPath.split(/[\\/]/).pop()}
-                </Badge>
+            <div className="space-y-3">
+              <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="success">Generated: {hfGenerationSummary.count} rows</Badge>
+                  <Badge variant="outline">
+                    Saved: {hfGenerationSummary.outputPath.split(/[\\/]/).pop()}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground break-all">{hfGenerationSummary.outputPath}</p>
               </div>
-              <p className="text-xs text-muted-foreground break-all">{hfGenerationSummary.outputPath}</p>
+              {hfTargetFormat === 'dpo' && (
+                <PreferenceDatasetAnalysisCard
+                  datasetPath={hfGenerationSummary.outputPath}
+                  technique="dpo"
+                />
+              )}
             </div>
           )}
           {hfComposeResult && (

@@ -35,6 +35,8 @@ export type TrainingTechnique =
   | 'vlm_sft'
   | 'sequential'
 
+export type PreferenceTechnique = 'dpo' | 'grpo' | 'kto'
+
 export interface GPUInfo {
   index?: number
   available: boolean
@@ -255,7 +257,114 @@ export interface LocalModelCandidate {
 export interface TrainingCapabilitySummary {
   available_techniques: TrainingTechnique[]
   supports_vlm_sft: boolean
+  supports_preference_dataset_analysis: boolean
   supported_validation_techniques: string[]
+}
+
+export interface PreferenceDatasetTextStats {
+  nonempty_count: number
+  empty_count: number
+  unique_count: number
+  unique_ratio: number
+  duplicate_rows: number
+  length: {
+    avg: number
+    min: number
+    max: number
+    p95: number
+  }
+  top_repeated: Array<{
+    preview: string
+    count: number
+  }>
+}
+
+export interface PreferenceDatasetDpoStats {
+  chosen_stats: PreferenceDatasetTextStats
+  rejected_stats: PreferenceDatasetTextStats
+  duplicate_pair_rows: number
+  duplicate_pair_ratio: number
+  identical_pair_rows: number
+  identical_pair_ratio: number
+  avg_token_overlap: number
+  high_overlap_rows: number
+  high_overlap_ratio: number
+  hard_negative_rows: number
+  hard_negative_ratio: number
+  low_overlap_rows: number
+  low_overlap_ratio: number
+  dominant_rejected_count: number
+  dominant_rejected_ratio: number
+  dominant_rejected_preview: string
+  avg_rows_per_prompt: number
+  avg_rejected_variants_per_prompt: number
+  multi_variant_prompt_count: number
+  multi_variant_prompt_ratio: number
+  short_chosen_rows: number
+  short_rejected_rows: number
+}
+
+export interface PreferenceDatasetGrpoStats {
+  response_stats: PreferenceDatasetTextStats
+  avg_responses_per_row: number
+  avg_unique_responses_per_row: number
+  single_response_rows: number
+  invalid_rows: number
+  mismatched_rows: number
+  identical_response_rows: number
+  identical_response_ratio: number
+  zero_reward_variance_rows: number
+  zero_reward_variance_ratio: number
+  reward_stats: {
+    count: number
+    min: number
+    max: number
+    mean: number
+    stdev: number
+  }
+  top_repeated_responses: Array<{
+    preview: string
+    count: number
+  }>
+}
+
+export interface PreferenceDatasetKtoStats {
+  completion_stats: PreferenceDatasetTextStats
+  positive_count: number
+  negative_count: number
+  positive_ratio: number
+  negative_ratio: number
+  invalid_label_rows: number
+}
+
+export interface PreferenceTrainingGuidance {
+  headline: string
+  starting_recipe: Record<string, string | number | boolean>
+  hidden_factors: string[]
+  recommended_actions: string[]
+  missed_contributors: string[]
+  prompt_diversity_ratio: number
+}
+
+export interface PreferenceDatasetAnalysisResult {
+  success: boolean
+  dataset_path: string
+  technique_detected?: string | null
+  technique_analyzed: PreferenceTechnique
+  columns: string[]
+  row_count: number
+  analyzed_row_count: number
+  truncated: boolean
+  status: 'pass' | 'warn'
+  risk_level: 'low' | 'medium' | 'high'
+  prompt_stats: PreferenceDatasetTextStats
+  warnings: string[]
+  recommendations: string[]
+  guidance?: PreferenceTrainingGuidance
+  dpo?: PreferenceDatasetDpoStats
+  grpo?: PreferenceDatasetGrpoStats
+  kto?: PreferenceDatasetKtoStats
+  error?: string
 }
 
 export interface DeploymentBrowseRoot {

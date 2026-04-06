@@ -6,8 +6,13 @@ import type { JSONSchemaProperty } from '@/api/types'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
 import { JsonEditorField } from '@/components/shared/JsonEditorField'
+import { PreferenceDatasetAnalysisCard } from '@/components/shared/PreferenceDatasetAnalysisCard'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
-import { buildToolExecutionOutputDir } from '@/lib/training-capabilities'
+import {
+  buildToolExecutionOutputDir,
+  extractPreferenceStartingRecipePatch,
+  resolvePreferenceTechniqueFromTool,
+} from '@/lib/training-capabilities'
 import { toast } from 'sonner'
 
 interface ToolParameterFormProps {
@@ -286,6 +291,8 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
   const entries = Object.entries(schema.properties ?? {})
   const requiredFields = entries.filter(([k]) => required.has(k))
   const optionalFields = entries.filter(([k]) => !required.has(k))
+  const datasetPath = typeof values.dataset_path === 'string' ? values.dataset_path : ''
+  const preferenceTechnique = resolvePreferenceTechniqueFromTool(toolName, values.technique)
 
   useEffect(() => {
     if (!schema.properties.output_dir) return
@@ -328,6 +335,35 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
       [name]: isValid,
     }))
   }, [])
+
+  const applyPreferenceStartingRecipe = useCallback((recipe: Record<string, string | number | boolean>) => {
+    const patch = extractPreferenceStartingRecipePatch(recipe)
+
+    setValues((prev) => {
+      const next = { ...prev }
+      if (patch.num_epochs !== undefined && schema.properties.num_epochs) {
+        next.num_epochs = patch.num_epochs
+      }
+      if (patch.learning_rate !== undefined && schema.properties.learning_rate) {
+        next.learning_rate = patch.learning_rate
+      }
+      if (schema.properties.auto_tune_defaults) {
+        next.auto_tune_defaults = true
+      }
+      return next
+    })
+
+    if (
+      patch.start_from_sft_checkpoint &&
+      schema.properties.adapter_path &&
+      !(typeof values.adapter_path === 'string' && values.adapter_path.trim())
+    ) {
+      setShowAdvanced(true)
+      toast.info('This recipe assumes you continue from your best SFT adapter. Set adapter_path before running.')
+    } else {
+      toast.success('Applied the safe preference starting recipe')
+    }
+  }, [schema.properties, values.adapter_path])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -391,6 +427,14 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
             </div>
           )}
         </div>
+      )}
+
+      {preferenceTechnique && datasetPath.trim() && (
+        <PreferenceDatasetAnalysisCard
+          datasetPath={datasetPath}
+          technique={preferenceTechnique}
+          onApplyStartingRecipe={applyPreferenceStartingRecipe}
+        />
       )}
 
       <Button type="submit" disabled={isLoading} className="w-full">

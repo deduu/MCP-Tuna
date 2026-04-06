@@ -10,10 +10,12 @@ import type {
   DeploymentBrowseRoot,
   DeploymentBrowseResult,
   ModelModality,
+  PreferenceDatasetAnalysisResult,
+  PreferenceTechnique,
   TrainingCapabilitySummary,
   TrainingTechnique,
 } from '../types'
-import { inferModelModality } from '@/lib/training-capabilities'
+import { inferModelModality, resolveTrainingToolName } from '@/lib/training-capabilities'
 
 function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): TrainingJob {
   const trainerType = typeof job.trainer_type === 'string' ? job.trainer_type : undefined
@@ -159,12 +161,31 @@ export function useTrainingCapabilities() {
       return {
         available_techniques: availableTechniques,
         supports_vlm_sft: toolNames.has('finetune.train_vlm_async'),
+        supports_preference_dataset_analysis: toolNames.has('validate.preference_dataset'),
         supported_validation_techniques: Array.isArray(validationEnum)
           ? validationEnum.map((value) => String(value))
           : fallbackValidationTechniques,
       }
     },
     staleTime: 60_000,
+  })
+}
+
+export function usePreferenceDatasetAnalysis(
+  datasetPath: string,
+  technique: PreferenceTechnique | null,
+  enabled: boolean = true,
+) {
+  return useQuery<PreferenceDatasetAnalysisResult>({
+    queryKey: ['training', 'preference-dataset-analysis', datasetPath, technique],
+    queryFn: () =>
+      mcpCall<PreferenceDatasetAnalysisResult>('validate.preference_dataset', {
+        dataset_path: datasetPath,
+        technique: technique ?? undefined,
+      }),
+    enabled: enabled && !!datasetPath.trim() && !!technique,
+    staleTime: 15_000,
+    retry: 1,
   })
 }
 
@@ -193,21 +214,11 @@ type TrainParams = {
   args: Record<string, unknown>
 }
 
-const TECHNIQUE_TOOLS: Partial<Record<TrainingTechnique, string>> = {
-  sft: 'finetune.train_async',
-  dpo: 'finetune.train_dpo_async',
-  grpo: 'finetune.train_grpo_async',
-  kto: 'finetune.train_kto_async',
-  curriculum: 'finetune.train_curriculum_async',
-  vlm_sft: 'finetune.train_vlm_async',
-  sequential: 'finetune.sequential_train_async',
-}
-
 export function useStartTraining() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ technique, args }: TrainParams) => {
-      const toolName = TECHNIQUE_TOOLS[technique]
+      const toolName = resolveTrainingToolName(technique, true)
       if (!toolName) {
         throw new Error(`Training technique '${technique}' is not available in this build`)
       }

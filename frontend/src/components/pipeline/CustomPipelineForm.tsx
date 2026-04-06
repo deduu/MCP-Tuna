@@ -1,9 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { PreferenceDatasetAnalysisCard } from '@/components/shared/PreferenceDatasetAnalysisCard'
 import { Input } from '@/components/ui/input'
 import { buildDatasetOutputPath } from '@/lib/dataset-output'
-import { buildDefaultOutputDir } from '@/lib/training-capabilities'
+import {
+  buildDefaultOutputDir,
+  extractPreferenceStartingRecipePatch,
+  isPreferenceTechnique,
+  resolveTrainingToolName,
+  supportsAdapterInitialization,
+} from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { DocumentPathInput } from './DocumentPathInput'
@@ -30,11 +37,17 @@ interface CustomPipelineFormProps {
 
 function resolveTrainUseLora(
   overrides: Record<string, Record<string, unknown>>,
+  toolName: string | null,
   fallback: boolean,
 ): boolean {
   const overrideValues = [
     overrides.train?.use_lora,
+    ...(toolName ? [overrides[toolName]?.use_lora] : []),
     overrides['finetune.train']?.use_lora,
+    overrides['finetune.train_dpo']?.use_lora,
+    overrides['finetune.train_grpo']?.use_lora,
+    overrides['finetune.train_kto']?.use_lora,
+    overrides['finetune.train_vlm']?.use_lora,
   ]
 
   for (const value of overrideValues) {
@@ -49,6 +62,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
   const [documentPath, setDocumentPath] = useState('')
   const [validationPath, setValidationPath] = useState('')
   const [modelPath, setModelPath] = useState('')
+  const [initAdapterPath, setInitAdapterPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
   const [technique, setTechnique] = useState<(typeof TECHNIQUES)[number]>('sft')
   const [useLora, setUseLora] = useState(true)
@@ -66,6 +80,9 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
   const hasExtract = selectedSteps.has('extract')
   const deployOnly = hasDeploy && !hasTrain
   const isVlmTechnique = technique === 'vlm_sft'
+  const trainToolName = resolveTrainingToolName(technique, false)
+  const preferenceTechnique = isPreferenceTechnique(technique) ? technique : null
+  const trainSupportsAdapterInit = !isVlmTechnique && supportsAdapterInitialization(technique)
   const usesExistingDataset = !isVlmTechnique && !hasGenerate && !hasExtract && ['clean', 'normalize', 'evaluate', 'train'].some((step) =>
     selectedSteps.has(step),
   )
@@ -86,6 +103,13 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
     : usesExistingDataset
       ? 'Paste an existing dataset path. You can skip extract/generate when the file is already in dataset format.'
       : 'Browse uploads one document to the backend. For an existing dataset, you can also paste its server path.'
+  const showPreferenceDatasetAnalysis = hasTrain && usesExistingDataset && preferenceTechnique !== null
+
+  useEffect(() => {
+    if (!trainSupportsAdapterInit && initAdapterPath) {
+      setInitAdapterPath('')
+    }
+  }, [initAdapterPath, trainSupportsAdapterInit])
 
   function toggleStep(step: string) {
     setSelectedSteps((prev) => {
@@ -94,6 +118,41 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       else next.add(step)
       return next
     })
+  }
+
+  function applyPreferenceStartingRecipe(recipe: Record<string, string | number | boolean>) {
+    const patch = extractPreferenceStartingRecipePatch(recipe)
+    const overridePatch: Record<string, unknown> = {}
+
+    if (patch.num_epochs !== undefined) {
+      overridePatch.num_epochs = patch.num_epochs
+    }
+    if (patch.learning_rate !== undefined) {
+      overridePatch.learning_rate = patch.learning_rate
+    }
+
+    if (Object.keys(overridePatch).length === 0) {
+      return
+    }
+
+    setStepConfig((prev) => {
+      const next = { ...prev }
+      next.train = { ...(next.train ?? {}), ...overridePatch }
+      if (trainToolName) {
+        next[trainToolName] = {
+          ...(next[trainToolName] ?? {}),
+          ...overridePatch,
+          auto_tune_defaults: true,
+        }
+      }
+      return next
+    })
+
+    if (patch.start_from_sft_checkpoint && trainSupportsAdapterInit && !initAdapterPath.trim()) {
+      toast.info('This recipe assumes you continue from your best SFT adapter. Set Initial Adapter Path before running.')
+    } else {
+      toast.success('Applied the safe preference starting recipe to the train step')
+    }
   }
 
   function handleSubmit() {
@@ -126,7 +185,19 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       return
     }
     const overrides = stepConfig
-    const effectiveTrainUseLora = resolveTrainUseLora(overrides, useLora)
+    const effectiveTrainUseLora = resolveTrainUseLora(
+      overrides,
+      trainToolName,
+      useLora,
+    )
+    if (hasTrain && !trainToolName) {
+      toast.error(`Technique ${technique} is not wired to a training tool`)
+      return
+    }
+    if (hasTrain && initAdapterPath.trim() && !effectiveTrainUseLora) {
+      toast.error('Initial adapter path requires LoRA training to stay enabled')
+      return
+    }
     const trainOutputDir = buildDefaultOutputDir(technique, false, documentPath.trim() || modelPath.trim())
 
     const steps: Array<{ tool: string; params: Record<string, unknown> }> = []
@@ -159,36 +230,32 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       addStep('evaluate', 'evaluate.dataset', { data_points: '$prev.data_points' })
     }
     if (selectedSteps.has('train')) {
+      const buildTrainParams = (datasetPath: string) => ({
+        dataset_path: datasetPath,
+        output_dir: trainOutputDir,
+        ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
+        ...(trainSupportsAdapterInit && initAdapterPath.trim() ? { adapter_path: initAdapterPath.trim() } : {}),
+        ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
+        use_lora: effectiveTrainUseLora,
+        ...(pushToHub.trim() && technique === 'sft' ? { push_to_hub: pushToHub.trim() } : {}),
+      })
+
       if (isVlmTechnique) {
-        addStep('train', 'finetune.train_vlm_async', {
+        addStep('train', trainToolName!, {
           dataset_path: documentPath.trim(),
           output_dir: trainOutputDir,
           ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
           use_lora: effectiveTrainUseLora,
         })
       } else if (trainConsumesExistingDatasetDirectly) {
-        addStep('train', 'finetune.train', {
-          dataset_path: documentPath.trim(),
-          output_dir: trainOutputDir,
-          ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
-          ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
-          use_lora: effectiveTrainUseLora,
-          ...(pushToHub.trim() ? { push_to_hub: pushToHub.trim() } : {}),
-        })
+        addStep('train', trainToolName!, buildTrainParams(documentPath.trim()))
       } else {
         addStep('save', 'dataset.save', {
           data_points: '$prev.data_points',
           output_path: buildDatasetOutputPath(documentPath, 'custom_pipeline'),
           format: 'jsonl',
         })
-        addStep('train', 'finetune.train', {
-          dataset_path: '$prev.file_path',
-          output_dir: trainOutputDir,
-          ...(modelPath.trim() ? { base_model: modelPath.trim() } : {}),
-          ...(showValidationDatasetPath && validationPath.trim() ? { eval_file_path: validationPath.trim() } : {}),
-          use_lora: effectiveTrainUseLora,
-          ...(pushToHub.trim() ? { push_to_hub: pushToHub.trim() } : {}),
-        })
+        addStep('train', trainToolName!, buildTrainParams('$prev.file_path'))
       }
     }
     if (selectedSteps.has('deploy')) {
@@ -260,7 +327,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       {/* Inputs */}
       <div className={cn('grid gap-3', needsDocumentPath ? 'sm:grid-cols-2' : 'sm:grid-cols-1')}>
         {needsDocumentPath && (
-          <div>
+          <div className="space-y-3">
             <label className="text-sm font-medium text-foreground mb-1 block">{primaryPathLabel}</label>
             <DocumentPathInput
               value={documentPath}
@@ -269,6 +336,13 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
               disabled={isPending}
               helperText={primaryHelperText}
             />
+            {showPreferenceDatasetAnalysis && (
+              <PreferenceDatasetAnalysisCard
+                datasetPath={documentPath}
+                technique={preferenceTechnique}
+                onApplyStartingRecipe={applyPreferenceStartingRecipe}
+              />
+            )}
           </div>
         )}
         <div>
@@ -301,6 +375,20 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
             placeholder="/path/to/val_dataset.jsonl"
             disabled={isPending}
             helperText="Optional. Use a second JSONL dataset for evaluation during SFT. Leave blank to train without validation."
+          />
+        </div>
+      )}
+
+      {hasTrain && trainSupportsAdapterInit && (
+        <div>
+          <label className="text-sm font-medium text-foreground mb-1 block">Initial Adapter Path</label>
+          <ModelPathField
+            value={initAdapterPath}
+            onChange={setInitAdapterPath}
+            disabled={isPending}
+            validationPurpose="adapter"
+            placeholder="./output/best_sft_adapter"
+            helperText="Optional. Continue LoRA training from an existing adapter instead of starting from the base model alone."
           />
         </div>
       )}
@@ -357,7 +445,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
             />
             Train with LoRA adapter
           </label>
-          {!isVlmTechnique && (
+          {!isVlmTechnique && technique === 'sft' && (
             <div>
               <label className="text-sm font-medium text-foreground mb-1 block">Push To Hub Repo</label>
               <Input

@@ -25,8 +25,12 @@ export function isTrainingStageName(stage?: string | null): boolean {
   return stage === 'train' || stage?.startsWith('finetune.train') === true
 }
 
+export function isTrainingWorkflowStageName(stage?: string | null): boolean {
+  return isTrainingStageName(stage) || stage === 'workflow.benchmark_finetuning'
+}
+
 export function includesTrainingStage(steps?: string[] | null): boolean {
-  return (steps ?? []).some((step) => isTrainingStageName(step))
+  return (steps ?? []).some((step) => isTrainingWorkflowStageName(step))
 }
 
 export function hasTrainerProgress(progress?: TrainingProgressLike | null): boolean {

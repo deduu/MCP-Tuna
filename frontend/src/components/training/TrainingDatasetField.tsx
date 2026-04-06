@@ -1,6 +1,6 @@
 import type { DatasetInfo } from '@/api/types'
+import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 
 interface TrainingDatasetFieldProps {
   label?: string
@@ -38,30 +38,30 @@ export function TrainingDatasetField({
           </Badge>
         )}
       </div>
-      <div className="relative">
-        <Input
-          value={datasetPath}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-        />
-        {datasets.length > 0 && (
-          <select
-            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 appearance-none rounded border-none bg-transparent text-xs text-muted-foreground opacity-60 cursor-pointer hover:opacity-100"
-            value=""
-            title="Pick a dataset"
-            onChange={(event) => {
-              if (event.target.value) onChange(event.target.value)
-            }}
-          >
-            <option value="">▾</option>
-            {datasets.map((dataset) => (
-              <option key={dataset.file_path} value={dataset.file_path}>
-                {dataset.file_path} ({dataset.row_count} rows)
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <BrowsePathField
+        value={datasetPath}
+        onChange={onChange}
+        placeholder={placeholder}
+        allowFiles
+        allowDirectories={false}
+        preferredRootIds={['workspace', 'uploads', 'output']}
+      />
+      {datasets.length > 0 && (
+        <select
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          value=""
+          onChange={(event) => {
+            if (event.target.value) onChange(event.target.value)
+          }}
+        >
+          <option value="">Pick an existing dataset...</option>
+          {datasets.map((dataset) => (
+            <option key={dataset.file_path} value={dataset.file_path}>
+              {dataset.file_path} ({dataset.row_count} rows)
+            </option>
+          ))}
+        </select>
+      )}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )

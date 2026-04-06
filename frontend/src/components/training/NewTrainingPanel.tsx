@@ -8,24 +8,38 @@ import {
   useStartTraining,
   useTrainingCapabilities,
 } from '@/api/hooks/useTraining'
+import { useRunPipeline } from '@/api/hooks/usePipeline'
 import { useDatasets } from '@/api/hooks/useDatasets'
 import { mcpCall } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { PreferenceDatasetAnalysisCard } from '@/components/shared/PreferenceDatasetAnalysisCard'
 import {
   buildDefaultOutputDir,
+  DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+  DEFAULT_LEARNING_RATE,
+  DEFAULT_LORA_ALPHA,
+  DEFAULT_LORA_DROPOUT,
+  DEFAULT_LORA_R,
+  DEFAULT_NUM_EPOCHS,
+  DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+  defaultsToLoraTraining,
+  extractPreferenceStartingRecipePatch,
   getDatasetHelpText,
   getDatasetPlaceholder,
   getTechniqueOptions,
   inferModelModality,
+  isPreferenceTechnique,
   resolveValidationTechnique,
+  supportsAdapterInitialization,
   supportsSequentialTraining,
 } from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
 import { ModelBrowser } from './ModelBrowser'
 import { TrainingDatasetField } from './TrainingDatasetField'
 import { TrainingTechniqueSelector } from './TrainingTechniqueSelector'
+import { ModelPathField } from '@/components/pipeline/ModelPathField'
 
 interface NewTrainingPanelProps {
   open: boolean
@@ -65,21 +79,24 @@ export function NewTrainingPanel({
   const [sequential, setSequential] = useState(false)
   const [datasetPath, setDatasetPath] = useState('')
   const [evalDatasetPath, setEvalDatasetPath] = useState('')
+  const [initAdapterPath, setInitAdapterPath] = useState('')
+  const [benchmarkAfterTraining, setBenchmarkAfterTraining] = useState(false)
+  const [optimizeAcrossRuns, setOptimizeAcrossRuns] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [outputDir, setOutputDir] = useState(() => buildDefaultOutputDir('sft', false))
   const [outputDirCustomized, setOutputDirCustomized] = useState(false)
   const [quantization, setQuantization] = useState<'4bit' | 'none'>('4bit')
 
-  const [learningRate, setLearningRate] = useState('2e-4')
-  const [epochs, setEpochs] = useState('3')
-  const [batchSize, setBatchSize] = useState('4')
-  const [loraR, setLoraR] = useState('16')
-  const [loraAlpha, setLoraAlpha] = useState('32')
-  const [loraDropout, setLoraDropout] = useState('0.05')
+  const [learningRate, setLearningRate] = useState(String(DEFAULT_LEARNING_RATE))
+  const [epochs, setEpochs] = useState(String(DEFAULT_NUM_EPOCHS))
+  const [batchSize, setBatchSize] = useState(String(DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE))
+  const [loraR, setLoraR] = useState(String(DEFAULT_LORA_R))
+  const [loraAlpha, setLoraAlpha] = useState(String(DEFAULT_LORA_ALPHA))
+  const [loraDropout, setLoraDropout] = useState(String(DEFAULT_LORA_DROPOUT))
 
   const [warmupRatio, setWarmupRatio] = useState('0')
   const [weightDecay, setWeightDecay] = useState('0.01')
-  const [gradAccum, setGradAccum] = useState('1')
+  const [gradAccum, setGradAccum] = useState(String(DEFAULT_GRADIENT_ACCUMULATION_STEPS))
   const [maxSeqLength, setMaxSeqLength] = useState('2048')
   const [numStages, setNumStages] = useState('3')
   const [scoreColumn, setScoreColumn] = useState('weighted_score')
@@ -96,6 +113,7 @@ export function NewTrainingPanel({
   const { data: localCandidates = [] } = useLocalModelCandidates()
   const { data: trainingCapabilities } = useTrainingCapabilities()
   const startTraining = useStartTraining()
+  const runPipeline = useRunPipeline()
   const autoSuggest = useAutoSuggestModel()
 
   const selectedCandidate = useMemo(
@@ -112,14 +130,28 @@ export function NewTrainingPanel({
   )
   const selectedTechniqueOption = techniqueOptions.find((option) => option.value === technique) ?? techniqueOptions[0]
   const sequentialAllowed = supportsSequentialTraining(technique)
+  const supportsInitAdapter = !sequential && supportsAdapterInitialization(technique)
   const validationTechnique = resolveValidationTechnique(technique, trainingCapabilities)
   const datasetPlaceholder = getDatasetPlaceholder(technique)
   const datasetHelpText = getDatasetHelpText(technique)
   const vlmSupportMissing = modelModality === 'vision-language' && !trainingCapabilities?.supports_vlm_sft
-  const canSubmit = Boolean(modelPath && datasetPath && selectedTechniqueOption?.enabled && !startTraining.isPending)
-  const submitLabel = startTraining.isPending ? 'Starting...' : 'Start Training'
   const autoSuggestDisabled = !datasetPath || autoSuggest.isPending || technique === 'vlm_sft'
   const showEvalDatasetField = technique === 'sft' && !sequential
+  const supportsBenchmarkWorkflow = showEvalDatasetField
+  const preferenceTechnique = isPreferenceTechnique(technique) ? technique : null
+  const showPreferenceDatasetAnalysis =
+    preferenceTechnique !== null &&
+    Boolean(datasetPath.trim()) &&
+    Boolean(trainingCapabilities?.supports_preference_dataset_analysis)
+  const isSubmitting = startTraining.isPending || runPipeline.isPending
+  const canSubmit = Boolean(modelPath && datasetPath && selectedTechniqueOption?.enabled && !isSubmitting)
+  const submitLabel = isSubmitting
+    ? 'Starting...'
+    : benchmarkAfterTraining
+      ? optimizeAcrossRuns
+        ? 'Start Optimization'
+        : 'Start Training + Benchmark'
+      : 'Start Training'
   const schemaTechniqueLabel = technique === 'curriculum'
     ? 'CURRICULUM (SFT schema)'
     : technique === 'vlm_sft'
@@ -146,6 +178,19 @@ export function NewTrainingPanel({
       setSequential(false)
     }
   }, [sequential, sequentialAllowed])
+
+  useEffect(() => {
+    if (!supportsInitAdapter && initAdapterPath) {
+      setInitAdapterPath('')
+    }
+  }, [initAdapterPath, supportsInitAdapter])
+
+  useEffect(() => {
+    if (!supportsBenchmarkWorkflow && (benchmarkAfterTraining || optimizeAcrossRuns)) {
+      setBenchmarkAfterTraining(false)
+      setOptimizeAcrossRuns(false)
+    }
+  }, [benchmarkAfterTraining, optimizeAcrossRuns, supportsBenchmarkWorkflow])
 
   useEffect(() => {
     if (!datasetPath || !validationTechnique) {
@@ -203,6 +248,27 @@ export function NewTrainingPanel({
     toast.success(`Applied ${candidate.model_id} with optimized config`)
   }
 
+  function applyPreferenceStartingRecipe(recipe: Record<string, string | number | boolean>) {
+    const patch = extractPreferenceStartingRecipePatch(recipe)
+
+    if (patch.learning_rate !== undefined) {
+      setLearningRate(String(patch.learning_rate))
+    }
+    if (patch.num_epochs !== undefined) {
+      setEpochs(String(patch.num_epochs))
+    }
+
+    if (
+      patch.start_from_sft_checkpoint &&
+      supportsInitAdapter &&
+      !initAdapterPath.trim()
+    ) {
+      toast.info('This recipe assumes you continue from your best SFT adapter. Set Initial Adapter before running.')
+    } else {
+      toast.success('Applied the safe preference starting recipe')
+    }
+  }
+
   function handleSubmit() {
     if (!modelPath || !datasetPath) {
       toast.error('Model path and dataset path are required')
@@ -226,14 +292,21 @@ export function NewTrainingPanel({
     const parsedLearningRate = parseFloat(learningRate)
     const parsedNumStages = parseInt(numStages, 10)
     const resolvedOutputDir = outputDir.trim() || buildDefaultOutputDir(technique, sequential, datasetPath)
+    const resolvedUseLora = defaultsToLoraTraining(technique)
 
-      const commonArgs: Record<string, unknown> = {
-        output_dir: resolvedOutputDir,
-        base_model: modelPath.trim(),
-        dataset_path: datasetPath.trim(),
-        load_in_4bit: quantization === '4bit',
-        ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
-      }
+    if (supportsInitAdapter && initAdapterPath.trim() && !resolvedUseLora) {
+      toast.error('Initial adapter path requires LoRA training to stay enabled')
+      return
+    }
+
+    const commonArgs: Record<string, unknown> = {
+      output_dir: resolvedOutputDir,
+      base_model: modelPath.trim(),
+      dataset_path: datasetPath.trim(),
+      load_in_4bit: quantization === '4bit',
+      ...(supportsInitAdapter && initAdapterPath.trim() ? { adapter_path: initAdapterPath.trim() } : {}),
+      ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
+    }
 
     let args: Record<string, unknown> = { ...commonArgs }
 
@@ -269,6 +342,20 @@ export function NewTrainingPanel({
         num_epochs: parsedEpochs,
         use_lora: true,
         lora_r: parsedLoraR,
+        lora_alpha: parsedLoraAlpha,
+        lora_dropout: parsedLoraDropout,
+      }
+    } else if (technique === 'grpo') {
+      args = {
+        ...commonArgs,
+        num_epochs: parsedEpochs,
+        use_lora: true,
+        lora_r: parsedLoraR,
+        lora_alpha: parsedLoraAlpha,
+        lora_dropout: parsedLoraDropout,
+        learning_rate: parsedLearningRate,
+        per_device_train_batch_size: parsedBatchSize,
+        gradient_accumulation_steps: parsedGradAccum,
       }
     } else {
       args = {
@@ -300,7 +387,20 @@ export function NewTrainingPanel({
           ? {
               use_lora: true,
               lora_r: parsedLoraR,
+              lora_alpha: parsedLoraAlpha,
+              lora_dropout: parsedLoraDropout,
               ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
+            }
+          : {}),
+        ...(technique === 'grpo'
+          ? {
+              use_lora: true,
+              lora_r: parsedLoraR,
+              lora_alpha: parsedLoraAlpha,
+              lora_dropout: parsedLoraDropout,
+              learning_rate: parsedLearningRate,
+              per_device_train_batch_size: parsedBatchSize,
+              gradient_accumulation_steps: parsedGradAccum,
             }
           : {}),
         load_in_4bit: quantization === '4bit',
@@ -311,6 +411,70 @@ export function NewTrainingPanel({
         base_model: modelPath.trim(),
         stages: JSON.stringify([sequentialStage]),
       }
+    }
+
+    if (supportsBenchmarkWorkflow && benchmarkAfterTraining) {
+      const benchmarkDatasetPath = evalDatasetPath.trim()
+      if (!benchmarkDatasetPath) {
+        toast.error('Validation dataset is required when benchmark-after-training is enabled')
+        return
+      }
+
+      const normalizedOutputDir = resolvedOutputDir.replace(/[\\/]+$/, '')
+      const benchmarkOutputDir = normalizedOutputDir.endsWith('-benchmark')
+        ? normalizedOutputDir
+        : `${normalizedOutputDir}-benchmark`
+      const benchmarkSeeds = optimizeAcrossRuns ? [3407, 42, 1234] : [3407]
+      const steps = [
+        {
+          tool: 'workflow.benchmark_finetuning',
+          params: {
+            train_dataset_path: datasetPath.trim(),
+            output_dir: benchmarkOutputDir,
+            base_model: modelPath.trim(),
+            eval_file_path: benchmarkDatasetPath,
+            dev_data_path: benchmarkDatasetPath,
+            include_flat_sft: true,
+            include_curriculum_sft: false,
+            seeds: benchmarkSeeds,
+            primary_pack: 'dev',
+            num_epochs_flat: parsedEpochs,
+            use_lora: true,
+            lora_r: parsedLoraR,
+            lora_alpha: parsedLoraAlpha,
+            lora_dropout: parsedLoraDropout,
+            load_in_4bit: quantization === '4bit',
+            learning_rate: parsedLearningRate,
+            per_device_train_batch_size: parsedBatchSize,
+            gradient_accumulation_steps: parsedGradAccum,
+            max_seq_length: parsedMaxSeqLength,
+            warmup_ratio: parsedWarmupRatio,
+            weight_decay: parsedWeightDecay,
+            save_best_model: true,
+            ...(trainingRecipe !== 'none' ? { recipe: trainingRecipe } : {}),
+          },
+        },
+      ]
+
+      runPipeline.mutate(
+        { steps: JSON.stringify(steps) },
+        {
+          onSuccess: () => {
+            toast.success(
+              optimizeAcrossRuns
+                ? 'Optimization workflow started'
+                : 'Training benchmark workflow started',
+            )
+            setOutputDir(buildDefaultOutputDir(technique, sequential, datasetPath))
+            setOutputDirCustomized(false)
+            onSubmit()
+          },
+          onError: (error) => {
+            toast.error(`Failed to start workflow: ${error.message}`)
+          },
+        },
+      )
+      return
     }
 
     startTraining.mutate(
@@ -453,6 +617,20 @@ export function NewTrainingPanel({
           )}
         </div>
 
+        {supportsInitAdapter && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Initial Adapter</label>
+            <ModelPathField
+              value={initAdapterPath}
+              onChange={setInitAdapterPath}
+              disabled={isSubmitting}
+              validationPurpose="adapter"
+              placeholder="./output/best_sft_adapter"
+              helperText="Optional. Continue LoRA training from an existing adapter instead of starting from the base model only."
+            />
+          </div>
+        )}
+
         <TrainingDatasetField
           label="Train Dataset"
           datasetPath={datasetPath}
@@ -468,6 +646,14 @@ export function NewTrainingPanel({
           }
         />
 
+        {showPreferenceDatasetAnalysis && (
+          <PreferenceDatasetAnalysisCard
+            datasetPath={datasetPath}
+            technique={preferenceTechnique}
+            onApplyStartingRecipe={applyPreferenceStartingRecipe}
+          />
+        )}
+
         {showEvalDatasetField && (
           <TrainingDatasetField
             label="Validation Dataset (optional)"
@@ -479,6 +665,58 @@ export function NewTrainingPanel({
             placeholder="/path/to/eval.jsonl"
             hint="Optional. When set, the trainer will evaluate during SFT and can save the best checkpoint instead of training blind."
           />
+        )}
+
+        {supportsBenchmarkWorkflow && (
+          <div className="space-y-3 rounded-md border border-border/60 bg-secondary/20 p-3">
+            <div>
+              <p className="text-sm font-medium">Post-training evaluation</p>
+              <p className="text-xs text-muted-foreground">
+                Uses the Validation Dataset as the dev evaluation pack when benchmarking is enabled.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={benchmarkAfterTraining}
+                onChange={(event) => {
+                  const checked = event.target.checked
+                  setBenchmarkAfterTraining(checked)
+                  if (!checked) {
+                    setOptimizeAcrossRuns(false)
+                  }
+                }}
+                className="rounded border-input"
+              />
+              Benchmark after training
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={optimizeAcrossRuns}
+                onChange={(event) => {
+                  const checked = event.target.checked
+                  setOptimizeAcrossRuns(checked)
+                  if (checked) {
+                    setBenchmarkAfterTraining(true)
+                  }
+                }}
+                className="rounded border-input"
+                disabled={!benchmarkAfterTraining}
+              />
+              Optimize across multiple runs
+            </label>
+            {benchmarkAfterTraining && (
+              <p className="text-xs text-muted-foreground">
+                Single-run benchmark uses seed <code>3407</code>. Optimization runs the default seed set <code>3407, 42, 1234</code> and keeps the best-scoring candidate in the benchmark report.
+              </p>
+            )}
+            {benchmarkAfterTraining && !evalDatasetPath.trim() && (
+              <p className="text-xs text-amber-300">
+                Set Validation Dataset to enable benchmark scoring and best-checkpoint selection.
+              </p>
+            )}
+          </div>
         )}
 
         <div className="space-y-2">

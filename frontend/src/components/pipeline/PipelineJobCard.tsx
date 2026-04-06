@@ -7,7 +7,11 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { StepIndicator } from './StepIndicator'
 import { LossChart } from '@/components/training/LossChart'
-import { buildLossChartData, isTrainingStageActive, isTrainingStageName } from '@/lib/training-progress'
+import {
+  buildLossChartData,
+  isTrainingStageActive,
+  isTrainingWorkflowStageName,
+} from '@/lib/training-progress'
 import { cn, formatDuration, formatTimeAgo } from '@/lib/utils'
 
 interface PipelineJobCardProps {
@@ -21,10 +25,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function extractFinalResult(result: Record<string, unknown> | null): Record<string, unknown> | null {
+  return isRecord(result?.final_result) ? result.final_result : null
+}
+
+function isTrainingResult(value: Record<string, unknown> | null): boolean {
+  return typeof value?.model_path === 'string' || typeof value?.final_model_path === 'string'
+}
+
+function isBenchmarkResult(value: Record<string, unknown> | null): boolean {
+  return isRecord(value?.summary) || typeof value?.results_path === 'string'
+}
+
 function extractTrainingResult(result: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!result) return null
-  if (typeof result.model_path === 'string' || typeof result.final_model_path === 'string') {
+  if (isTrainingResult(result)) {
     return result
+  }
+  const finalResult = extractFinalResult(result)
+  if (isTrainingResult(finalResult)) {
+    return finalResult
   }
 
   const stepResults = result.results
@@ -38,6 +58,34 @@ function extractTrainingResult(result: Record<string, unknown> | null): Record<s
     if (isRecord(stepResult.result)) {
       return stepResult.result
     }
+  }
+
+  return null
+}
+
+function extractBenchmarkResult(result: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!result) return null
+  if (isBenchmarkResult(result)) {
+    return result
+  }
+  const finalResult = extractFinalResult(result)
+  if (isBenchmarkResult(finalResult)) {
+    return finalResult
+  }
+
+  const stepResults = result.results
+  if (!Array.isArray(stepResults)) return null
+
+  for (let index = stepResults.length - 1; index >= 0; index -= 1) {
+    const stepResult = stepResults[index]
+    if (
+      !isRecord(stepResult)
+      || stepResult.tool !== 'workflow.benchmark_finetuning'
+      || !isRecord(stepResult.result)
+    ) {
+      continue
+    }
+    return stepResult.result
   }
 
   return null
@@ -60,7 +108,15 @@ export function PipelineJobCard({ job, onCancel, onDelete, isDeleting = false }:
   const [showResult, setShowResult] = useState(false)
   const result = (job.result as Record<string, unknown> | undefined) ?? null
   const trainingResult = extractTrainingResult(result)
+  const benchmarkResult = extractBenchmarkResult(result)
   const trainingMetrics = isRecord(trainingResult?.metrics) ? trainingResult.metrics : null
+  const benchmarkSummary = isRecord(benchmarkResult?.summary) ? benchmarkResult.summary : null
+  const bestRun = isRecord(benchmarkSummary?.best_run) ? benchmarkSummary.best_run : null
+  const bestRunModelSpec = isRecord(bestRun?.model_spec) ? bestRun.model_spec : null
+  const benchmarkGates = Array.isArray(benchmarkSummary?.gates) ? benchmarkSummary.gates : []
+  const passedGateCount = benchmarkGates.filter(
+    (gate) => isRecord(gate) && gate.passed === true,
+  ).length
   const progress = job.progress
   const lossChartData = buildLossChartData(progress)
 
@@ -72,7 +128,11 @@ export function PipelineJobCard({ job, onCancel, onDelete, isDeleting = false }:
   const rawProgress =
     typeof progress?.percent_complete === 'number' ? progress.percent_complete : undefined
   const isTrainingStage = isTrainingStageActive(job.current_step, progress)
-  const hasTrainingHistory = isTrainingStageName(job.current_step) || lossChartData.length > 0 || !!trainingResult
+  const hasTrainingHistory =
+    isTrainingWorkflowStageName(job.current_step)
+    || lossChartData.length > 0
+    || !!trainingResult
+    || !!benchmarkResult
   const stageLabel =
     currentStepIndex >= 0 && totalSteps > 0 ? `Stage ${currentStepIndex + 1} of ${totalSteps}` : null
   const lastUpdateAgo = formatTimeAgo(progress?.last_updated)
@@ -240,6 +300,70 @@ export function PipelineJobCard({ job, onCancel, onDelete, isDeleting = false }:
         {/* Error */}
         {job.error && (
           <p className="text-sm text-red-400">{job.error}</p>
+        )}
+
+        {job.status === 'completed' && benchmarkResult && (
+          <div className="space-y-3 rounded-lg border border-border/60 bg-secondary/20 p-3">
+            <div>
+              <p className="text-sm font-medium">Benchmark result</p>
+              <p className="text-xs text-muted-foreground">
+                Ranked the trained candidate set using the selected evaluation pack.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+              {typeof bestRun?.score === 'number' && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Best Score</p>
+                  <p className="font-mono">{bestRun.score.toFixed(4)}</p>
+                </div>
+              )}
+              {typeof benchmarkSummary?.best_method === 'string' && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Best Method</p>
+                  <p className="font-mono">{benchmarkSummary.best_method}</p>
+                </div>
+              )}
+              {typeof bestRun?.seed === 'number' && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Best Seed</p>
+                  <p className="font-mono">{bestRun.seed}</p>
+                </div>
+              )}
+              {benchmarkGates.length > 0 && (
+                <div className="rounded-md bg-background/40 p-2">
+                  <p className="text-muted-foreground">Gate Pass</p>
+                  <p className="font-mono">{passedGateCount} / {benchmarkGates.length}</p>
+                </div>
+              )}
+            </div>
+
+            {typeof benchmarkSummary?.primary_pack === 'string' && (
+              <div className="rounded-md bg-background/40 p-2 text-xs">
+                <p className="text-muted-foreground">Primary Pack</p>
+                <p className="font-mono break-all">
+                  {benchmarkSummary.primary_pack}
+                  {typeof benchmarkSummary.primary_metric === 'string'
+                    ? ` (${benchmarkSummary.primary_metric})`
+                    : ''}
+                </p>
+              </div>
+            )}
+
+            {typeof benchmarkResult.results_path === 'string' && (
+              <div className="rounded-md bg-background/40 p-2 text-xs">
+                <p className="text-muted-foreground">Report Path</p>
+                <p className="font-mono break-all">{benchmarkResult.results_path}</p>
+              </div>
+            )}
+
+            {typeof bestRunModelSpec?.adapter_path === 'string' && (
+              <div className="rounded-md bg-background/40 p-2 text-xs">
+                <p className="text-muted-foreground">Best Adapter Path</p>
+                <p className="font-mono break-all">{bestRunModelSpec.adapter_path}</p>
+              </div>
+            )}
+          </div>
         )}
 
         {job.status === 'completed' && trainingResult && (
