@@ -1,24 +1,45 @@
-# Codex CLI — ~/.codex/config.toml (or .codex/config.toml for project scope)
+# Codex CLI - ~/.codex/config.toml (or .codex/config.toml for project scope)
 #
-# Stdio mode (recommended — Codex launches the server automatically)
-[mcp_servers.mcp-tuna]
-command = "mcp-tuna-gateway"
+# Recommended default for Codex: start with the smallest useful MCP surface.
+# Split servers keep tool count and context overhead lower than the unified
+# gateway, which helps both routing quality and token efficiency.
 
-[mcp_servers.mcp-tuna.env]
+[mcp_servers.mcp-tuna-data]
+command = "mcp-tuna-data"
+
+[mcp_servers.mcp-tuna-data.env]
 OPENAI_API_KEY = "sk-..."
+
+[mcp_servers.mcp-tuna-train]
+command = "mcp-tuna-train"
+
+[mcp_servers.mcp-tuna-train.env]
 HF_TOKEN = "hf_..."
 
-# -- OR: HTTP mode (connect to a running server) --
-# [mcp_servers.mcp-tuna]
-# url = "http://localhost:8000/mcp"
-
-# -- OR: Split servers (lightweight, per-task) --
-# [mcp_servers.mcp-tuna-data]
-# command = "mcp-tuna-data"
-# [mcp_servers.mcp-tuna-data.env]
+# Add more servers only when the task needs them.
+# [mcp_servers.mcp-tuna-eval]
+# command = "mcp-tuna-eval"
+# [mcp_servers.mcp-tuna-eval.env]
 # OPENAI_API_KEY = "sk-..."
 #
-# [mcp_servers.mcp-tuna-train]
-# command = "mcp-tuna-train"
-# [mcp_servers.mcp-tuna-train.env]
+# [mcp_servers.mcp-tuna-host]
+# command = "mcp-tuna-host"
+# [mcp_servers.mcp-tuna-host.env]
 # HF_TOKEN = "hf_..."
+#
+# [mcp_servers.mcp-tuna-orchestrate]
+# command = "mcp-tuna-orchestrate"
+# [mcp_servers.mcp-tuna-orchestrate.env]
+# OPENAI_API_KEY = "sk-..."
+# HF_TOKEN = "hf_..."
+
+# Use the unified gateway only when you explicitly want one broad MCP surface.
+# [mcp_servers.mcp-tuna]
+# command = "mcp-tuna-gateway"
+# [mcp_servers.mcp-tuna.env]
+# OPENAI_API_KEY = "sk-..."
+# HF_TOKEN = "hf_..."
+
+# HTTP mode is still available if you want to connect to a running gateway.
+# [mcp_servers.mcp-tuna]
+# url = "http://localhost:8000/mcp"

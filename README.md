@@ -460,6 +460,27 @@ The setup generator supports:
 Add to `~/.codex/config.toml` or `.codex/config.toml`:
 
 ```toml
+[mcp_servers.mcp-tuna-data]
+command = "mcp-tuna-data"
+
+[mcp_servers.mcp-tuna-data.env]
+OPENAI_API_KEY = "sk-..."
+
+[mcp_servers.mcp-tuna-train]
+command = "mcp-tuna-train"
+
+[mcp_servers.mcp-tuna-train.env]
+HF_TOKEN = "hf_..."
+```
+
+This split-server setup keeps the MCP surface smaller than the unified gateway,
+which usually improves tool routing and token efficiency for coding agents.
+Add `mcp-tuna-eval`, `mcp-tuna-host`, or `mcp-tuna-orchestrate` only when the
+task needs those capabilities.
+
+Unified gateway alternative:
+
+```toml
 [mcp_servers.mcp-tuna]
 command = "mcp-tuna-gateway"
 
