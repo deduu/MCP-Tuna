@@ -72,6 +72,44 @@ def _sample_chat_triplet_data():
     ]
 
 
+def _sample_grpo_data():
+    return [
+        {
+            "prompt": "Salestify itu apa?",
+            "responses": [
+                "Salestify membantu bisnis menangani chat WhatsApp.",
+                "Salestify adalah aplikasi game.",
+            ],
+            "rewards": [1.0, 0.0],
+        }
+    ]
+
+
+def _sample_dpo_data():
+    return [
+        {
+            "prompt": "Salestify itu apa?",
+            "chosen": "Salestify membantu bisnis menangani chat WhatsApp lebih rapi.",
+            "rejected": "Salestify adalah aplikasi broadcast biasa.",
+        }
+    ]
+
+
+def _sample_kto_data():
+    return [
+        {
+            "prompt": "Salestify itu apa?",
+            "completion": "Salestify membantu tim sales menangani chat WhatsApp lebih rapi.",
+            "label": True,
+        },
+        {
+            "prompt": "Salestify itu apa?",
+            "completion": "Salestify cuma aplikasi broadcast biasa.",
+            "label": False,
+        },
+    ]
+
+
 def _make_fake_sft_config(**extra_params):
     """Create a fake SFTConfig class with configurable __init__ signature."""
     def init(self, **kwargs):
@@ -118,6 +156,8 @@ def _make_fake_sft_trainer(captured_kwargs: dict = None):
 def _mock_model_and_tokenizer():
     mock_model = MagicMock()
     mock_tokenizer = MagicMock()
+    mock_tokenizer.eos_token_id = 2
+    mock_tokenizer.pad_token_id = 0
     mock_tokenizer.pad_token = "pad"
     mock_tokenizer.apply_chat_template = MagicMock(return_value="text")
     mock_tokenizer.save_pretrained = MagicMock()
@@ -1222,3 +1262,771 @@ class TestPushToHub:
         mock_model.push_to_hub.assert_not_called()
         mock_tokenizer.push_to_hub.assert_not_called()
         assert "hub_url" not in result
+
+
+class TestTrainGrpoModel:
+    @pytest.mark.asyncio
+    async def test_train_dpo_model_can_continue_from_existing_lora_adapter(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_dpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        resumed_model = MagicMock()
+        resumed_tokenizer = MagicMock()
+        captured_trainer_kwargs: dict = {}
+
+        def dpo_config_init(self, **kwargs):
+            pass
+
+        fake_dpo_config = type("DPOConfig", (), {"__init__": dpo_config_init})
+        fake_dpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+            inspect.Parameter("max_prompt_length", inspect.Parameter.KEYWORD_ONLY, default=512),
+            inspect.Parameter("max_length", inspect.Parameter.KEYWORD_ONLY, default=1024),
+        ])
+
+        def trainer_init(self, **kwargs):
+            captured_trainer_kwargs.update(kwargs)
+            self.model = kwargs["model"]
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.12)
+
+        fake_dpo_trainer = type("DPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_dpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.DPOConfig = fake_dpo_config
+        fake_trl.DPOTrainer = fake_dpo_trainer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(
+                svc,
+                "_load_existing_lora_adapter",
+                return_value=(resumed_model, resumed_tokenizer, 7),
+            ) as load_existing,
+        ):
+            result = await svc.train_dpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_dpo_continue_adapter"),
+                use_lora=True,
+                adapter_path="/models/best_sft",
+            )
+
+        assert result["success"] is True
+        load_existing.assert_called_once()
+        assert captured_trainer_kwargs["model"] is resumed_model
+        assert "peft_config" not in captured_trainer_kwargs
+        assert result["config"]["continued_from_adapter"] is True
+        assert result["config"]["adapter_path"] == "/models/best_sft"
+        assert result["config"]["lora_trainable_fp32_tensors"] == 7
+
+    @pytest.mark.asyncio
+    async def test_train_dpo_model_uses_notebook_parity_lengths_and_training_defaults(self, tmp_path):
+        svc = TrainingService()
+        dataset = [
+            {
+                "prompt": "Salestify itu apa?\n\n",
+                "chosen": " Salestify membantu bisnis menangani chat WhatsApp lebih rapi. ",
+                "rejected": "Salestify adalah aplikasi broadcast biasa.\t",
+                "metadata": {"source": "unit-test"},
+            }
+        ]
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        mock_tokenizer.side_effect = (
+            lambda text, add_special_tokens=False, return_attention_mask=False: {
+                "input_ids": list(range(1, len(str(text).split()) + 1))
+            }
+        )
+        captured_build_config_calls: list = []
+        captured_trainer_kwargs: dict = {}
+
+        def dpo_config_init(self, **kwargs):
+            pass
+
+        fake_dpo_config = type("DPOConfig", (), {"__init__": dpo_config_init})
+        fake_dpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+            inspect.Parameter("max_prompt_length", inspect.Parameter.KEYWORD_ONLY, default=512),
+            inspect.Parameter("max_length", inspect.Parameter.KEYWORD_ONLY, default=1024),
+            inspect.Parameter("max_completion_length", inspect.Parameter.KEYWORD_ONLY, default=256),
+        ])
+
+        def trainer_init(self, **kwargs):
+            captured_trainer_kwargs.update(kwargs)
+            self.model = kwargs["model"]
+            self.state = types.SimpleNamespace(log_history=[], global_step=0, epoch=0)
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.09)
+
+        fake_dpo_trainer = type("DPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_dpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.DPOConfig = fake_dpo_config
+        fake_trl.DPOTrainer = fake_dpo_trainer
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return types.SimpleNamespace()
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(True, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            result = await svc.train_dpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_dpo_parity_defaults"),
+                gradient_checkpointing=True,
+            )
+
+        assert result["success"] is True
+        assert captured_build_config_calls[0]["kwargs"]["num_epochs"] == 1
+        training_kwargs = captured_build_config_calls[0]["kwargs"]["training_kwargs"]
+        extra = captured_build_config_calls[0]["kwargs"]["extra_kwargs"]
+        assert training_kwargs["learning_rate"] == 1e-4
+        assert training_kwargs["weight_decay"] == 0.01
+        assert training_kwargs["max_grad_norm"] == 0.0
+        assert training_kwargs["bf16"] is False
+        assert training_kwargs["fp16"] is False
+        assert training_kwargs["gradient_checkpointing"] is True
+        assert extra["beta"] == 0.1
+        assert extra["max_prompt_length"] == 384
+        assert extra["max_length"] == 512
+        assert extra["max_completion_length"] == 128
+        assert captured_trainer_kwargs["processing_class"] is mock_tokenizer
+        assert "dpo_preprocessing" in result["artifacts"]
+        assert "preference_normalization" in result["artifacts"]
+        assert "dpo_trainer_dataset" in result["artifacts"]
+        normalization = json.loads(
+            Path(result["artifacts"]["preference_normalization"]).read_text(encoding="utf-8")
+        )
+        preprocessing = json.loads(
+            Path(result["artifacts"]["dpo_preprocessing"]).read_text(encoding="utf-8")
+        )
+        trainer_dataset = json.loads(
+            Path(result["artifacts"]["dpo_trainer_dataset"]).read_text(encoding="utf-8")
+        )
+        assert normalization["trimmed_row_count"] == 1
+        assert normalization["trimmed_scalar_value_count"] == 3
+        assert preprocessing["max_prompt_length"] == 384
+        assert preprocessing["max_length"] == 512
+        assert preprocessing["sample_size"] == 1
+        assert trainer_dataset["num_rows"] == len(dataset)
+        assert "metadata" in trainer_dataset["column_names"]
+        assert "prompt" in trainer_dataset["column_names"]
+        assert result["config"]["auto_tuned_defaults"]["applied"] is True
+        assert result["config"]["auto_tuned_defaults"]["effective"]["num_epochs"] == 1
+
+    @pytest.mark.asyncio
+    async def test_train_dpo_model_preserves_custom_small_dataset_budget(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_dpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_build_config_calls: list = []
+
+        def dpo_config_init(self, **kwargs):
+            pass
+
+        fake_dpo_config = type("DPOConfig", (), {"__init__": dpo_config_init})
+        fake_dpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+        ])
+
+        def trainer_init(self, **kwargs):
+            self.model = kwargs["model"]
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.09)
+
+        fake_dpo_trainer = type("DPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_dpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.DPOConfig = fake_dpo_config
+        fake_trl.DPOTrainer = fake_dpo_trainer
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            return types.SimpleNamespace()
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            result = await svc.train_dpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_dpo_custom_budget"),
+                num_epochs=2,
+                learning_rate=5e-5,
+            )
+
+        assert result["success"] is True
+        assert captured_build_config_calls[0]["kwargs"]["num_epochs"] == 2
+        training_kwargs = captured_build_config_calls[0]["kwargs"]["training_kwargs"]
+        assert training_kwargs["learning_rate"] == 5e-5
+        assert result["config"]["auto_tuned_defaults"]["applied"] is False
+
+    @pytest.mark.asyncio
+    async def test_train_dpo_model_seeds_before_loading_model(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_dpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_order: list = []
+
+        def dpo_config_init(self, **kwargs):
+            pass
+
+        fake_dpo_config = type("DPOConfig", (), {"__init__": dpo_config_init})
+        fake_dpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+        ])
+
+        def trainer_init(self, **kwargs):
+            self.model = kwargs["model"]
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.09)
+
+        fake_dpo_trainer = type("DPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_dpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.DPOConfig = fake_dpo_config
+        fake_trl.DPOTrainer = fake_dpo_trainer
+
+        def record_seed(seed):
+            captured_order.append(("seed", seed))
+
+        def record_load(*args, **kwargs):
+            captured_order.append(("load", args[0]))
+            return mock_model, mock_tokenizer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_set_global_seed", side_effect=record_seed),
+            patch.object(svc, "_load_model_and_tokenizer", side_effect=record_load),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_dpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_dpo_seed_before_load"),
+                seed=3407,
+            )
+
+        assert result["success"] is True
+        assert captured_order[:2] == [
+            ("seed", 3407),
+            ("load", svc.config.base_model),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_train_grpo_model_supports_lora_wrapping_and_generation_batch_size(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_grpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        wrapped_model = MagicMock()
+        captured_build_config_calls: list = []
+        captured_trainer_kwargs: dict = {}
+
+        def grpo_config_init(self, **kwargs):
+            pass
+
+        fake_grpo_config = type("GRPOConfig", (), {"__init__": grpo_config_init})
+        fake_grpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("num_generations", inspect.Parameter.KEYWORD_ONLY, default=4),
+            inspect.Parameter("max_prompt_length", inspect.Parameter.KEYWORD_ONLY, default=512),
+            inspect.Parameter("max_completion_length", inspect.Parameter.KEYWORD_ONLY, default=256),
+            inspect.Parameter("generation_batch_size", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("steps_per_generation", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        def trainer_init(self, **kwargs):
+            captured_trainer_kwargs.update(kwargs)
+            self.model = kwargs["model"]
+            self.reward_funcs = kwargs["reward_funcs"]
+            self.state = types.SimpleNamespace(
+                log_history=[
+                    {
+                        "reward": 0.25,
+                        "completions/clipped_ratio": 0.5,
+                        "completions/mean_length": 44.0,
+                        "completions/mean_terminated_length": 33.0,
+                        "completions/max_length": 48.0,
+                        "completions/max_terminated_length": 36.0,
+                    },
+                    {
+                        "reward": 0.0,
+                        "completions/clipped_ratio": 1.0,
+                        "completions/mean_length": 64.0,
+                        "completions/mean_terminated_length": 0.0,
+                        "completions/max_length": 64.0,
+                        "completions/max_terminated_length": 0.0,
+                    },
+                ],
+                global_step=0,
+                epoch=0,
+            )
+
+        def trainer_train(self, **kwargs):
+            self.reward_funcs[0](
+                ["Salestify itu apa?", "Salestify itu apa?"],
+                [
+                    "Assistant: Salestify membantu bisnis menangani chat WhatsApp. <|eot_id|>",
+                    "Cuaca hari ini cerah.",
+                ],
+                completion_ids=[
+                    [101, 2],
+                    [201, 202, 203],
+                ],
+            )
+            return types.SimpleNamespace(training_loss=0.25)
+
+        fake_grpo_trainer = type("GRPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_grpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("reward_funcs", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.GRPOConfig = fake_grpo_config
+        fake_trl.GRPOTrainer = fake_grpo_trainer
+
+        def spy_build_config(*args, **kwargs):
+            captured_build_config_calls.append({"args": args, "kwargs": kwargs})
+            extra = kwargs["extra_kwargs"]
+            return types.SimpleNamespace(
+                generation_batch_size=extra.get("generation_batch_size"),
+                steps_per_generation=extra.get("steps_per_generation"),
+            )
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_apply_lora_to_model", return_value=(wrapped_model, None, 5)),
+            patch.object(svc, "_build_config", side_effect=spy_build_config),
+        ):
+            result = await svc.train_grpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_grpo_lora"),
+                use_lora=True,
+                num_generations=2,
+                generation_batch_size=2,
+                steps_per_generation=3,
+            )
+
+        assert result["success"] is True
+        assert captured_trainer_kwargs["model"] is wrapped_model
+        assert "peft_config" not in captured_trainer_kwargs
+        assert captured_build_config_calls[0]["kwargs"]["num_epochs"] == 1
+        extra = captured_build_config_calls[0]["kwargs"]["extra_kwargs"]
+        training_kwargs = captured_build_config_calls[0]["kwargs"]["training_kwargs"]
+        assert training_kwargs["learning_rate"] == 1e-4
+        assert extra["num_generations"] == 2
+        assert extra["generation_batch_size"] == 2
+        assert extra["steps_per_generation"] == 3
+        assert result["config"]["use_lora"] is True
+        assert result["config"]["lora_trainable_fp32_tensors"] == 5
+        assert result["config"]["generation_batch_size"] == 2
+        assert result["config"]["steps_per_generation"] == 3
+        assert result["config"]["auto_tuned_defaults"]["applied"] is True
+        reward_stats = result["config"]["reward_match_stats"]
+        assert reward_stats["queries"] == 2
+        assert reward_stats["exact_matches"] == 1
+        assert reward_stats["misses"] == 1
+        assert reward_stats["positive_rewards"] == 1
+        assert reward_stats["negative_rewards"] == 1
+        assert reward_stats["zero_rewards"] == 0
+        assert reward_stats["truncation_checks"] == 2
+        assert reward_stats["truncated_queries"] == 1
+        assert reward_stats["penalized_queries"] == 1
+        assert reward_stats["avg_reward"] == 0.425
+        assert reward_stats["avg_reward_adjustment"] == -0.075
+        training_diagnostics = result["config"]["training_diagnostics"]
+        assert training_diagnostics["steps_logged"] == 2
+        assert training_diagnostics["positive_reward_steps"] == 1
+        assert training_diagnostics["clip_ratio_eq_1_0_steps"] == 1
+        assert result["config"]["termination_token_ids"] == {"eos": [2], "pad": [0]}
+
+    @pytest.mark.asyncio
+    async def test_train_grpo_model_seeds_before_loading_model(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_grpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_order: list = []
+
+        def grpo_config_init(self, **kwargs):
+            pass
+
+        fake_grpo_config = type("GRPOConfig", (), {"__init__": grpo_config_init})
+        fake_grpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("num_generations", inspect.Parameter.KEYWORD_ONLY, default=4),
+        ])
+
+        def trainer_init(self, **kwargs):
+            self.model = kwargs["model"]
+            self.state = types.SimpleNamespace(log_history=[], global_step=0, epoch=0)
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.2)
+
+        fake_grpo_trainer = type("GRPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_grpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("reward_funcs", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.GRPOConfig = fake_grpo_config
+        fake_trl.GRPOTrainer = fake_grpo_trainer
+
+        def record_seed(seed):
+            captured_order.append(("seed", seed))
+
+        def record_load(*args, **kwargs):
+            captured_order.append(("load", args[0]))
+            return mock_model, mock_tokenizer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_set_global_seed", side_effect=record_seed),
+            patch.object(svc, "_load_model_and_tokenizer", side_effect=record_load),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+            patch.object(svc, "_apply_lora_to_model", return_value=(mock_model, None, 5)),
+        ):
+            result = await svc.train_grpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_grpo_seed_before_load"),
+                seed=3407,
+            )
+
+        assert result["success"] is True
+        assert captured_order[:2] == [
+            ("seed", 3407),
+            ("load", svc.config.base_model),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_train_grpo_model_can_continue_from_existing_lora_adapter(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_grpo_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        resumed_model = MagicMock()
+        resumed_tokenizer = MagicMock()
+        captured_trainer_kwargs: dict = {}
+
+        def grpo_config_init(self, **kwargs):
+            pass
+
+        fake_grpo_config = type("GRPOConfig", (), {"__init__": grpo_config_init})
+        fake_grpo_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("num_generations", inspect.Parameter.KEYWORD_ONLY, default=4),
+            inspect.Parameter("max_prompt_length", inspect.Parameter.KEYWORD_ONLY, default=512),
+            inspect.Parameter("max_completion_length", inspect.Parameter.KEYWORD_ONLY, default=256),
+        ])
+
+        def trainer_init(self, **kwargs):
+            captured_trainer_kwargs.update(kwargs)
+            self.model = kwargs["model"]
+            self.state = types.SimpleNamespace(log_history=[], global_step=0, epoch=0)
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.2)
+
+        fake_grpo_trainer = type("GRPOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_grpo_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("reward_funcs", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.GRPOConfig = fake_grpo_config
+        fake_trl.GRPOTrainer = fake_grpo_trainer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(
+                svc,
+                "_load_existing_lora_adapter",
+                return_value=(resumed_model, resumed_tokenizer, 9),
+            ) as load_existing,
+        ):
+            result = await svc.train_grpo_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_grpo_continue_adapter"),
+                use_lora=True,
+                adapter_path="/models/best_sft",
+            )
+
+        assert result["success"] is True
+        load_existing.assert_called_once()
+        assert captured_trainer_kwargs["model"] is resumed_model
+        assert "peft_config" not in captured_trainer_kwargs
+        assert result["config"]["continued_from_adapter"] is True
+        assert result["config"]["adapter_path"] == "/models/best_sft"
+        assert result["config"]["lora_trainable_fp32_tensors"] == 9
+
+    @pytest.mark.asyncio
+    async def test_train_grpo_model_rejects_quantized_full_finetuning_without_lora(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_grpo_data()
+
+        result = await svc.train_grpo_model(
+            dataset=dataset,
+            output_dir=str(tmp_path / "test_grpo_quantized_full_model"),
+            use_lora=False,
+            load_in_4bit=True,
+        )
+
+        assert result["success"] is False
+        assert "requires use_lora=True" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_train_kto_model_can_continue_from_existing_lora_adapter(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_kto_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        resumed_model = MagicMock()
+        resumed_tokenizer = MagicMock()
+        captured_trainer_kwargs: dict = {}
+
+        def kto_config_init(self, **kwargs):
+            pass
+
+        fake_kto_config = type("KTOConfig", (), {"__init__": kto_config_init})
+        fake_kto_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+            inspect.Parameter("desirable_weight", inspect.Parameter.KEYWORD_ONLY, default=1.0),
+            inspect.Parameter("undesirable_weight", inspect.Parameter.KEYWORD_ONLY, default=1.0),
+        ])
+
+        def trainer_init(self, **kwargs):
+            captured_trainer_kwargs.update(kwargs)
+            self.model = kwargs["model"]
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.15)
+
+        fake_kto_trainer = type("KTOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_kto_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("callbacks", inspect.Parameter.KEYWORD_ONLY, default=None),
+            inspect.Parameter("peft_config", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.KTOConfig = fake_kto_config
+        fake_trl.KTOTrainer = fake_kto_trainer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(
+                svc,
+                "_load_existing_lora_adapter",
+                return_value=(resumed_model, resumed_tokenizer, 11),
+            ) as load_existing,
+        ):
+            result = await svc.train_kto_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_kto_continue_adapter"),
+                use_lora=True,
+                adapter_path="/models/best_sft",
+            )
+
+        assert result["success"] is True
+        load_existing.assert_called_once()
+        assert captured_trainer_kwargs["model"] is resumed_model
+        assert "peft_config" not in captured_trainer_kwargs
+        assert result["config"]["continued_from_adapter"] is True
+        assert result["config"]["adapter_path"] == "/models/best_sft"
+        assert result["config"]["lora_trainable_fp32_tensors"] == 11
+
+    @pytest.mark.asyncio
+    async def test_train_kto_model_seeds_before_loading_model(self, tmp_path):
+        svc = TrainingService()
+        dataset = _sample_kto_data()
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_order: list = []
+
+        def kto_config_init(self, **kwargs):
+            pass
+
+        fake_kto_config = type("KTOConfig", (), {"__init__": kto_config_init})
+        fake_kto_config.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("output_dir", inspect.Parameter.KEYWORD_ONLY, default="."),
+            inspect.Parameter("eval_strategy", inspect.Parameter.KEYWORD_ONLY, default="no"),
+            inspect.Parameter("beta", inspect.Parameter.KEYWORD_ONLY, default=0.1),
+            inspect.Parameter("desirable_weight", inspect.Parameter.KEYWORD_ONLY, default=1.0),
+            inspect.Parameter("undesirable_weight", inspect.Parameter.KEYWORD_ONLY, default=1.0),
+        ])
+
+        def trainer_init(self, **kwargs):
+            self.model = kwargs["model"]
+
+        def trainer_train(self, **kwargs):
+            return types.SimpleNamespace(training_loss=0.15)
+
+        fake_kto_trainer = type("KTOTrainer", (), {
+            "__init__": trainer_init,
+            "train": trainer_train,
+            "save_model": MagicMock(),
+        })
+        fake_kto_trainer.__init__.__signature__ = inspect.Signature(parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("model", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("args", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("train_dataset", inspect.Parameter.KEYWORD_ONLY),
+            inspect.Parameter("processing_class", inspect.Parameter.KEYWORD_ONLY, default=None),
+        ])
+
+        fake_trl = types.ModuleType("trl")
+        fake_trl.KTOConfig = fake_kto_config
+        fake_trl.KTOTrainer = fake_kto_trainer
+
+        def record_seed(seed):
+            captured_order.append(("seed", seed))
+
+        def record_load(*args, **kwargs):
+            captured_order.append(("load", args[0]))
+            return mock_model, mock_tokenizer
+
+        with (
+            _intercept_imports({"trl": fake_trl}),
+            patch.object(svc, "_set_global_seed", side_effect=record_seed),
+            patch.object(svc, "_load_model_and_tokenizer", side_effect=record_load),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_kto_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_kto_seed_before_load"),
+                seed=3407,
+            )
+
+        assert result["success"] is True
+        assert captured_order[:2] == [
+            ("seed", 3407),
+            ("load", svc.config.base_model),
+        ]

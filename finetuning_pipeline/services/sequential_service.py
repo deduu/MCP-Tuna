@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from agentsoul.utils.logger import get_logger
 from shared.config import FinetuningConfig
+from shared.training_run_artifacts import TrainingRunArtifacts
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,9 @@ class SequentialTrainingService:
         base_model: Optional[str] = None,
         merge_between_stages: bool = True,
         extra_callbacks: Optional[List] = None,
+        run_source: Optional[str] = None,
+        job_id: Optional[str] = None,
+        artifact_note: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run multiple training stages sequentially.
 
@@ -59,31 +63,75 @@ class SequentialTrainingService:
         t_start = time.perf_counter()
         original_base = base_model or self.config.base_model
         current_base = original_base
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="sequential")
+        stage_results: List[Dict[str, Any]] = []
+
+        run_artifacts.start(
+            base_model=original_base,
+            adapter_path=None,
+            dataset=stages or [],
+            dataset_path=None,
+            training_config={
+                "trainer": "sequential",
+                "num_stages": len(stages),
+                "merge_between_stages": merge_between_stages,
+            },
+            run_source=run_source,
+            job_id=job_id,
+            note=artifact_note,
+        )
+        run_artifacts.write_json_artifact("stage_plan", "stage_plan.json", {"stages": stages})
 
         if not stages:
-            return {"success": False, "error": "No stages provided."}
+            result = {"success": False, "error": "No stages provided."}
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.perf_counter() - t_start,
+                metrics={"completed_stages": 0},
+            )
+            return result
 
         # Validate all techniques up front
         for i, stage in enumerate(stages):
             technique = stage.get("technique", "").lower()
             if technique not in self.TECHNIQUE_MAP:
-                return {
+                result = {
                     "success": False,
                     "error": (
                         f"Stage {i + 1}: unknown technique '{technique}'. "
                         f"Must be one of: {list(self.TECHNIQUE_MAP.keys())}"
                     ),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.perf_counter() - t_start,
+                    metrics={"completed_stages": 0},
+                )
+                return result
             if not stage.get("dataset_path"):
-                return {
+                result = {
                     "success": False,
                     "error": f"Stage {i + 1}: dataset_path is required.",
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.perf_counter() - t_start,
+                    metrics={"completed_stages": 0},
+                )
+                return result
 
         from .training_service import TrainingService
 
         training_svc = TrainingService(config=self.config, gpu=None)
-        stage_results: List[Dict[str, Any]] = []
 
         for i, stage in enumerate(stages):
             stage_num = i + 1
@@ -102,7 +150,7 @@ class SequentialTrainingService:
             fmt = "jsonl" if dataset_path.endswith(".jsonl") else "json"
             load_result = await training_svc.load_dataset_from_file(dataset_path, fmt)
             if not load_result.get("success"):
-                return {
+                result = {
                     "success": False,
                     "error": (
                         f"Stage {stage_num}: failed to load dataset: "
@@ -110,6 +158,20 @@ class SequentialTrainingService:
                     ),
                     "stage_results": stage_results,
                 }
+                run_artifacts.write_json_artifact(
+                    "stage_results",
+                    "stage_results.json",
+                    {"stage_results": stage_results},
+                )
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.perf_counter() - t_start,
+                    metrics={"completed_stages": len(stage_results)},
+                )
+                return result
 
             dataset = load_result["dataset_object"]
 
@@ -120,6 +182,18 @@ class SequentialTrainingService:
                 output_dir=stage_output,
                 base_model=current_base,
                 stage_config=stage,
+            )
+            stage_run_source = f"{run_source}.stage" if run_source else "sequential.stage"
+            stage_note = f"stage={stage_num}/{len(stages)}; technique={technique}"
+            if artifact_note:
+                stage_note = f"{stage_note}; parent_note={artifact_note}"
+            train_kwargs.update(
+                {
+                    "dataset_path": dataset_path,
+                    "run_source": stage_run_source,
+                    "job_id": job_id,
+                    "artifact_note": stage_note,
+                }
             )
             if extra_callbacks:
                 train_kwargs["extra_callbacks"] = extra_callbacks
@@ -138,9 +212,14 @@ class SequentialTrainingService:
                     "training_result": train_result,
                 }
             )
+            run_artifacts.write_json_artifact(
+                "stage_results",
+                "stage_results.json",
+                {"stage_results": stage_results},
+            )
 
             if not train_result.get("success"):
-                return {
+                result = {
                     "success": False,
                     "error": (
                         f"Stage {stage_num} ({technique}) failed: "
@@ -148,10 +227,23 @@ class SequentialTrainingService:
                     ),
                     "stage_results": stage_results,
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.perf_counter() - t_start,
+                    metrics={"completed_stages": len(stage_results)},
+                )
+                return result
 
             # Merge LoRA and update current_base for next stage
             is_last = stage_num == len(stages)
-            use_lora = stage.get("use_lora", True) and technique != "grpo"
+            train_config = train_result.get("config")
+            if isinstance(train_config, dict) and isinstance(train_config.get("use_lora"), bool):
+                use_lora = train_config["use_lora"]
+            else:
+                use_lora = bool(stage.get("use_lora", technique != "grpo"))
 
             if merge_between_stages and use_lora and not is_last:
                 try:
@@ -163,11 +255,20 @@ class SequentialTrainingService:
                         stage_num, current_base,
                     )
                 except Exception as exc:
-                    return {
+                    result = {
                         "success": False,
                         "error": f"LoRA merge failed after stage {stage_num}: {exc}",
                         "stage_results": stage_results,
                     }
+                    result["artifacts"] = run_artifacts.complete(
+                        success=False,
+                        interrupted=False,
+                        model_path=None,
+                        error=result["error"],
+                        training_time_seconds=time.perf_counter() - t_start,
+                        metrics={"completed_stages": len(stage_results)},
+                    )
+                    return result
             elif not is_last:
                 current_base = stage_output
 
@@ -179,7 +280,16 @@ class SequentialTrainingService:
             len(stages), total_seconds, final_path,
         )
 
-        return {
+        run_artifacts.write_json_artifact(
+            "training_diagnostics",
+            "training_diagnostics.json",
+            {
+                "num_stages": len(stages),
+                "completed_stages": len(stage_results),
+                "total_training_seconds": total_seconds,
+            },
+        )
+        result = {
             "success": True,
             "final_model_path": final_path,
             "base_model": original_base,
@@ -187,6 +297,15 @@ class SequentialTrainingService:
             "stage_results": stage_results,
             "total_training_seconds": total_seconds,
         }
+        result["artifacts"] = run_artifacts.complete(
+            success=True,
+            interrupted=False,
+            model_path=final_path,
+            error=None,
+            training_time_seconds=total_seconds,
+            metrics={"num_stages": len(stages), "completed_stages": len(stage_results)},
+        )
+        return result
 
     # ------------------------------------------------------------------ #
     # Private helpers
@@ -222,7 +341,20 @@ class SequentialTrainingService:
             kwargs["lora_r"] = stage_config.get("lora_r", 8)
         elif technique == "grpo":
             kwargs["num_generations"] = stage_config.get("num_generations", 4)
-            # GRPO trainer manages its own LoRA/architecture
+            if (
+                "use_lora" in stage_config
+                or "lora_r" in stage_config
+                or "lora_alpha" in stage_config
+                or "lora_dropout" in stage_config
+            ):
+                kwargs["use_lora"] = stage_config.get("use_lora", True)
+                kwargs["lora_r"] = stage_config.get("lora_r", 8)
+                kwargs["lora_alpha"] = stage_config.get("lora_alpha", 16)
+                kwargs["lora_dropout"] = stage_config.get("lora_dropout", 0.05)
+            if "generation_batch_size" in stage_config:
+                kwargs["generation_batch_size"] = stage_config["generation_batch_size"]
+            if "steps_per_generation" in stage_config:
+                kwargs["steps_per_generation"] = stage_config["steps_per_generation"]
         elif technique == "kto":
             kwargs["beta"] = stage_config.get("beta", 0.1)
             kwargs["use_lora"] = stage_config.get("use_lora", True)

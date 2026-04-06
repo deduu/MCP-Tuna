@@ -1,6 +1,8 @@
 """Unit tests for SequentialTrainingService (Feature 1)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -292,6 +294,63 @@ async def test_grpo_receives_num_generations_param(mock_load, mock_train_grpo, t
     assert "lora_r" not in call_kwargs
 
 
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_grpo_model")
+@patch("finetuning_pipeline.services.training_service.TrainingService.load_dataset_from_file")
+async def test_grpo_can_receive_lora_and_generation_batch_params(mock_load, mock_train_grpo, tmp_path):
+    """GRPO should forward optional LoRA and generation controls when requested."""
+    from finetuning_pipeline.services.sequential_service import SequentialTrainingService
+
+    mock_load.return_value = _mock_load_result()
+    mock_train_grpo.return_value = _mock_train_result(str(tmp_path / "s1"))
+
+    svc = SequentialTrainingService()
+    await svc.train_sequential(
+        stages=[
+            {
+                "technique": "grpo",
+                "dataset_path": "/g.jsonl",
+                "use_lora": True,
+                "lora_r": 16,
+                "generation_batch_size": 2,
+            }
+        ],
+        output_dir=str(tmp_path),
+        base_model="fake-base",
+    )
+
+    call_kwargs = mock_train_grpo.call_args.kwargs
+    assert call_kwargs["use_lora"] is True
+    assert call_kwargs["lora_r"] == 16
+    assert call_kwargs["generation_batch_size"] == 2
+
+
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_model")
+@patch("finetuning_pipeline.services.training_service.TrainingService.load_dataset_from_file")
+async def test_stage_training_receives_artifact_context(mock_load, mock_train, tmp_path):
+    from finetuning_pipeline.services.sequential_service import SequentialTrainingService
+
+    mock_load.return_value = _mock_load_result()
+    mock_train.return_value = _mock_train_result(str(tmp_path / "s1"))
+
+    svc = SequentialTrainingService()
+    result = await svc.train_sequential(
+        stages=[{"technique": "sft", "dataset_path": "/d.jsonl"}],
+        output_dir=str(tmp_path),
+        base_model="fake-base",
+        run_source="finetune.sequential_train",
+        job_id="job-123",
+    )
+
+    call_kwargs = mock_train.call_args.kwargs
+    assert call_kwargs["dataset_path"] == "/d.jsonl"
+    assert call_kwargs["run_source"] == "finetune.sequential_train.stage"
+    assert call_kwargs["job_id"] == "job-123"
+    assert "stage=1/1" in call_kwargs["artifact_note"]
+    assert Path(result["artifacts"]["run_manifest"]).exists()
+
+
 # ----------------------------------------------------------------
 # Merge control tests
 # ----------------------------------------------------------------
@@ -327,6 +386,42 @@ async def test_no_merge_when_flag_is_false(mock_load, mock_train_sft, mock_train
     # Without merge, DPO should get the raw SFT output_dir as base_model
     dpo_kwargs = mock_train_dpo.call_args.kwargs
     assert dpo_kwargs["base_model"] == sft_out
+
+
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.sequential_service.SequentialTrainingService._merge_lora")
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_kto_model")
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_grpo_model")
+@patch("finetuning_pipeline.services.training_service.TrainingService.load_dataset_from_file")
+async def test_grpo_lora_stage_merges_into_next_stage(
+    mock_load, mock_train_grpo, mock_train_kto, mock_merge, tmp_path
+):
+    """A LoRA-backed GRPO stage should merge before the next stage."""
+    from finetuning_pipeline.services.sequential_service import SequentialTrainingService
+
+    mock_load.return_value = _mock_load_result()
+    grpo_out = str(tmp_path / "stage_1_grpo")
+    merged_out = str(tmp_path / "stage_1_grpo" / "merged")
+    mock_train_grpo.return_value = {
+        **_mock_train_result(grpo_out),
+        "config": {"trainer": "grpo", "use_lora": True},
+    }
+    mock_train_kto.return_value = _mock_train_result(str(tmp_path / "stage_2_kto"))
+    mock_merge.return_value = merged_out
+
+    svc = SequentialTrainingService()
+    result = await svc.train_sequential(
+        stages=[
+            {"technique": "grpo", "dataset_path": "/grpo.jsonl", "use_lora": True},
+            {"technique": "kto", "dataset_path": "/kto.jsonl"},
+        ],
+        output_dir=str(tmp_path),
+        base_model="fake-base",
+    )
+
+    assert result["success"] is True
+    mock_merge.assert_awaited_once()
+    assert mock_train_kto.call_args.kwargs["base_model"] == merged_out
 
 
 # ----------------------------------------------------------------

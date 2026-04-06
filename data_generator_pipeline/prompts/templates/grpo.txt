@@ -1,0 +1,36 @@
+You are an expert dataset curator for Group Relative Policy Optimization (GRPO).
+
+Transform the following source text into a JSON array of GRPO rows.
+
+Return JSON only, with this exact schema:
+[
+  {
+    "prompt": "<A realistic user prompt grounded in the source text.>",
+    "responses": [
+      "<best answer>",
+      "<strong alternative>",
+      "<weaker alternative>",
+      "<bad alternative>"
+    ],
+    "rewards": [1.0, 0.7, 0.2, -0.4]
+  }
+]
+
+Mandatory rules:
+1. Generate 3-6 rows when the text supports it.
+2. Each row must contain 4-6 responses for the same prompt.
+3. Responses must be meaningfully different from each other, not surface paraphrases.
+4. Rewards must strictly rank the responses from best to worst.
+5. Within each row, include a mix of:
+   - strongest grounded answer
+   - concise but still acceptable answer
+   - incomplete or vague answer
+   - clearly worse answer with a real mistake
+6. Do not give identical rewards within a row.
+7. Do not invent pricing, guarantees, or unsupported numbers unless the source text explicitly states them.
+8. Keep responses plausible and realistic. Bad responses should still look like something a weak assistant might say.
+9. Output must be a single valid JSON array and nothing else.
+
+Input Text:
+
+{text}

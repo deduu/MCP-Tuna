@@ -122,8 +122,14 @@ class TestToolRegistration:
     def test_workflow_delete_job_registered(self, tool_names):
         assert "workflow.delete_job" in tool_names
 
+    def test_workflow_benchmark_finetuning_registered(self, tool_names):
+        assert "workflow.benchmark_finetuning" in tool_names
+
     def test_test_vlm_inference_registered(self, tool_names):
         assert "test.vlm_inference" in tool_names
+
+    def test_validate_preference_dataset_registered(self, tool_names):
+        assert "validate.preference_dataset" in tool_names
 
     # Judge tools
     def test_judge_evaluate_vlm_registered(self, tool_names):
@@ -160,9 +166,12 @@ def test_finetune_train_schema_includes_optional_defaults():
 
     assert props["num_epochs"]["default"] == 3
     assert props["use_lora"]["default"] is True
-    assert props["lora_r"]["default"] == 8
+    assert props["lora_r"]["default"] == 16
+    assert props["lora_alpha"]["default"] == 32
     assert props["lora_dropout"]["default"] == 0.05
     assert props["learning_rate"]["default"] == 2e-4
+    assert props["per_device_train_batch_size"]["default"] == 1
+    assert props["gradient_accumulation_steps"]["default"] == 4
     assert props["deploy"]["default"] is False
     assert props["special_tokens"]["type"] == "array"
     assert "default" not in props["base_model"]
@@ -175,11 +184,55 @@ def test_finetune_async_schema_includes_optional_defaults():
     props = schema["properties"]
 
     assert props["num_epochs"]["default"] == 3
+    assert props["use_lora"]["default"] is True
+    assert props["lora_r"]["default"] == 16
+    assert props["lora_alpha"]["default"] == 32
     assert props["num_generations"]["default"] == 4
     assert props["max_prompt_length"]["default"] == 512
     assert props["max_completion_length"]["default"] == 256
+    assert props["per_device_train_batch_size"]["default"] == 1
+    assert props["gradient_accumulation_steps"]["default"] == 4
+    assert "generation_batch_size" in props
     assert props["load_in_4bit"]["default"] is True
     assert "default" not in props["resume_from_checkpoint"]
+
+
+def test_preference_training_schemas_accept_adapter_path():
+    gateway = _make_gateway()
+
+    dpo_props = gateway.mcp._tools["finetune.train_dpo"]["schema"]["properties"]
+    grpo_props = gateway.mcp._tools["finetune.train_grpo"]["schema"]["properties"]
+    kto_props = gateway.mcp._tools["finetune.train_kto"]["schema"]["properties"]
+    dpo_async_props = gateway.mcp._tools["finetune.train_dpo_async"]["schema"]["properties"]
+    grpo_async_props = gateway.mcp._tools["finetune.train_grpo_async"]["schema"]["properties"]
+    kto_async_props = gateway.mcp._tools["finetune.train_kto_async"]["schema"]["properties"]
+
+    assert "adapter_path" in dpo_props
+    assert "adapter_path" in grpo_props
+    assert "adapter_path" in kto_props
+    assert "adapter_path" in dpo_async_props
+    assert "adapter_path" in grpo_async_props
+    assert "adapter_path" in kto_async_props
+    assert dpo_props["max_prompt_length"]["default"] == 384
+    assert dpo_props["max_length"]["default"] == 512
+    assert dpo_async_props["max_prompt_length"]["default"] == 384
+    assert dpo_async_props["max_length"]["default"] == 512
+    assert dpo_props["auto_tune_defaults"]["default"] is True
+    assert grpo_props["auto_tune_defaults"]["default"] is True
+    assert kto_props["auto_tune_defaults"]["default"] is True
+    assert dpo_async_props["auto_tune_defaults"]["default"] is True
+    assert grpo_async_props["auto_tune_defaults"]["default"] is True
+    assert kto_async_props["auto_tune_defaults"]["default"] is True
+
+
+def test_full_pipeline_schemas_accept_adapter_path():
+    gateway = _make_gateway()
+
+    full_props = gateway.mcp._tools["workflow.full_pipeline"]["schema"]["properties"]
+    full_async_props = gateway.mcp._tools["workflow.full_pipeline_async"]["schema"]["properties"]
+
+    assert "adapter_path" in full_props
+    assert "adapter_path" in full_async_props
 
 
 def test_test_inference_schema_includes_temperature_and_adapter():
@@ -201,6 +254,76 @@ def test_host_deploy_schema_accepts_system_prompt():
 
     assert "system_prompt" in props
     assert props["system_prompt"]["type"] == "string"
+
+
+def test_curriculum_schema_accepts_staged_inputs():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["finetune.train_curriculum"]["schema"]
+    props = schema["properties"]
+
+    assert "stage_dataset_paths" in props
+    assert props["stage_dataset_paths"]["type"] == "array"
+    assert "stage_training_overrides" in props
+    assert props["stage_training_overrides"]["type"] == "array"
+    assert props["lora_stage_transition"]["default"] == "continue_adapter"
+
+
+def test_benchmark_finetuning_schema_accepts_eval_packs_and_reference_models():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["workflow.benchmark_finetuning"]["schema"]
+    props = schema["properties"]
+
+    assert "train_dataset_path" in props
+    assert "stage_dataset_paths" in props
+    assert props["stage_dataset_paths"]["type"] == "array"
+    assert "holdout_data_path" in props
+    assert "safety_data_path" in props
+    assert "training_methods" in props
+    assert props["training_methods"]["type"] == "array"
+    assert "reference_models" in props
+    assert props["reference_models"]["type"] == "array"
+    assert "benchmark_gates" in props
+    assert props["benchmark_gates"]["type"] == "array"
+    assert "eval_file_path" in props
+    assert "lora_dropout" in props
+    assert "weight_decay" in props
+    assert "save_best_model" in props
+    assert props["primary_metric"]["default"] == "avg_composite_score"
+
+
+def test_validate_preference_dataset_schema_includes_sampling_controls():
+    gateway = _make_gateway()
+    schema = gateway.mcp._tools["validate.preference_dataset"]["schema"]
+    props = schema["properties"]
+
+    assert props["technique"]["enum"] == ["dpo", "grpo", "kto"]
+    assert props["max_rows"]["default"] == 2000
+    assert props["top_k"]["default"] == 5
+
+
+@pytest.mark.asyncio
+async def test_finetune_train_tool_passes_artifact_context():
+    gateway = _make_gateway()
+    gateway._finetuning_svc = AsyncMock()
+    gateway._finetuning_svc.load_dataset_from_file = AsyncMock(
+        return_value={
+            "success": True,
+            "dataset_object": [{"prompt": "hi", "response": "hello"}],
+        }
+    )
+    gateway._finetuning_svc.train_model = AsyncMock(
+        return_value={"success": True, "model_path": "/tmp/out"}
+    )
+
+    tool = gateway.mcp._tools["finetune.train"]["func"]
+    payload = json.loads(
+        await tool(dataset_path="/train.jsonl", output_dir="/tmp/out")
+    )
+
+    assert payload["success"] is True
+    train_kwargs = gateway._finetuning_svc.train_model.await_args.kwargs
+    assert train_kwargs["dataset_path"] == "/train.jsonl"
+    assert train_kwargs["run_source"] == "finetune.train"
 
 
 @pytest.mark.asyncio
@@ -236,6 +359,40 @@ async def test_validate_schema_accepts_vlm_technique(tmp_path):
 
     assert result["success"] is True
     assert result["technique_requested"] == "vlm_sft"
+
+
+@pytest.mark.asyncio
+async def test_validate_preference_dataset_returns_dpo_warnings(tmp_path):
+    gateway = _make_gateway()
+    validate_preference = gateway.mcp._tools["validate.preference_dataset"]["func"]
+    dataset_path = tmp_path / "dpo.jsonl"
+    dataset_path.write_text(
+        (
+            json.dumps({
+                "prompt": "What is the product?",
+                "chosen": "It is a shared WhatsApp sales workspace.",
+                "rejected": "I do not know.",
+            })
+            + "\n"
+            + json.dumps({
+                "prompt": "How does it help teams?",
+                "chosen": "It keeps follow-up and routing in one place.",
+                "rejected": "I do not know.",
+            })
+            + "\n"
+        ),
+        encoding="utf-8",
+    )
+
+    result = json.loads(await validate_preference(dataset_path=str(dataset_path), technique="dpo"))
+
+    assert result["success"] is True
+    assert result["technique_analyzed"] == "dpo"
+    assert result["status"] == "warn"
+    assert result["dpo"]["rejected_stats"]["unique_count"] == 1
+    assert result["dpo"]["dominant_rejected_count"] == 2
+    assert "hard_negative_ratio" in result["dpo"]
+    assert result["guidance"]["starting_recipe"]["start_from_sft_checkpoint"] is True
 
 
 @pytest.mark.asyncio

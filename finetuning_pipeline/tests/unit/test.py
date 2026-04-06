@@ -311,6 +311,40 @@ async def test_train_model_resume_from_checkpoint(
     assert result["config"]["resumed_from"] == str(ckpt_dir)
 
 
+@pytest.mark.asyncio
+@patch(_CLEANUP_PATH)
+@patch(_LOAD_MODEL_PATH)
+@patch("peft.PeftModel.from_pretrained")
+@patch("trl.SFTTrainer")
+async def test_train_model_continues_existing_lora_adapter(
+    mock_trainer_cls,
+    mock_peft_load,
+    mock_load_model,
+    mock_cleanup,
+):
+    mock_load_model.return_value = (_make_mock_model(), _make_mock_tokenizer())
+    mock_peft_load.return_value = _make_mock_model()
+    mock_trainer_cls.return_value = _make_mock_trainer()
+    mock_cleanup.return_value = None
+
+    service = TrainingService()
+    data = [{"prompt": "hi", "response": "hello"}]
+    result = await service.train_model(
+        dataset=data,
+        output_dir="/tmp/test_continue_lora",
+        base_model="test-model",
+        adapter_path="/tmp/existing_adapter",
+        num_epochs=1,
+        use_lora=True,
+        enable_evaluation=False,
+    )
+
+    assert result["success"], result.get("error")
+    assert result["config"]["continued_from_adapter"] is True
+    assert result["config"]["adapter_path"] == "/tmp/existing_adapter"
+    mock_peft_load.assert_called_once()
+
+
 def test_resolve_checkpoint_latest(tmp_path):
     """_resolve_checkpoint picks the highest-numbered checkpoint."""
     (tmp_path / "checkpoint-50").mkdir()
@@ -418,6 +452,14 @@ def test_curriculum_prepare_training_data_instruction_only():
     assert result[0]["response"] == "Done."
 
 
+def test_curriculum_prepare_training_data_chat_triplet_format():
+    """system/user/assistant rows should pass through unchanged."""
+    svc = CurriculumService()
+    bucket = [{"system": "s", "user": "u", "assistant": "a"}]
+    result = list(svc._prepare_training_data(bucket))
+    assert result == [{"system": "s", "user": "u", "assistant": "a"}]
+
+
 @pytest.mark.asyncio
 async def test_curriculum_skips_scoring_if_already_scored():
     """If weighted_score is present, _score_dataset is never called."""
@@ -450,7 +492,6 @@ async def test_train_curriculum_model_three_stages(
         "model_path": str(tmp_path / "stage_X"),
         "num_training_examples": 3,
     }
-    mock_merge_lora.return_value = str(tmp_path / "stage_X" / "merged")
 
     svc = CurriculumService()
     data = _make_scored_items(9)
@@ -467,13 +508,106 @@ async def test_train_curriculum_model_three_stages(
     )
 
     assert result["success"], result.get("error")
+    assert result["lora_stage_transition"] == "continue_adapter"
     assert result["num_stages"] == 3
     assert result["num_training_examples"] == 9
     assert result["pre_scored"] is True
     assert len(result["stage_results"]) == 3
-    # _merge_lora should be called after stages 1 and 2 (not after stage 3)
-    assert mock_merge_lora.call_count == 2
+    assert result["adapter_base_model"] == "fake-base"
+    assert mock_merge_lora.call_count == 0
     assert mock_train_model.call_count == 3
+    call_kwargs = [call.kwargs for call in mock_train_model.await_args_list]
+    assert call_kwargs[0]["base_model"] == "fake-base"
+    assert call_kwargs[0]["adapter_path"] is None
+    assert call_kwargs[1]["base_model"] == "fake-base"
+    assert call_kwargs[1]["adapter_path"] == str(tmp_path / "stage_1")
+    assert call_kwargs[2]["base_model"] == "fake-base"
+    assert call_kwargs[2]["adapter_path"] == str(tmp_path / "stage_2")
+
+
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.curriculum_service.CurriculumService._merge_lora")
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_model")
+async def test_train_curriculum_model_merge_strategy_uses_previous_merged_base(
+    mock_train_model,
+    mock_merge_lora,
+    tmp_path,
+):
+    mock_train_model.return_value = {
+        "success": True,
+        "model_path": str(tmp_path / "stage_X"),
+        "num_training_examples": 3,
+    }
+    stage_1_merged = str(tmp_path / "stage_1" / "merged")
+    stage_2_merged = str(tmp_path / "stage_2" / "merged")
+    mock_merge_lora.side_effect = [stage_1_merged, stage_2_merged]
+
+    svc = CurriculumService()
+    data = _make_scored_items(9)
+
+    result = await svc.train_curriculum_model(
+        dataset=data,
+        output_dir=str(tmp_path),
+        base_model="fake-base",
+        num_stages=3,
+        num_epochs_per_stage=1,
+        score_column="weighted_score",
+        difficulty_order="easy_first",
+        use_lora=True,
+        lora_stage_transition="merge_adapter",
+    )
+
+    assert result["success"], result.get("error")
+    assert result["adapter_base_model"] == stage_2_merged
+    assert mock_merge_lora.call_count == 2
+    call_kwargs = [call.kwargs for call in mock_train_model.await_args_list]
+    assert call_kwargs[0]["base_model"] == "fake-base"
+    assert call_kwargs[1]["base_model"] == stage_1_merged
+    assert call_kwargs[2]["base_model"] == stage_2_merged
+    merge_args = [call.args for call in mock_merge_lora.await_args_list]
+    assert merge_args[0] == (str(tmp_path / "stage_1"), "fake-base", "fake-base")
+    assert merge_args[1] == (str(tmp_path / "stage_2"), stage_1_merged, stage_1_merged)
+
+
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_model")
+async def test_train_curriculum_model_accepts_explicit_stage_datasets_and_overrides(
+    mock_train_model,
+    tmp_path,
+):
+    mock_train_model.return_value = {
+        "success": True,
+        "model_path": str(tmp_path / "stage_X"),
+        "num_training_examples": 1,
+    }
+
+    svc = CurriculumService()
+    result = await svc.train_curriculum_model(
+        dataset=[],
+        stage_datasets=[
+            [{"system": "s1", "user": "u1", "assistant": "a1"}],
+            [{"system": "s2", "user": "u2", "assistant": "a2"}],
+        ],
+        stage_training_overrides=[
+            {"max_steps": 5},
+            {"max_steps": 8, "learning_rate": 1e-4},
+        ],
+        output_dir=str(tmp_path),
+        base_model="fake-base",
+        num_stages=9,
+        use_lora=True,
+    )
+
+    assert result["success"], result.get("error")
+    assert result["num_stages"] == 2
+    assert result["stage_source"] == "explicit_stage_datasets"
+    assert result["num_training_examples"] == 2
+    call_kwargs = [call.kwargs for call in mock_train_model.await_args_list]
+    assert call_kwargs[0]["dataset"] == [{"system": "s1", "user": "u1", "assistant": "a1"}]
+    assert call_kwargs[0]["max_steps"] == 5
+    assert call_kwargs[1]["dataset"] == [{"system": "s2", "user": "u2", "assistant": "a2"}]
+    assert call_kwargs[1]["max_steps"] == 8
+    assert call_kwargs[1]["learning_rate"] == 1e-4
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,31 @@ from typing import Any, Dict, List, Optional, Union
 from shared.async_utils import run_sync
 from shared.config import FinetuningConfig
 from shared.exceptions import OOMError
+from shared.model_load_errors import format_model_load_error
 from shared.multimodal_models import is_vlm_sample
+from shared.dpo_training_diagnostics import (
+    serialize_config_object,
+    summarize_dpo_preprocessing,
+    summarize_dpo_trainer_dataset,
+)
+from shared.preference_dataset_normalizer import normalize_preference_dataset
+from shared.preference_reward_lookup import (
+    build_grpo_reward_lookup,
+    resolve_completion_termination_ids,
+)
+from shared.grpo_training_diagnostics import summarize_grpo_log_history
+from shared.training_run_artifacts import TrainingRunArtifacts
+from shared.training_seed import set_global_seed
+from shared.training_defaults import (
+    DEFAULT_DPO_MAX_LENGTH,
+    DEFAULT_DPO_MAX_PROMPT_LENGTH,
+    DEFAULT_LORA_ALPHA,
+    DEFAULT_LORA_DROPOUT,
+    DEFAULT_LORA_R,
+    DEFAULT_PREFERENCE_MAX_GRAD_NORM,
+    DEFAULT_PREFERENCE_WEIGHT_DECAY,
+    auto_tune_preference_training_defaults,
+)
 
 from .vlm_utils import (
     build_vlm_prompt_and_images,
@@ -53,6 +77,82 @@ class TrainingService:
             return str(checkpoints[-1]) if checkpoints else None
         return str(resume_from_checkpoint)
 
+    @staticmethod
+    def _normalize_preference_dataset(
+        dataset: Any,
+        trainer: str,
+    ) -> tuple[Any, dict[str, Any]]:
+        normalized = normalize_preference_dataset(dataset, trainer)
+        return normalized.dataset, normalized.summary
+
+    @staticmethod
+    def _extract_run_artifact_context(kwargs: dict) -> dict[str, Optional[str]]:
+        return {
+            "dataset_path": str(kwargs.pop("dataset_path", "") or "").strip() or None,
+            "run_source": str(kwargs.pop("run_source", "") or "").strip() or None,
+            "job_id": str(kwargs.pop("job_id", "") or "").strip() or None,
+            "note": str(kwargs.pop("artifact_note", "") or "").strip() or None,
+        }
+
+    @staticmethod
+    def _filter_none_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in payload.items()
+            if value is not None
+        }
+
+    @staticmethod
+    def _dataset_row_count(dataset: Any) -> int:
+        try:
+            return max(0, int(len(dataset)))
+        except Exception:
+            return 0
+
+    def _resolve_preference_auto_tune(
+        self,
+        *,
+        technique: str,
+        dataset: Any,
+        num_epochs: int,
+        kwargs: dict,
+    ) -> tuple[int, dict, dict[str, Any]]:
+        auto_tune_defaults = bool(kwargs.pop("auto_tune_defaults", True))
+        row_count = self._dataset_row_count(dataset)
+        summary = auto_tune_preference_training_defaults(
+            technique=technique,
+            row_count=row_count,
+            num_epochs=num_epochs,
+            learning_rate=kwargs.get("learning_rate"),
+            auto_tune_defaults=auto_tune_defaults,
+        )
+        effective = summary.get("effective", {})
+        if summary.get("applied"):
+            kwargs["learning_rate"] = effective.get("learning_rate")
+        return int(effective.get("num_epochs", num_epochs)), kwargs, summary
+
+    @staticmethod
+    def _write_training_diagnostics(
+        run_artifacts: Optional[TrainingRunArtifacts],
+        metrics: Dict[str, Any],
+        **extra: Any,
+    ) -> Optional[str]:
+        if run_artifacts is None:
+            return None
+        payload: Dict[str, Any] = {"metrics": metrics}
+        payload.update(
+            {
+                key: value
+                for key, value in extra.items()
+                if value is not None
+            }
+        )
+        return run_artifacts.write_json_artifact(
+            "training_diagnostics",
+            "training_diagnostics.json",
+            payload,
+        )
+
     def _detect_precision(self) -> tuple[bool, bool]:
         """Returns (cuda_available, bf16_supported)."""
         try:
@@ -68,41 +168,7 @@ class TrainingService:
     @staticmethod
     def _set_global_seed(seed: Optional[int]) -> None:
         """Seed Python, NumPy, Torch, and Transformers before model/adapters are built."""
-        if seed is None:
-            return
-
-        seed = int(seed)
-
-        try:
-            import random
-
-            random.seed(seed)
-        except Exception:
-            pass
-
-        try:
-            import numpy as np
-
-            np.random.seed(seed % (2**32))
-        except Exception:
-            pass
-
-        try:
-            import torch
-
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed(seed)
-                torch.cuda.manual_seed_all(seed)
-        except Exception:
-            pass
-
-        try:
-            from transformers import set_seed
-
-            set_seed(seed)
-        except Exception:
-            pass
+        set_global_seed(seed)
 
     @staticmethod
     def _resolve_model_path(model_name: str) -> str:
@@ -279,6 +345,88 @@ class TrainingService:
         return wrapped_model, None, cast_count
 
     @staticmethod
+    def _build_grpo_extra_kwargs(
+        config_class: Any,
+        kwargs: dict,
+        *,
+        num_generations: int,
+        max_prompt_length: int,
+        max_completion_length: int,
+    ) -> dict:
+        """Forward only GRPOConfig fields supported by the installed TRL version."""
+        signature = inspect.signature(config_class.__init__).parameters
+        extra: dict = {"num_generations": num_generations}
+        if "max_completion_length" in signature:
+            extra["max_completion_length"] = max_completion_length
+        if "max_prompt_length" in signature:
+            extra["max_prompt_length"] = max_prompt_length
+
+        optional_fields = {
+            "generation_batch_size": int,
+            "steps_per_generation": int,
+        }
+        for field_name, cast in optional_fields.items():
+            if field_name not in signature or field_name not in kwargs:
+                continue
+            extra[field_name] = cast(kwargs.pop(field_name))
+        return extra
+
+    @staticmethod
+    def _build_dpo_extra_kwargs(
+        config_class: Any,
+        *,
+        beta: float,
+        max_prompt_length: int,
+        max_length: int,
+    ) -> dict:
+        """Forward only DPOConfig fields supported by the installed TRL version."""
+        signature = inspect.signature(config_class.__init__).parameters
+        extra: dict = {"beta": beta}
+        if "max_prompt_length" in signature:
+            extra["max_prompt_length"] = max_prompt_length
+        if "max_length" in signature:
+            extra["max_length"] = max_length
+        if "max_completion_length" in signature:
+            extra["max_completion_length"] = max(max_length - max_prompt_length, 64)
+        return extra
+
+    def _load_existing_lora_adapter(
+        self,
+        model: Any,
+        tokenizer: Any,
+        adapter_path: str,
+    ) -> tuple[Any, Any, int]:
+        """Load a previously trained adapter so training can continue on new data."""
+        from peft import PeftModel
+        from transformers import AutoTokenizer
+
+        resolved_adapter_path = self._resolve_model_path(adapter_path)
+        local_files_only = Path(resolved_adapter_path).exists()
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                resolved_adapter_path,
+                use_fast=getattr(tokenizer, "is_fast", True),
+                local_files_only=local_files_only,
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.padding_side = "right"
+        except Exception:
+            pass
+
+        try:
+            model = PeftModel.from_pretrained(
+                model,
+                resolved_adapter_path,
+                is_trainable=True,
+            )
+        except TypeError:
+            model = PeftModel.from_pretrained(model, resolved_adapter_path)
+        cast_count = self._cast_trainable_parameters_to_fp32(model)
+        return model, tokenizer, cast_count
+
+    @staticmethod
     def _preflight_bnb_check() -> bool:
         """Verify bitsandbytes CUDA kernels in a subprocess.
 
@@ -401,14 +549,23 @@ class TrainingService:
                 except Exception:
                     quantization_config = None
 
-        model = AutoModelForCausalLM.from_pretrained(
-            resolved_model_name,
-            device_map="auto",
-            dtype=model_dtype,
-            quantization_config=quantization_config,
-            local_files_only=local_files_only,
-            low_cpu_mem_usage=True,
-        )
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                resolved_model_name,
+                device_map="auto",
+                dtype=model_dtype,
+                quantization_config=quantization_config,
+                local_files_only=local_files_only,
+                low_cpu_mem_usage=True,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                format_model_load_error(
+                    exc,
+                    model_name=resolved_model_name,
+                    load_in_4bit=load_in_4bit,
+                )
+            ) from exc
         if hasattr(model, "config"):
             model.config.use_cache = False
 
@@ -848,11 +1005,12 @@ class TrainingService:
         dataset: Any,
         output_dir: str,
         base_model: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
-        lora_dropout: float = 0.05,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
         prompt_column: str = "prompt",
         response_column: str = "response",
         enable_evaluation: bool = True,
@@ -876,6 +1034,7 @@ class TrainingService:
         checkpoint in output_dir, or provide an explicit path.
 
         Args:
+            adapter_path: Existing LoRA adapter to continue training from.
             completion_only_loss: Train only on assistant tokens (default True).
             early_stopping_patience: Stop after N eval steps without improvement.
             eval_file_path: Path to a JSONL/JSON eval dataset file.
@@ -884,13 +1043,32 @@ class TrainingService:
         start_time = time.time()
         model_name = base_model or self.config.base_model
         original_kwargs = dict(kwargs)
+        artifact_context = self._extract_run_artifact_context(kwargs)
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="sft")
+
+        if adapter_path and not use_lora:
+            result = {
+                "success": False,
+                "error": "adapter_path can only be used when use_lora=True.",
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             from datasets import Dataset
             from trl import SFTConfig, SFTTrainer
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
-            return {
+            result = {
                 "success": False,
                 "error": (
                     f"Missing dependency: {missing}. "
@@ -899,6 +1077,15 @@ class TrainingService:
                 "base_model": model_name,
                 "output_dir": output_dir,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             kwargs = TrainingRecipeService.apply_defaults(
@@ -918,8 +1105,29 @@ class TrainingService:
                 prompt_column=prompt_column,
                 response_column=response_column,
             )
+            run_artifacts.start(
+                base_model=model_name,
+                adapter_path=adapter_path,
+                dataset=dataset,
+                dataset_path=artifact_context["dataset_path"],
+                training_config=self._filter_none_values(
+                    {
+                        "trainer": "sft",
+                        "num_epochs": num_epochs,
+                        "use_lora": use_lora,
+                        "lora_r": lora_r,
+                        "lora_alpha": lora_alpha,
+                        "lora_dropout": lora_dropout,
+                        "completion_only_loss": completion_only_loss,
+                        "recipe": recipe,
+                    }
+                ),
+                run_source=artifact_context["run_source"],
+                job_id=artifact_context["job_id"],
+                note=artifact_context["note"],
+            )
             if dataset_schema["kind"] == "unsupported":
-                return {
+                result = {
                     "success": False,
                     "error": (
                         f"Dataset must contain '{prompt_column}' and "
@@ -928,6 +1136,15 @@ class TrainingService:
                     ),
                     "columns": dataset_schema["columns"],
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
             self._set_global_seed(training_seed)
             # Load eval dataset from file if provided (and no in-memory eval dataset)
@@ -983,7 +1200,7 @@ class TrainingService:
                     response_column=response_column,
                 )
                 if evaluation_schema["kind"] == "unsupported":
-                    return {
+                    result = {
                         "success": False,
                         "error": (
                             "Evaluation dataset must contain prompt/response columns "
@@ -991,6 +1208,15 @@ class TrainingService:
                         ),
                         "columns": evaluation_schema["columns"],
                     }
+                    result["artifacts"] = run_artifacts.complete(
+                        success=False,
+                        interrupted=False,
+                        model_path=None,
+                        error=result["error"],
+                        training_time_seconds=time.time() - start_time,
+                        metrics={},
+                    )
+                    return result
                 evaluation_dataset = self._prepare_sft_text_dataset(
                     dataset=evaluation_dataset,
                     tokenizer=tokenizer,
@@ -1008,7 +1234,15 @@ class TrainingService:
 
             peft_config = None
             lora_cast_count = 0
-            if use_lora:
+            continued_from_adapter = bool(adapter_path)
+            if use_lora and adapter_path:
+                model, tokenizer, lora_cast_count = await asyncio.to_thread(
+                    self._load_existing_lora_adapter,
+                    model,
+                    tokenizer,
+                    adapter_path,
+                )
+            elif use_lora:
                 peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
                 model, peft_config, lora_cast_count = self._apply_lora_to_model(
                     model,
@@ -1141,6 +1375,7 @@ class TrainingService:
 
             await asyncio.to_thread(self._cleanup, trainer, model)
             metrics = self._summarize_trainer_metrics(trainer, train_output)
+            self._write_training_diagnostics(run_artifacts, metrics)
 
             result: Dict[str, Any] = {
                 "success": True,
@@ -1156,6 +1391,8 @@ class TrainingService:
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
                     "lora_trainable_fp32_tensors": lora_cast_count,
+                    "continued_from_adapter": continued_from_adapter,
+                    "adapter_path": adapter_path,
                     "completion_only_loss": completion_only_loss,
                     "dataset_format": (
                         "text_only" if use_notebook_text_only_dataset else "structured"
@@ -1173,6 +1410,14 @@ class TrainingService:
             }
             if hub_url:
                 result["hub_url"] = hub_url
+            result["artifacts"] = run_artifacts.complete(
+                success=True,
+                interrupted=interrupted,
+                model_path=output_dir,
+                error=None,
+                training_time_seconds=result["training_time_seconds"],
+                metrics=metrics,
+            )
             return result
         except Exception as e:
             if completion_only_loss and (
@@ -1227,12 +1472,21 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            return {
+            result = {
                 "success": False,
                 "error": str(e),
                 "output_dir": output_dir,
                 "base_model": model_name,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.time() - start_time,
+                metrics={},
+            )
+            return result
 
     async def train_vlm_model(
         self,
@@ -1242,22 +1496,24 @@ class TrainingService:
         dataset_path: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
-        lora_dropout: float = 0.05,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
         extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Train a vision-language model with multimodal SFT."""
         start_time = time.time()
         model_name = base_model or self.config.base_model
+        artifact_context = self._extract_run_artifact_context(kwargs)
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="vlm_sft")
 
         try:
             from datasets import Dataset
             from transformers import Trainer, TrainingArguments
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
-            return {
+            result = {
                 "success": False,
                 "error": (
                     f"Missing dependency: {missing}. "
@@ -1266,21 +1522,40 @@ class TrainingService:
                 "base_model": model_name,
                 "output_dir": output_dir,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
+            training_seed = int(kwargs.get("seed", 42))
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
 
             if "messages" not in dataset.column_names:
-                return {
+                result = {
                     "success": False,
                     "error": "VLM dataset must contain a 'messages' column",
                     "columns": list(getattr(dataset, "column_names", [])),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
             sample = dataset[0] if len(dataset) > 0 else None
             if sample is None or not is_vlm_sample(sample):
-                return {
+                result = {
                     "success": False,
                     "error": (
                         "Dataset does not match the canonical VLM SFT schema. "
@@ -1289,6 +1564,35 @@ class TrainingService:
                     ),
                     "columns": list(getattr(dataset, "column_names", [])),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
+
+            run_artifacts.start(
+                base_model=model_name,
+                adapter_path=None,
+                dataset=dataset,
+                dataset_path=dataset_path or artifact_context["dataset_path"],
+                training_config=self._filter_none_values(
+                    {
+                        "trainer": "vlm_sft",
+                        "num_epochs": num_epochs,
+                        "use_lora": use_lora,
+                        "lora_r": lora_r,
+                        "lora_alpha": lora_alpha,
+                        "lora_dropout": lora_dropout,
+                    }
+                ),
+                run_source=artifact_context["run_source"],
+                job_id=artifact_context["job_id"],
+                note=artifact_context["note"],
+            )
 
             model_kwargs = dict(kwargs)
             model, processor = await asyncio.to_thread(
@@ -1367,10 +1671,11 @@ class TrainingService:
             trainer = Trainer(**trainer_kwargs)
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-            def _train_sync() -> bool:
+            def _train_sync() -> tuple[bool, Any]:
                 interrupted = False
+                train_output = None
                 try:
-                    trainer.train()
+                    train_output = trainer.train()
                 except KeyboardInterrupt:
                     interrupted = True
                     trainer.save_model(output_dir)
@@ -1383,15 +1688,17 @@ class TrainingService:
                             "image count, or max_seq_length."
                         ) from exc
                     raise
-                return interrupted
+                return interrupted, train_output
 
-            interrupted = await asyncio.to_thread(_train_sync)
+            interrupted, train_output = await asyncio.to_thread(_train_sync)
             if not interrupted:
                 await asyncio.to_thread(self._save_model_artifacts, trainer, processor, output_dir)
 
+            metrics = self._summarize_trainer_metrics(trainer, train_output)
+            self._write_training_diagnostics(run_artifacts, metrics)
             await asyncio.to_thread(self._cleanup, trainer, model)
 
-            return {
+            result = {
                 "success": True,
                 "interrupted": interrupted,
                 "model_path": output_dir,
@@ -1406,8 +1713,18 @@ class TrainingService:
                     "lora_dropout": lora_dropout,
                     "dataset_path": dataset_path,
                 },
+                "metrics": metrics,
                 "num_training_examples": len(dataset),
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=True,
+                interrupted=interrupted,
+                model_path=output_dir,
+                error=None,
+                training_time_seconds=result["training_time_seconds"],
+                metrics=metrics,
+            )
+            return result
         except Exception as e:
             try:
                 import torch
@@ -1416,12 +1733,21 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            return {
+            result = {
                 "success": False,
                 "error": str(e),
                 "output_dir": output_dir,
                 "base_model": model_name,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.time() - start_time,
+                metrics={},
+            )
+            return result
 
     # ----------------------------------------------------------------
     # DPO training
@@ -1432,12 +1758,15 @@ class TrainingService:
         dataset: Any,
         output_dir: str,
         base_model: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
-        lora_dropout: float = 0.05,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
         beta: float = 0.1,
+        max_prompt_length: int = DEFAULT_DPO_MAX_PROMPT_LENGTH,
+        max_length: int = DEFAULT_DPO_MAX_LENGTH,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         save_best_model: bool = True,
         evaluation_dataset: Optional[Any] = None,
@@ -1452,18 +1781,45 @@ class TrainingService:
         """
         start_time = time.time()
         model_name = base_model or self.config.base_model
+        artifact_context = self._extract_run_artifact_context(kwargs)
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="dpo")
+        if adapter_path and not use_lora:
+            result = {
+                "success": False,
+                "error": "adapter_path can only be used when use_lora=True.",
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             from datasets import Dataset
             from trl import DPOConfig, DPOTrainer
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
-            return {
+            result = {
                 "success": False,
                 "error": f"Missing dependency: {missing}.",
                 "base_model": model_name,
                 "output_dir": output_dir,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             kwargs = TrainingRecipeService.apply_defaults(
@@ -1471,29 +1827,115 @@ class TrainingService:
                 trainer_type="dpo",
                 kwargs=kwargs,
             )
+            training_seed = int(kwargs.get("seed", 42))
+            kwargs.setdefault("weight_decay", DEFAULT_PREFERENCE_WEIGHT_DECAY)
+            kwargs.setdefault("max_grad_norm", DEFAULT_PREFERENCE_MAX_GRAD_NORM)
+            kwargs.setdefault("bf16", False)
+            kwargs.setdefault("fp16", False)
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
+            num_epochs, kwargs, auto_tune_summary = self._resolve_preference_auto_tune(
+                technique="dpo",
+                dataset=dataset,
+                num_epochs=num_epochs,
+                kwargs=kwargs,
+            )
+            training_config = self._filter_none_values(
+                {
+                    "trainer": "dpo",
+                    "num_epochs": num_epochs,
+                    "beta": beta,
+                    "max_prompt_length": max_prompt_length,
+                    "max_length": max_length,
+                    "use_lora": use_lora,
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "recipe": recipe,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
+                }
+            )
+            run_artifacts.start(
+                base_model=model_name,
+                adapter_path=adapter_path,
+                dataset=dataset,
+                dataset_path=artifact_context["dataset_path"],
+                training_config=training_config,
+                run_source=artifact_context["run_source"],
+                job_id=artifact_context["job_id"],
+                note=artifact_context["note"],
+            )
 
             required = {"prompt", "chosen", "rejected"}
             missing_cols = required - set(dataset.column_names)
             if missing_cols:
-                return {
+                result = {
                     "success": False,
                     "error": f"DPO dataset missing columns: {missing_cols}",
                     "columns": list(dataset.column_names),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
+            dataset, preference_normalization = self._normalize_preference_dataset(
+                dataset,
+                "dpo",
+            )
+            run_artifacts.write_json_artifact(
+                "preference_normalization",
+                "preference_normalization.json",
+                preference_normalization,
+            )
+            if preference_normalization["invalid_row_count"]:
+                result = {
+                    "success": False,
+                    "error": "DPO dataset contains invalid rows after whitespace normalization.",
+                    "normalization": preference_normalization,
+                }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
+
+            self._set_global_seed(training_seed)
             model, tokenizer = await asyncio.to_thread(
                 self._load_model_and_tokenizer, model_name, kwargs
             )
             cuda_available, bf16_supported = self._detect_precision()
 
             peft_config = None
-            if use_lora:
+            lora_cast_count = 0
+            continued_from_adapter = bool(adapter_path)
+            if use_lora and adapter_path:
+                model, tokenizer, lora_cast_count = await asyncio.to_thread(
+                    self._load_existing_lora_adapter,
+                    model,
+                    tokenizer,
+                    adapter_path,
+                )
+            elif use_lora:
                 peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
 
             has_eval = evaluation_dataset is not None
             training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
+            dpo_extra_kwargs = self._build_dpo_extra_kwargs(
+                DPOConfig,
+                beta=beta,
+                max_prompt_length=max_prompt_length,
+                max_length=max_length,
+            )
             args = self._build_config(
                 DPOConfig,
                 output_dir=output_dir,
@@ -1501,11 +1943,22 @@ class TrainingService:
                 has_eval=has_eval,
                 save_best_model=save_best_model,
                 training_kwargs=training_kwargs,
-                extra_kwargs={"beta": beta},
+                extra_kwargs=dpo_extra_kwargs,
             )
 
             checkpoint = self._resolve_checkpoint(output_dir, resume_from_checkpoint)
             Path(output_dir).mkdir(parents=True, exist_ok=True)
+            dpo_preprocessing = summarize_dpo_preprocessing(
+                dataset,
+                tokenizer,
+                max_prompt_length=max_prompt_length,
+                max_length=max_length,
+            )
+            run_artifacts.write_json_artifact(
+                "dpo_preprocessing",
+                "dpo_preprocessing.json",
+                dpo_preprocessing,
+            )
 
             trainer_sig = inspect.signature(DPOTrainer.__init__).parameters
             trainer_kwargs: dict = {
@@ -1523,13 +1976,45 @@ class TrainingService:
                 trainer_kwargs["processing_class"] = tokenizer
             if extra_callbacks and "callbacks" in trainer_sig:
                 trainer_kwargs["callbacks"] = list(extra_callbacks)
+            dpo_effective_config = {
+                "schema_version": 1,
+                "training_kwargs": training_kwargs,
+                "dpo_extra_kwargs": dpo_extra_kwargs,
+                "args": serialize_config_object(args),
+                "resume_from_checkpoint": checkpoint,
+                "has_eval_dataset": has_eval,
+                "trainer_kwargs": {
+                    "uses_eval_dataset": has_eval and "eval_dataset" in trainer_sig,
+                    "uses_peft_config": "peft_config" in trainer_sig and peft_config is not None,
+                    "uses_tokenizer": "tokenizer" in trainer_sig,
+                    "uses_processing_class": "processing_class" in trainer_sig,
+                    "uses_callbacks": bool(extra_callbacks and "callbacks" in trainer_sig),
+                },
+            }
+            run_artifacts.write_json_artifact(
+                "dpo_effective_config",
+                "dpo_effective_config.json",
+                dpo_effective_config,
+            )
+            if auto_tune_summary.get("enabled"):
+                run_artifacts.write_json_artifact(
+                    "auto_tuned_defaults",
+                    "auto_tuned_defaults.json",
+                    auto_tune_summary,
+                )
 
             trainer = DPOTrainer(**trainer_kwargs)
+            run_artifacts.write_json_artifact(
+                "dpo_trainer_dataset",
+                "dpo_trainer_dataset.json",
+                summarize_dpo_trainer_dataset(getattr(trainer, "train_dataset", dataset)),
+            )
 
             def _train_sync():
                 _interrupted = False
+                _train_output = None
                 try:
-                    trainer.train(resume_from_checkpoint=checkpoint)
+                    _train_output = trainer.train(resume_from_checkpoint=checkpoint)
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
@@ -1541,18 +2026,35 @@ class TrainingService:
                             "max_seq_length, or use 4-bit quantization."
                         ) from exc
                     raise
-                return _interrupted
+                return _interrupted, _train_output
 
-            interrupted = await asyncio.to_thread(_train_sync)
+            interrupted, train_output = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 await asyncio.to_thread(
                     self._save_model_artifacts, trainer, tokenizer, output_dir
                 )
 
+            metrics = self._summarize_trainer_metrics(trainer, train_output)
+            self._write_training_diagnostics(
+                run_artifacts,
+                metrics,
+                auto_tuned_defaults=auto_tune_summary,
+                dpo_preprocessing_summary={
+                    key: dpo_preprocessing.get(key)
+                    for key in (
+                        "avg_prompt_tokens",
+                        "avg_chosen_tokens",
+                        "avg_rejected_tokens",
+                        "prompt_overflow_ratio",
+                        "chosen_response_overflow_ratio",
+                        "rejected_response_overflow_ratio",
+                    )
+                },
+            )
             await asyncio.to_thread(self._cleanup, trainer, model)
 
-            return {
+            result = {
                 "success": True,
                 "interrupted": interrupted,
                 "model_path": output_dir,
@@ -1562,15 +2064,42 @@ class TrainingService:
                     "trainer": "dpo",
                     "num_epochs": num_epochs,
                     "beta": beta,
+                    "max_prompt_length": max_prompt_length,
+                    "max_length": max_length,
                     "use_lora": use_lora,
                     "lora_r": lora_r,
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
+                    "lora_trainable_fp32_tensors": lora_cast_count,
+                    "continued_from_adapter": continued_from_adapter,
+                    "adapter_path": adapter_path,
                     "resumed_from": checkpoint,
                     "recipe": recipe,
+                    "auto_tuned_defaults": auto_tune_summary,
+                    "dpo_preprocessing_summary": {
+                        key: dpo_preprocessing.get(key)
+                        for key in (
+                            "avg_prompt_tokens",
+                            "avg_chosen_tokens",
+                            "avg_rejected_tokens",
+                            "prompt_overflow_ratio",
+                            "chosen_response_overflow_ratio",
+                            "rejected_response_overflow_ratio",
+                        )
+                    },
                 },
+                "metrics": metrics,
                 "num_training_examples": len(dataset),
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=True,
+                interrupted=interrupted,
+                model_path=output_dir,
+                error=None,
+                training_time_seconds=result["training_time_seconds"],
+                metrics=metrics,
+            )
+            return result
         except Exception as e:
             try:
                 import torch
@@ -1579,12 +2108,21 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            return {
+            result = {
                 "success": False,
                 "error": str(e),
                 "output_dir": output_dir,
                 "base_model": model_name,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.time() - start_time,
+                metrics={},
+            )
+            return result
 
     # ----------------------------------------------------------------
     # GRPO training
@@ -1595,7 +2133,12 @@ class TrainingService:
         dataset: Any,
         output_dir: str,
         base_model: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         num_epochs: int = 3,
+        use_lora: bool = True,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
         num_generations: int = 4,
         max_prompt_length: int = 512,
         max_completion_length: int = 256,
@@ -1611,67 +2154,189 @@ class TrainingService:
         """
         start_time = time.time()
         model_name = base_model or self.config.base_model
+        artifact_context = self._extract_run_artifact_context(kwargs)
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="grpo")
+        if adapter_path and not use_lora:
+            result = {
+                "success": False,
+                "error": "adapter_path can only be used when use_lora=True.",
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             from datasets import Dataset
             from trl import GRPOConfig, GRPOTrainer
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
-            return {
+            result = {
                 "success": False,
                 "error": f"Missing dependency: {missing}.",
                 "base_model": model_name,
                 "output_dir": output_dir,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
+            training_seed = int(kwargs.get("seed", 42))
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
+            num_epochs, kwargs, auto_tune_summary = self._resolve_preference_auto_tune(
+                technique="grpo",
+                dataset=dataset,
+                num_epochs=num_epochs,
+                kwargs=kwargs,
+            )
+            training_config = self._filter_none_values(
+                {
+                    "trainer": "grpo",
+                    "num_epochs": num_epochs,
+                    "use_lora": use_lora,
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "num_generations": num_generations,
+                    "max_prompt_length": max_prompt_length,
+                    "max_completion_length": max_completion_length,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
+                }
+            )
+            run_artifacts.start(
+                base_model=model_name,
+                adapter_path=adapter_path,
+                dataset=dataset,
+                dataset_path=artifact_context["dataset_path"],
+                training_config=training_config,
+                run_source=artifact_context["run_source"],
+                job_id=artifact_context["job_id"],
+                note=artifact_context["note"],
+            )
 
             required = {"prompt", "responses", "rewards"}
             missing_cols = required - set(dataset.column_names)
             if missing_cols:
-                return {
+                result = {
                     "success": False,
                     "error": f"GRPO dataset missing columns: {missing_cols}",
                     "columns": list(dataset.column_names),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
             # Build lookup from pre-computed rewards: "{prompt}|||{response}" → reward
-            reward_table: Dict[str, float] = {}
-            for example in dataset:
-                prompt_text = example.get("prompt", "")
-                responses: list = example.get("responses") or []
-                rewards: list = example.get("rewards") or []
-                for resp, rew in zip(responses, rewards):
-                    reward_table[f"{prompt_text}|||{resp}"] = float(rew)
+            dataset, preference_normalization = self._normalize_preference_dataset(
+                dataset,
+                "grpo",
+            )
+            run_artifacts.write_json_artifact(
+                "preference_normalization",
+                "preference_normalization.json",
+                preference_normalization,
+            )
+            if preference_normalization["invalid_row_count"]:
+                result = {
+                    "success": False,
+                    "error": "GRPO dataset contains invalid rows after whitespace normalization.",
+                    "normalization": preference_normalization,
+                }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
-            def reward_fn(
-                prompts: List[str], completions: List[str], **_kw: Any
-            ) -> List[float]:
-                return [
-                    reward_table.get(f"{p}|||{c}", 0.0)
-                    for p, c in zip(prompts, completions)
-                ]
+            reward_lookup = build_grpo_reward_lookup(list(dataset))
 
             # GRPOTrainer only needs the 'prompt' column; it generates completions
             grpo_dataset = dataset.remove_columns(
                 [c for c in dataset.column_names if c != "prompt"]
             )
 
+            requested_load_in_4bit = bool(kwargs.get("load_in_4bit", True))
+            if requested_load_in_4bit and not use_lora:
+                result = {
+                    "success": False,
+                    "error": (
+                        "GRPO with load_in_4bit=True requires use_lora=True because "
+                        "quantized full-model fine-tuning is unsupported."
+                    ),
+                    "output_dir": output_dir,
+                    "base_model": model_name,
+                }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
+
+            self._set_global_seed(training_seed)
             model, tokenizer = await asyncio.to_thread(
                 self._load_model_and_tokenizer, model_name, kwargs
             )
+            eos_token_ids, pad_token_ids = resolve_completion_termination_ids(tokenizer)
             cuda_available, bf16_supported = self._detect_precision()
-            training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
 
-            # trl 0.28 GRPOConfig does not have max_prompt_length; filter to known params
-            grpo_sig = inspect.signature(GRPOConfig.__init__).parameters
-            grpo_extra: dict = {"num_generations": num_generations}
-            if "max_completion_length" in grpo_sig:
-                grpo_extra["max_completion_length"] = max_completion_length
-            if "max_prompt_length" in grpo_sig:
-                grpo_extra["max_prompt_length"] = max_prompt_length
+            def reward_fn(
+                prompts: List[str], completions: List[str], **reward_kwargs: Any
+            ) -> List[float]:
+                return reward_lookup.score_batch(
+                    prompts,
+                    completions,
+                    completion_ids=reward_kwargs.get("completion_ids"),
+                    eos_token_ids=eos_token_ids,
+                    pad_token_ids=pad_token_ids,
+                )
+
+            peft_config = None
+            lora_cast_count = 0
+            continued_from_adapter = bool(adapter_path)
+            if use_lora and adapter_path:
+                model, tokenizer, lora_cast_count = await asyncio.to_thread(
+                    self._load_existing_lora_adapter,
+                    model,
+                    tokenizer,
+                    adapter_path,
+                )
+            elif use_lora:
+                peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
+                model, peft_config, lora_cast_count = self._apply_lora_to_model(
+                    model,
+                    peft_config,
+                )
+
+            training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
 
             grpo_config = self._build_config(
                 GRPOConfig,
@@ -1680,7 +2345,13 @@ class TrainingService:
                 has_eval=False,
                 save_best_model=False,
                 training_kwargs=training_kwargs,
-                extra_kwargs=grpo_extra,
+                extra_kwargs=self._build_grpo_extra_kwargs(
+                    GRPOConfig,
+                    kwargs,
+                    num_generations=num_generations,
+                    max_prompt_length=max_prompt_length,
+                    max_completion_length=max_completion_length,
+                ),
             )
 
             checkpoint = self._resolve_checkpoint(output_dir, resume_from_checkpoint)
@@ -1693,6 +2364,8 @@ class TrainingService:
                 "args": grpo_config,
                 "train_dataset": grpo_dataset,
             }
+            if "peft_config" in trainer_sig and peft_config is not None:
+                trainer_kwargs["peft_config"] = peft_config
             if "tokenizer" in trainer_sig:
                 trainer_kwargs["tokenizer"] = tokenizer
             elif "processing_class" in trainer_sig:
@@ -1700,12 +2373,19 @@ class TrainingService:
             if extra_callbacks and "callbacks" in trainer_sig:
                 trainer_kwargs["callbacks"] = list(extra_callbacks)
 
+            if auto_tune_summary.get("enabled"):
+                run_artifacts.write_json_artifact(
+                    "auto_tuned_defaults",
+                    "auto_tuned_defaults.json",
+                    auto_tune_summary,
+                )
             trainer = GRPOTrainer(**trainer_kwargs)
 
             def _train_sync():
                 _interrupted = False
+                _train_output = None
                 try:
-                    trainer.train(resume_from_checkpoint=checkpoint)
+                    _train_output = trainer.train(resume_from_checkpoint=checkpoint)
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
@@ -1717,18 +2397,40 @@ class TrainingService:
                             "max_seq_length, or use 4-bit quantization."
                         ) from exc
                     raise
-                return _interrupted
+                return _interrupted, _train_output
 
-            interrupted = await asyncio.to_thread(_train_sync)
+            interrupted, train_output = await asyncio.to_thread(_train_sync)
+            reward_match_stats = reward_lookup.stats_snapshot()
+            trainer_diagnostics = summarize_grpo_log_history(
+                getattr(getattr(trainer, "state", None), "log_history", None)
+            )
+            run_artifacts.write_json_artifact(
+                "reward_match_stats",
+                "reward_match_stats.json",
+                reward_match_stats,
+            )
+            run_artifacts.write_json_artifact(
+                "grpo_training_diagnostics",
+                "grpo_training_diagnostics.json",
+                trainer_diagnostics,
+            )
 
             if not interrupted:
                 await asyncio.to_thread(
                     self._save_model_artifacts, trainer, tokenizer, output_dir
                 )
 
+            metrics = self._summarize_trainer_metrics(trainer, train_output)
+            self._write_training_diagnostics(
+                run_artifacts,
+                metrics,
+                auto_tuned_defaults=auto_tune_summary,
+                reward_match_stats=reward_match_stats,
+                trainer_diagnostics=trainer_diagnostics,
+            )
             await asyncio.to_thread(self._cleanup, trainer, model)
 
-            return {
+            result = {
                 "success": True,
                 "interrupted": interrupted,
                 "model_path": output_dir,
@@ -1737,13 +2439,39 @@ class TrainingService:
                 "config": {
                     "trainer": "grpo",
                     "num_epochs": num_epochs,
+                    "use_lora": use_lora,
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "lora_trainable_fp32_tensors": lora_cast_count,
+                    "continued_from_adapter": continued_from_adapter,
+                    "adapter_path": adapter_path,
                     "num_generations": num_generations,
                     "max_prompt_length": max_prompt_length,
                     "max_completion_length": max_completion_length,
+                    "generation_batch_size": getattr(grpo_config, "generation_batch_size", None),
+                    "steps_per_generation": getattr(grpo_config, "steps_per_generation", None),
+                    "auto_tuned_defaults": auto_tune_summary,
+                    "reward_match_stats": reward_match_stats,
+                    "training_diagnostics": trainer_diagnostics,
+                    "termination_token_ids": {
+                        "eos": list(eos_token_ids),
+                        "pad": list(pad_token_ids),
+                    },
                     "resumed_from": checkpoint,
                 },
+                "metrics": metrics,
                 "num_training_examples": len(dataset),
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=True,
+                interrupted=interrupted,
+                model_path=output_dir,
+                error=None,
+                training_time_seconds=result["training_time_seconds"],
+                metrics=metrics,
+            )
+            return result
         except Exception as e:
             try:
                 import torch
@@ -1752,12 +2480,21 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            return {
+            result = {
                 "success": False,
                 "error": str(e),
                 "output_dir": output_dir,
                 "base_model": model_name,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.time() - start_time,
+                metrics={},
+            )
+            return result
 
     # ----------------------------------------------------------------
     # KTO training
@@ -1768,11 +2505,12 @@ class TrainingService:
         dataset: Any,
         output_dir: str,
         base_model: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
-        lora_dropout: float = 0.05,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
         desirable_weight: float = 1.0,
         undesirable_weight: float = 1.0,
         beta: float = 0.1,
@@ -1789,40 +2527,145 @@ class TrainingService:
         """
         start_time = time.time()
         model_name = base_model or self.config.base_model
+        artifact_context = self._extract_run_artifact_context(kwargs)
+        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="kto")
+        if adapter_path and not use_lora:
+            result = {
+                "success": False,
+                "error": "adapter_path can only be used when use_lora=True.",
+                "base_model": model_name,
+                "output_dir": output_dir,
+            }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             from datasets import Dataset
             from trl import KTOConfig, KTOTrainer
         except ModuleNotFoundError as e:
             missing = getattr(e, "name", None) or "a required dependency"
-            return {
+            result = {
                 "success": False,
                 "error": f"Missing dependency: {missing}.",
                 "base_model": model_name,
                 "output_dir": output_dir,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=0.0,
+                metrics={},
+            )
+            return result
 
         try:
             if isinstance(dataset, list):
                 dataset = Dataset.from_list(dataset)
+            num_epochs, kwargs, auto_tune_summary = self._resolve_preference_auto_tune(
+                technique="kto",
+                dataset=dataset,
+                num_epochs=num_epochs,
+                kwargs=kwargs,
+            )
+            training_config = self._filter_none_values(
+                {
+                    "trainer": "kto",
+                    "num_epochs": num_epochs,
+                    "beta": beta,
+                    "desirable_weight": desirable_weight,
+                    "undesirable_weight": undesirable_weight,
+                    "use_lora": use_lora,
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
+                }
+            )
+            run_artifacts.start(
+                base_model=model_name,
+                adapter_path=adapter_path,
+                dataset=dataset,
+                dataset_path=artifact_context["dataset_path"],
+                training_config=training_config,
+                run_source=artifact_context["run_source"],
+                job_id=artifact_context["job_id"],
+                note=artifact_context["note"],
+            )
 
             required = {"prompt", "completion", "label"}
             missing_cols = required - set(dataset.column_names)
             if missing_cols:
-                return {
+                result = {
                     "success": False,
                     "error": f"KTO dataset missing columns: {missing_cols}",
                     "columns": list(dataset.column_names),
                 }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
 
+            dataset, preference_normalization = self._normalize_preference_dataset(
+                dataset,
+                "kto",
+            )
+            run_artifacts.write_json_artifact(
+                "preference_normalization",
+                "preference_normalization.json",
+                preference_normalization,
+            )
+            if preference_normalization["invalid_row_count"]:
+                result = {
+                    "success": False,
+                    "error": "KTO dataset contains invalid rows after whitespace normalization.",
+                    "normalization": preference_normalization,
+                }
+                result["artifacts"] = run_artifacts.complete(
+                    success=False,
+                    interrupted=False,
+                    model_path=None,
+                    error=result["error"],
+                    training_time_seconds=time.time() - start_time,
+                    metrics={},
+                )
+                return result
+
+            training_seed = int(kwargs.get("seed", 42))
+            self._set_global_seed(training_seed)
             model, tokenizer = await asyncio.to_thread(
                 self._load_model_and_tokenizer, model_name, kwargs
             )
             cuda_available, bf16_supported = self._detect_precision()
 
             peft_config = None
+            lora_trainable_fp32_tensors: Optional[int] = None
+            continued_from_adapter = bool(adapter_path)
             if use_lora:
-                peft_config = self._build_lora_config(kwargs, lora_r, lora_alpha, lora_dropout)
+                if adapter_path:
+                    model, tokenizer, lora_trainable_fp32_tensors = await asyncio.to_thread(
+                        self._load_existing_lora_adapter,
+                        model,
+                        tokenizer,
+                        adapter_path,
+                    )
+                else:
+                    peft_config = self._build_lora_config(
+                        kwargs, lora_r, lora_alpha, lora_dropout
+                    )
 
             has_eval = evaluation_dataset is not None
             training_kwargs = self._pop_training_kwargs(kwargs, cuda_available, bf16_supported)
@@ -1860,12 +2703,19 @@ class TrainingService:
             if extra_callbacks and "callbacks" in trainer_sig:
                 trainer_kwargs["callbacks"] = list(extra_callbacks)
 
+            if auto_tune_summary.get("enabled"):
+                run_artifacts.write_json_artifact(
+                    "auto_tuned_defaults",
+                    "auto_tuned_defaults.json",
+                    auto_tune_summary,
+                )
             trainer = KTOTrainer(**trainer_kwargs)
 
             def _train_sync():
                 _interrupted = False
+                _train_output = None
                 try:
-                    trainer.train(resume_from_checkpoint=checkpoint)
+                    _train_output = trainer.train(resume_from_checkpoint=checkpoint)
                 except KeyboardInterrupt:
                     _interrupted = True
                     self._save_on_interrupt(trainer, tokenizer, output_dir)
@@ -1877,18 +2727,24 @@ class TrainingService:
                             "max_seq_length, or use 4-bit quantization."
                         ) from exc
                     raise
-                return _interrupted
+                return _interrupted, _train_output
 
-            interrupted = await asyncio.to_thread(_train_sync)
+            interrupted, train_output = await asyncio.to_thread(_train_sync)
 
             if not interrupted:
                 await asyncio.to_thread(
                     self._save_model_artifacts, trainer, tokenizer, output_dir
                 )
 
+            metrics = self._summarize_trainer_metrics(trainer, train_output)
+            self._write_training_diagnostics(
+                run_artifacts,
+                metrics,
+                auto_tuned_defaults=auto_tune_summary,
+            )
             await asyncio.to_thread(self._cleanup, trainer, model)
 
-            return {
+            result = {
                 "success": True,
                 "interrupted": interrupted,
                 "model_path": output_dir,
@@ -1904,10 +2760,24 @@ class TrainingService:
                     "lora_r": lora_r,
                     "lora_alpha": lora_alpha,
                     "lora_dropout": lora_dropout,
+                    "auto_tuned_defaults": auto_tune_summary,
+                    "lora_trainable_fp32_tensors": lora_trainable_fp32_tensors,
+                    "continued_from_adapter": continued_from_adapter,
+                    "adapter_path": adapter_path,
                     "resumed_from": checkpoint,
                 },
+                "metrics": metrics,
                 "num_training_examples": len(dataset),
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=True,
+                interrupted=interrupted,
+                model_path=output_dir,
+                error=None,
+                training_time_seconds=result["training_time_seconds"],
+                metrics=metrics,
+            )
+            return result
         except Exception as e:
             try:
                 import torch
@@ -1916,9 +2786,18 @@ class TrainingService:
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            return {
+            result = {
                 "success": False,
                 "error": str(e),
                 "output_dir": output_dir,
                 "base_model": model_name,
             }
+            result["artifacts"] = run_artifacts.complete(
+                success=False,
+                interrupted=False,
+                model_path=None,
+                error=result["error"],
+                training_time_seconds=time.time() - start_time,
+                metrics={},
+            )
+            return result

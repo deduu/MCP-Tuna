@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from orchestration.workflow import PipelineOrchestrator
+from shared.training_defaults import DEFAULT_LORA_ALPHA, DEFAULT_LORA_R
 
 
 # ----------------------------------------------------------------
@@ -232,8 +233,8 @@ async def test_compare_passes_low_memory_training_knobs():
     assert train_kwargs["num_epochs"] == 3
     assert train_kwargs["base_model"] is None
     assert train_kwargs["use_lora"] is True
-    assert train_kwargs["lora_r"] == 8
-    assert train_kwargs["lora_alpha"] == 16
+    assert train_kwargs["lora_r"] == DEFAULT_LORA_R
+    assert train_kwargs["lora_alpha"] == DEFAULT_LORA_ALPHA
     assert train_kwargs["load_in_4bit"] is True
     assert train_kwargs["learning_rate"] == 1e-4
     assert train_kwargs["per_device_train_batch_size"] == 1
@@ -241,6 +242,8 @@ async def test_compare_passes_low_memory_training_knobs():
     assert train_kwargs["gradient_checkpointing"] is True
     assert train_kwargs["max_seq_length"] == 256
     assert train_kwargs["warmup_ratio"] == 0.03
+    assert train_kwargs["dataset_path"] == "/data.jsonl"
+    assert train_kwargs["run_source"] == "workflow.compare_flat_vs_curriculum"
 
     curriculum_kwargs = finetuner.train_curriculum_model.await_args.kwargs
     assert curriculum_kwargs["dataset"] == _mock_load_success()["dataset_object"]
@@ -251,13 +254,15 @@ async def test_compare_passes_low_memory_training_knobs():
     assert curriculum_kwargs["score_column"] == "complexity"
     assert curriculum_kwargs["base_model"] is None
     assert curriculum_kwargs["use_lora"] is True
-    assert curriculum_kwargs["lora_r"] == 8
-    assert curriculum_kwargs["lora_alpha"] == 16
+    assert curriculum_kwargs["lora_r"] == DEFAULT_LORA_R
+    assert curriculum_kwargs["lora_alpha"] == DEFAULT_LORA_ALPHA
     assert curriculum_kwargs["load_in_4bit"] is True
     assert curriculum_kwargs["learning_rate"] == 1e-4
     assert curriculum_kwargs["per_device_train_batch_size"] == 1
     assert curriculum_kwargs["gradient_accumulation_steps"] == 8
     assert curriculum_kwargs["gradient_checkpointing"] is True
+    assert curriculum_kwargs["dataset_path"] == "/data.jsonl"
+    assert curriculum_kwargs["run_source"] == "workflow.compare_flat_vs_curriculum"
     assert curriculum_kwargs["max_seq_length"] == 256
     assert curriculum_kwargs["warmup_ratio"] == 0.03
 

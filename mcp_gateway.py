@@ -39,9 +39,21 @@ from shared.config import (
     ModelEvaluationConfig,
 )
 from shared.persistence import get_persistence_service
+from shared.training_defaults import (
+    DEFAULT_DPO_MAX_LENGTH,
+    DEFAULT_DPO_MAX_PROMPT_LENGTH,
+    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_LORA_ALPHA,
+    DEFAULT_LORA_DROPOUT,
+    DEFAULT_LORA_R,
+    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+    auto_tune_preference_training_defaults,
+)
 
 TechniqueName = Literal["sft", "dpo", "grpo", "kto"]
 SchemaTechniqueName = Literal["sft", "dpo", "grpo", "kto", "vlm_sft"]
+PreferenceTechniqueName = Literal["dpo", "grpo", "kto"]
 DifficultyOrder = Literal["easy_first", "hard_first"]
 ResourceQuantization = Literal["4bit", "8bit", "none", "fp16", "bf16", "fp32"]
 GGUFQuantization = Literal["q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16"]
@@ -86,6 +98,7 @@ class TunaGateway:
         self._workflow_job_manager_instance = None
         self._dataset_job_manager_instance = None
         self._dataset_svc = None
+        self._preference_dataset_analyzer = None
         self._file_svc = None
         self._chat_sessions: Dict[str, Any] = {}
         self._persistence = get_persistence_service()
@@ -633,6 +646,13 @@ class TunaGateway:
             self._file_svc = FileService(str(settings.files.upload_root))
         return self._file_svc
 
+    @property
+    def preference_dataset_analyzer(self):
+        if self._preference_dataset_analyzer is None:
+            from shared.preference_dataset_analyzer import PreferenceDatasetAnalyzer
+            self._preference_dataset_analyzer = PreferenceDatasetAnalyzer(self.dataset_service)
+        return self._preference_dataset_analyzer
+
     def _configured_model_browser_roots(self) -> List[tuple[str, str, Path]]:
         roots: List[tuple[str, str, Path]] = []
         configured_paths: List[str] = []
@@ -927,7 +947,11 @@ class TunaGateway:
             return None
 
         if self._training_uses_adapter(train_result):
-            resolved_base = base_model or self.finetuner.config.base_model
+            resolved_base = (
+                base_model
+                or train_result.get("adapter_base_model")
+                or self.finetuner.config.base_model
+            )
             return HostingConfig(
                 model_path=resolved_base,
                 adapter_path=model_path,
@@ -955,6 +979,157 @@ class TunaGateway:
             return "parquet"
         return "jsonl"
 
+    @staticmethod
+    def _training_artifact_context(
+        *,
+        run_source: str,
+        dataset_path: Optional[str] = None,
+        job_id: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        context: Dict[str, Any] = {"run_source": run_source}
+        if dataset_path:
+            context["dataset_path"] = dataset_path
+        if job_id:
+            context["job_id"] = job_id
+        if note:
+            context["artifact_note"] = note
+        return context
+
+    @staticmethod
+    def _dataset_row_count(dataset: Any) -> int:
+        try:
+            return max(0, int(len(dataset)))
+        except Exception:
+            return 0
+
+    def _resolve_preference_training_defaults(
+        self,
+        *,
+        technique: PreferenceTechniqueName,
+        dataset: Any,
+        num_epochs: int,
+        learning_rate: float,
+        auto_tune_defaults: bool,
+    ) -> tuple[int, float, Dict[str, Any]]:
+        summary = auto_tune_preference_training_defaults(
+            technique=technique,
+            row_count=self._dataset_row_count(dataset),
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            auto_tune_defaults=auto_tune_defaults,
+        )
+        effective = summary.get("effective", {})
+        return (
+            int(effective.get("num_epochs", num_epochs)),
+            float(effective.get("learning_rate", learning_rate)),
+            summary,
+        )
+
+    @staticmethod
+    def _preference_auto_tune_note(summary: Dict[str, Any]) -> Optional[str]:
+        if not summary.get("applied"):
+            return None
+        adjustments = summary.get("adjustments", {})
+        fragments = [
+            f"{name} {change.get('from')}→{change.get('to')}"
+            for name, change in adjustments.items()
+        ]
+        if not fragments:
+            return None
+        technique = str(summary.get("technique") or "preference").upper()
+        row_count = summary.get("row_count")
+        return (
+            f"Auto-tuned {technique} defaults for a small dataset "
+            f"({row_count} rows): {', '.join(fragments)}."
+        )
+
+    @staticmethod
+    def _format_preference_auto_tune_note(summary: Dict[str, Any]) -> Optional[str]:
+        if not summary.get("applied"):
+            return None
+        adjustments = summary.get("adjustments", {})
+        fragments = [
+            f"{name} {change.get('from')}->{change.get('to')}"
+            for name, change in adjustments.items()
+        ]
+        if not fragments:
+            return None
+        technique = str(summary.get("technique") or "preference").upper()
+        row_count = summary.get("row_count")
+        return (
+            f"Auto-tuned {technique} defaults for a small dataset "
+            f"({row_count} rows): {', '.join(fragments)}."
+        )
+
+    @staticmethod
+    def _parse_optional_json_list(
+        value: Any,
+        field_name: str,
+    ) -> tuple[Optional[List[Any]], Optional[str]]:
+        if value is None:
+            return None, None
+        if isinstance(value, list):
+            return value, None
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError as exc:
+                return None, f"Invalid {field_name} JSON: {exc}"
+            if not isinstance(parsed, list):
+                return None, f"{field_name} must decode to a JSON array."
+            return parsed, None
+        return None, f"{field_name} must be a list or a JSON array string."
+
+    async def _load_curriculum_training_inputs(
+        self,
+        *,
+        dataset_path: Optional[str],
+        stage_dataset_paths: Any = None,
+    ) -> Dict[str, Any]:
+        parsed_stage_paths, error = self._parse_optional_json_list(
+            stage_dataset_paths,
+            "stage_dataset_paths",
+        )
+        if error:
+            return {"success": False, "error": error}
+
+        if parsed_stage_paths:
+            stage_datasets = []
+            for stage_index, stage_path in enumerate(parsed_stage_paths, start=1):
+                if not isinstance(stage_path, str) or not stage_path.strip():
+                    return {
+                        "success": False,
+                        "error": (
+                            "stage_dataset_paths must contain non-empty file paths "
+                            f"(invalid entry at stage {stage_index})."
+                        ),
+                    }
+                load_result = await self.finetuner.load_dataset_from_file(
+                    stage_path,
+                    self._detect_dataset_format(stage_path),
+                )
+                if not load_result.get("success"):
+                    load_result["stage_index"] = stage_index
+                    load_result["stage_dataset_path"] = stage_path
+                    return load_result
+                stage_datasets.append(load_result["dataset_object"])
+            return {"success": True, "stage_datasets": stage_datasets}
+
+        if not dataset_path:
+            return {
+                "success": False,
+                "error": "Provide dataset_path or stage_dataset_paths.",
+            }
+
+        load_result = await self.finetuner.load_dataset_from_file(
+            dataset_path,
+            self._detect_dataset_format(dataset_path),
+        )
+        if not load_result.get("success"):
+            return load_result
+        return {"success": True, "dataset": load_result["dataset_object"]}
+
     async def _run_workflow_training_tool(
         self,
         tool_name: str,
@@ -974,6 +1149,9 @@ class TunaGateway:
                 base_model=params.get("base_model"),
                 merge_between_stages=params.get("merge_between_stages", True),
                 extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result,
@@ -990,8 +1168,71 @@ class TunaGateway:
             "finetune.train_dpo",
             "finetune.train_grpo",
             "finetune.train_kto",
-            "finetune.train_curriculum",
         }
+        if tool_name == "finetune.train_curriculum":
+            stage_training_overrides, error = self._parse_optional_json_list(
+                params.get("stage_training_overrides"),
+                "stage_training_overrides",
+            )
+            if error:
+                return {"success": False, "error": error}
+
+            curriculum_inputs = await self._load_curriculum_training_inputs(
+                dataset_path=params.get("dataset_path"),
+                stage_dataset_paths=params.get("stage_dataset_paths"),
+            )
+            if not curriculum_inputs.get("success"):
+                return curriculum_inputs
+
+            result = await self.finetuner.train_curriculum_model(
+                dataset=curriculum_inputs.get("dataset"),
+                stage_datasets=curriculum_inputs.get("stage_datasets"),
+                output_dir=params["output_dir"],
+                base_model=params.get("base_model"),
+                num_stages=params.get("num_stages", 3),
+                num_epochs_per_stage=params.get("num_epochs_per_stage", 1),
+                difficulty_order=params.get("difficulty_order", "easy_first"),
+                score_column=params.get("score_column", "weighted_score"),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", DEFAULT_LORA_R),
+                lora_alpha=params.get("lora_alpha", DEFAULT_LORA_ALPHA),
+                lora_dropout=params.get("lora_dropout", DEFAULT_LORA_DROPOUT),
+                stage_training_overrides=stage_training_overrides,
+                lora_stage_transition=params.get(
+                    "lora_stage_transition",
+                    "continue_adapter",
+                ),
+                max_seq_length=params.get("max_seq_length", 2048),
+                per_device_train_batch_size=params.get(
+                    "per_device_train_batch_size",
+                    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                ),
+                gradient_accumulation_steps=params.get(
+                    "gradient_accumulation_steps",
+                    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+                ),
+                gradient_checkpointing=params.get("gradient_checkpointing", False),
+                optim=params.get("optim", "adamw_torch"),
+                learning_rate=params.get("learning_rate", DEFAULT_LEARNING_RATE),
+                lr_scheduler_type=params.get("lr_scheduler_type", "linear"),
+                warmup_ratio=params.get("warmup_ratio", 0.0),
+                load_in_4bit=params.get("load_in_4bit", True),
+                extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                    dataset_path=params.get("dataset_path"),
+                ),
+            )
+            deploy_result = await self._auto_deploy_if_requested(
+                result,
+                params.get("deploy", False),
+                params.get("deploy_port", 8001),
+                params.get("base_model"),
+            )
+            if deploy_result is not None:
+                result["deployment"] = deploy_result
+            return result
+
         if tool_name not in training_tools:
             return None
 
@@ -1009,11 +1250,12 @@ class TunaGateway:
                 dataset=dataset_obj,
                 output_dir=params["output_dir"],
                 base_model=params.get("base_model"),
+                adapter_path=params.get("adapter_path"),
                 num_epochs=params.get("num_epochs", 3),
                 use_lora=params.get("use_lora", True),
-                lora_r=params.get("lora_r", 8),
-                lora_alpha=params.get("lora_alpha", 16),
-                lora_dropout=params.get("lora_dropout", 0.05),
+                lora_r=params.get("lora_r", DEFAULT_LORA_R),
+                lora_alpha=params.get("lora_alpha", DEFAULT_LORA_ALPHA),
+                lora_dropout=params.get("lora_dropout", DEFAULT_LORA_DROPOUT),
                 completion_only_loss=params.get("completion_only_loss", True),
                 early_stopping_patience=params.get("early_stopping_patience"),
                 eval_file_path=params.get("eval_file_path"),
@@ -1022,79 +1264,123 @@ class TunaGateway:
                 warmup_ratio=params.get("warmup_ratio", 0.0),
                 weight_decay=params.get("weight_decay", 0.0),
                 max_grad_norm=params.get("max_grad_norm", 1.0),
-                learning_rate=params.get("learning_rate", 2e-4),
+                learning_rate=params.get("learning_rate", DEFAULT_LEARNING_RATE),
                 report_to=params.get("report_to") or [],
                 max_seq_length=params.get("max_seq_length", 2048),
-                per_device_train_batch_size=params.get("per_device_train_batch_size", 1),
-                gradient_accumulation_steps=params.get("gradient_accumulation_steps", 4),
+                per_device_train_batch_size=params.get(
+                    "per_device_train_batch_size",
+                    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                ),
+                gradient_accumulation_steps=params.get(
+                    "gradient_accumulation_steps",
+                    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+                ),
                 gradient_checkpointing=params.get("gradient_checkpointing", False),
                 optim=params.get("optim", "adamw_torch"),
                 load_in_4bit=params.get("load_in_4bit", True),
                 extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                    dataset_path=dataset_path,
+                ),
             )
         elif tool_name == "finetune.train_dpo":
             result = await self.finetuner.train_dpo_model(
                 dataset=dataset_obj,
                 output_dir=params["output_dir"],
                 base_model=params.get("base_model"),
+                adapter_path=params.get("adapter_path"),
                 num_epochs=params.get("num_epochs", 3),
                 beta=params.get("beta", 0.1),
+                max_prompt_length=params.get(
+                    "max_prompt_length",
+                    DEFAULT_DPO_MAX_PROMPT_LENGTH,
+                ),
+                max_length=params.get("max_length", DEFAULT_DPO_MAX_LENGTH),
                 use_lora=params.get("use_lora", True),
-                lora_r=params.get("lora_r", 8),
+                lora_r=params.get("lora_r", DEFAULT_LORA_R),
+                lora_alpha=params.get("lora_alpha", DEFAULT_LORA_ALPHA),
+                lora_dropout=params.get("lora_dropout", DEFAULT_LORA_DROPOUT),
                 resume_from_checkpoint=params.get("resume_from_checkpoint"),
                 load_in_4bit=params.get("load_in_4bit", True),
+                learning_rate=params.get("learning_rate", DEFAULT_LEARNING_RATE),
+                per_device_train_batch_size=params.get(
+                    "per_device_train_batch_size",
+                    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                ),
+                gradient_accumulation_steps=params.get(
+                    "gradient_accumulation_steps",
+                    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+                ),
                 extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                    dataset_path=dataset_path,
+                ),
             )
         elif tool_name == "finetune.train_grpo":
             result = await self.finetuner.train_grpo_model(
                 dataset=dataset_obj,
                 output_dir=params["output_dir"],
                 base_model=params.get("base_model"),
+                adapter_path=params.get("adapter_path"),
                 num_epochs=params.get("num_epochs", 3),
+                use_lora=params.get("use_lora", True),
+                lora_r=params.get("lora_r", DEFAULT_LORA_R),
+                lora_alpha=params.get("lora_alpha", DEFAULT_LORA_ALPHA),
+                lora_dropout=params.get("lora_dropout", DEFAULT_LORA_DROPOUT),
                 num_generations=params.get("num_generations", 4),
                 max_prompt_length=params.get("max_prompt_length", 512),
                 max_completion_length=params.get("max_completion_length", 256),
+                generation_batch_size=params.get("generation_batch_size"),
+                steps_per_generation=params.get("steps_per_generation"),
                 resume_from_checkpoint=params.get("resume_from_checkpoint"),
                 load_in_4bit=params.get("load_in_4bit", True),
+                learning_rate=params.get("learning_rate", DEFAULT_LEARNING_RATE),
+                per_device_train_batch_size=params.get(
+                    "per_device_train_batch_size",
+                    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                ),
+                gradient_accumulation_steps=params.get(
+                    "gradient_accumulation_steps",
+                    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+                ),
                 extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                    dataset_path=dataset_path,
+                ),
             )
-        elif tool_name == "finetune.train_kto":
+        else:
             result = await self.finetuner.train_kto_model(
                 dataset=dataset_obj,
                 output_dir=params["output_dir"],
                 base_model=params.get("base_model"),
+                adapter_path=params.get("adapter_path"),
                 num_epochs=params.get("num_epochs", 3),
                 beta=params.get("beta", 0.1),
                 use_lora=params.get("use_lora", True),
-                lora_r=params.get("lora_r", 8),
+                lora_r=params.get("lora_r", DEFAULT_LORA_R),
+                lora_alpha=params.get("lora_alpha", DEFAULT_LORA_ALPHA),
+                lora_dropout=params.get("lora_dropout", DEFAULT_LORA_DROPOUT),
                 desirable_weight=params.get("desirable_weight", 1.0),
                 undesirable_weight=params.get("undesirable_weight", 1.0),
                 resume_from_checkpoint=params.get("resume_from_checkpoint"),
                 load_in_4bit=params.get("load_in_4bit", True),
+                learning_rate=params.get("learning_rate", DEFAULT_LEARNING_RATE),
+                per_device_train_batch_size=params.get(
+                    "per_device_train_batch_size",
+                    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                ),
+                gradient_accumulation_steps=params.get(
+                    "gradient_accumulation_steps",
+                    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+                ),
                 extra_callbacks=extra_callbacks,
-            )
-        else:
-            result = await self.finetuner.train_curriculum_model(
-                dataset=dataset_obj,
-                output_dir=params["output_dir"],
-                base_model=params.get("base_model"),
-                num_stages=params.get("num_stages", 3),
-                num_epochs_per_stage=params.get("num_epochs_per_stage", 1),
-                difficulty_order=params.get("difficulty_order", "easy_first"),
-                score_column=params.get("score_column", "weighted_score"),
-                use_lora=params.get("use_lora", True),
-                lora_r=params.get("lora_r", 8),
-                lora_alpha=params.get("lora_alpha", 16),
-                max_seq_length=params.get("max_seq_length", 2048),
-                per_device_train_batch_size=params.get("per_device_train_batch_size", 1),
-                gradient_accumulation_steps=params.get("gradient_accumulation_steps", 4),
-                gradient_checkpointing=params.get("gradient_checkpointing", False),
-                optim=params.get("optim", "adamw_torch"),
-                learning_rate=params.get("learning_rate", 2e-4),
-                lr_scheduler_type=params.get("lr_scheduler_type", "linear"),
-                warmup_ratio=params.get("warmup_ratio", 0.0),
-                load_in_4bit=params.get("load_in_4bit", True),
-                extra_callbacks=extra_callbacks,
+                **self._training_artifact_context(
+                    run_source=tool_name,
+                    dataset_path=dataset_path,
+                ),
             )
 
         deploy_result = await self._auto_deploy_if_requested(
@@ -1163,7 +1449,7 @@ class TunaGateway:
             max_seq_length: int = 512,
             technique: TechniqueName = "sft",
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
             gradient_checkpointing: bool = False,
         ) -> str:
             resolved_model = model_name or self.finetuner.config.base_model
@@ -2512,9 +2798,9 @@ class TunaGateway:
             num_epochs: int = 3,
             max_steps: int = -1,
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
-            lora_dropout: float = 0.05,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
             completion_only_loss: bool = True,
             early_stopping_patience: Optional[int] = None,
             eval_file_path: Optional[str] = None,
@@ -2524,7 +2810,7 @@ class TunaGateway:
             warmup_steps: int = 0,
             weight_decay: float = 0.0,
             max_grad_norm: float = 1.0,
-            learning_rate: float = 2e-4,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
             report_to: Optional[str] = None,
             logging_steps: int = 10,
             save_steps: int = 200,
@@ -2532,8 +2818,8 @@ class TunaGateway:
             bf16: bool = False,
             fp16: bool = False,
             max_seq_length: int = 2048,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
             load_in_4bit: bool = True,
@@ -2579,6 +2865,10 @@ class TunaGateway:
                 load_in_4bit=load_in_4bit,
                 recipe=recipe,
                 special_tokens=special_tokens,
+                **self._training_artifact_context(
+                    run_source="finetune.train",
+                    dataset_path=dataset_path,
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2601,11 +2891,11 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
-            learning_rate: float = 2e-4,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             max_seq_length: int = 2048,
             load_in_4bit: bool = True,
         ) -> str:
@@ -2626,6 +2916,9 @@ class TunaGateway:
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 max_seq_length=max_seq_length,
                 load_in_4bit=load_in_4bit,
+                **self._training_artifact_context(
+                    run_source="finetune.train_vlm",
+                ),
             )
             return json.dumps(result, indent=2)
 
@@ -2641,11 +2934,20 @@ class TunaGateway:
         async def train_dpo(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             beta: float = 0.1,
+            max_prompt_length: int = DEFAULT_DPO_MAX_PROMPT_LENGTH,
+            max_length: int = DEFAULT_DPO_MAX_LENGTH,
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             recipe: Optional[str] = None,
             deploy: bool = False,
@@ -2654,17 +2956,39 @@ class TunaGateway:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="dpo",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             result = await self.finetuner.train_dpo_model(
-                dataset=load_result["dataset_object"],
+                dataset=dataset_obj,
                 output_dir=output_dir,
                 base_model=base_model,
+                adapter_path=adapter_path,
                 num_epochs=num_epochs,
                 beta=beta,
+                max_prompt_length=max_prompt_length,
+                max_length=max_length,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
                 load_in_4bit=load_in_4bit,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                auto_tune_defaults=auto_tune_defaults,
                 resume_from_checkpoint=resume_from_checkpoint,
                 recipe=recipe,
+                **self._training_artifact_context(
+                    run_source="finetune.train_dpo",
+                    dataset_path=dataset_path,
+                    note=self._format_preference_auto_tune_note(auto_tune_summary),
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2685,9 +3009,22 @@ class TunaGateway:
         async def train_grpo(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
             num_generations: int = 4,
+            max_prompt_length: int = 512,
+            max_completion_length: int = 256,
+            generation_batch_size: Optional[int] = None,
+            steps_per_generation: Optional[int] = None,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
@@ -2695,14 +3032,40 @@ class TunaGateway:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="grpo",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             result = await self.finetuner.train_grpo_model(
-                dataset=load_result["dataset_object"],
+                dataset=dataset_obj,
                 output_dir=output_dir,
                 base_model=base_model,
+                adapter_path=adapter_path,
                 num_epochs=num_epochs,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
                 num_generations=num_generations,
+                max_prompt_length=max_prompt_length,
+                max_completion_length=max_completion_length,
+                generation_batch_size=generation_batch_size,
+                steps_per_generation=steps_per_generation,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                auto_tune_defaults=auto_tune_defaults,
                 load_in_4bit=load_in_4bit,
                 resume_from_checkpoint=resume_from_checkpoint,
+                **self._training_artifact_context(
+                    run_source="finetune.train_grpo",
+                    dataset_path=dataset_path,
+                    note=self._format_preference_auto_tune_note(auto_tune_summary),
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2723,11 +3086,20 @@ class TunaGateway:
         async def train_kto(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             beta: float = 0.1,
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            desirable_weight: float = 1.0,
+            undesirable_weight: float = 1.0,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             deploy: bool = False,
             deploy_port: int = 8001,
@@ -2735,16 +3107,38 @@ class TunaGateway:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="kto",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             result = await self.finetuner.train_kto_model(
-                dataset=load_result["dataset_object"],
+                dataset=dataset_obj,
                 output_dir=output_dir,
                 base_model=base_model,
+                adapter_path=adapter_path,
                 num_epochs=num_epochs,
                 beta=beta,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                desirable_weight=desirable_weight,
+                undesirable_weight=undesirable_weight,
                 load_in_4bit=load_in_4bit,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                auto_tune_defaults=auto_tune_defaults,
                 resume_from_checkpoint=resume_from_checkpoint,
+                **self._training_artifact_context(
+                    run_source="finetune.train_kto",
+                    dataset_path=dataset_path,
+                    note=self._format_preference_auto_tune_note(auto_tune_summary),
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2756,38 +3150,48 @@ class TunaGateway:
         @self.mcp.tool(
             name="finetune.train_curriculum",
             description=(
-                "Curriculum fine-tune: auto-scores dataset by difficulty, trains easy-to-hard "
-                "in stages. Each stage's output model feeds into the next stage automatically. "
-                "Set deploy=True to auto-deploy; then use host.chat for interactive chat."
+                "Curriculum fine-tune from either one scored dataset or explicit stage datasets. "
+                "By default LoRA stages continue the same adapter across stages, which matches "
+                "notebook-style curriculum training more closely. Set deploy=True to auto-deploy; "
+                "then use host.chat for interactive chat."
             ),
         )
         async def train_curriculum(
-            dataset_path: str,
             output_dir: str,
+            dataset_path: Optional[str] = None,
             base_model: Optional[str] = None,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
             difficulty_order: DifficultyOrder = "easy_first",
             score_column: str = "weighted_score",
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            stage_dataset_paths: Optional[List[str]] = None,
+            stage_training_overrides: Optional[List[Dict[str, Any]]] = None,
+            lora_stage_transition: str = "continue_adapter",
             max_seq_length: int = 2048,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
-            learning_rate: float = 2e-4,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
             lr_scheduler_type: str = "linear",
             warmup_ratio: float = 0.0,
             load_in_4bit: bool = True,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
-            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
-            if not load_result["success"]:
-                return json.dumps(load_result, indent=2)
+            curriculum_inputs = await self._load_curriculum_training_inputs(
+                dataset_path=dataset_path,
+                stage_dataset_paths=stage_dataset_paths,
+            )
+            if not curriculum_inputs["success"]:
+                return json.dumps(curriculum_inputs, indent=2)
             result = await self.finetuner.train_curriculum_model(
-                dataset=load_result["dataset_object"],
+                dataset=curriculum_inputs.get("dataset"),
+                stage_datasets=curriculum_inputs.get("stage_datasets"),
                 output_dir=output_dir,
                 base_model=base_model,
                 num_stages=num_stages,
@@ -2796,6 +3200,10 @@ class TunaGateway:
                 score_column=score_column,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                stage_training_overrides=stage_training_overrides,
+                lora_stage_transition=lora_stage_transition,
                 max_seq_length=max_seq_length,
                 per_device_train_batch_size=per_device_train_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
@@ -2805,6 +3213,10 @@ class TunaGateway:
                 lr_scheduler_type=lr_scheduler_type,
                 warmup_ratio=warmup_ratio,
                 load_in_4bit=load_in_4bit,
+                **self._training_artifact_context(
+                    run_source="finetune.train_curriculum",
+                    dataset_path=dataset_path,
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2837,6 +3249,9 @@ class TunaGateway:
                 output_dir=output_dir,
                 base_model=base_model,
                 merge_between_stages=merge_between_stages,
+                **self._training_artifact_context(
+                    run_source="finetune.sequential_train",
+                ),
             )
             deploy_result = await self._auto_deploy_if_requested(
                 result, deploy, deploy_port, base_model
@@ -2921,9 +3336,9 @@ class TunaGateway:
             num_epochs: int = 3,
             max_steps: int = -1,
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
-            lora_dropout: float = 0.05,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
             completion_only_loss: bool = True,
             early_stopping_patience: Optional[int] = None,
             eval_file_path: Optional[str] = None,
@@ -2933,7 +3348,7 @@ class TunaGateway:
             warmup_steps: int = 0,
             weight_decay: float = 0.0,
             max_grad_norm: float = 1.0,
-            learning_rate: float = 2e-4,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
             report_to: Optional[str] = None,
             logging_steps: int = 10,
             save_steps: int = 200,
@@ -2941,8 +3356,8 @@ class TunaGateway:
             bf16: bool = False,
             fp16: bool = False,
             max_seq_length: int = 2048,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             gradient_checkpointing: bool = False,
             optim: str = "adamw_torch",
             load_in_4bit: bool = True,
@@ -3005,6 +3420,11 @@ class TunaGateway:
                      recipe=recipe,
                      special_tokens=special_tokens,
                      extra_callbacks=extra_callbacks,
+                     **self._training_artifact_context(
+                         run_source="finetune.train_async",
+                         dataset_path=dataset_path,
+                         job_id=job.job_id,
+                     ),
                  )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3028,11 +3448,11 @@ class TunaGateway:
             base_model: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
-            learning_rate: float = 2e-4,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             max_seq_length: int = 2048,
             load_in_4bit: bool = True,
         ) -> str:
@@ -3071,6 +3491,10 @@ class TunaGateway:
                     max_seq_length=max_seq_length,
                     load_in_4bit=load_in_4bit,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.train_vlm_async",
+                        job_id=job.job_id,
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3092,11 +3516,20 @@ class TunaGateway:
         async def train_dpo_async(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             beta: float = 0.1,
+            max_prompt_length: int = DEFAULT_DPO_MAX_PROMPT_LENGTH,
+            max_length: int = DEFAULT_DPO_MAX_LENGTH,
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
             recipe: Optional[str] = None,
         ) -> str:
@@ -3104,32 +3537,60 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="dpo",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="dpo",
                 base_model=resolved_base,
                 output_dir=output_dir,
                 config_summary={
+                    "adapter_path": adapter_path,
                     "num_epochs": num_epochs,
                     "beta": beta,
+                    "max_prompt_length": max_prompt_length,
+                    "max_length": max_length,
+                    "use_lora": use_lora,
+                    "learning_rate": learning_rate,
                     "load_in_4bit": load_in_4bit,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
                 },
             )
-            dataset_obj = load_result["dataset_object"]
 
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_dpo_model(
                     dataset=dataset_obj,
                     output_dir=output_dir,
                     base_model=base_model,
+                    adapter_path=adapter_path,
                     num_epochs=num_epochs,
                     beta=beta,
+                    max_prompt_length=max_prompt_length,
+                    max_length=max_length,
                     use_lora=use_lora,
                     lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
                     load_in_4bit=load_in_4bit,
+                    learning_rate=learning_rate,
+                    auto_tune_defaults=auto_tune_defaults,
+                    per_device_train_batch_size=per_device_train_batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                     resume_from_checkpoint=resume_from_checkpoint,
                     recipe=recipe,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.train_dpo_async",
+                        dataset_path=dataset_path,
+                        job_id=job.job_id,
+                        note=self._format_preference_auto_tune_note(auto_tune_summary),
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3150,42 +3611,82 @@ class TunaGateway:
         async def train_grpo_async(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
+            use_lora: bool = True,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
             num_generations: int = 4,
             max_prompt_length: int = 512,
             max_completion_length: int = 256,
+            generation_batch_size: Optional[int] = None,
+            steps_per_generation: Optional[int] = None,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="grpo",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="grpo",
                 base_model=resolved_base,
                 output_dir=output_dir,
                 config_summary={
+                    "adapter_path": adapter_path,
                     "num_epochs": num_epochs,
+                    "use_lora": use_lora,
                     "num_generations": num_generations,
+                    "generation_batch_size": generation_batch_size,
+                    "learning_rate": learning_rate,
                     "load_in_4bit": load_in_4bit,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
                 },
             )
-            dataset_obj = load_result["dataset_object"]
 
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_grpo_model(
                     dataset=dataset_obj,
                     output_dir=output_dir,
                     base_model=base_model,
+                    adapter_path=adapter_path,
                     num_epochs=num_epochs,
+                    use_lora=use_lora,
+                    lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
                     num_generations=num_generations,
                     max_prompt_length=max_prompt_length,
                     max_completion_length=max_completion_length,
+                    generation_batch_size=generation_batch_size,
+                    steps_per_generation=steps_per_generation,
+                    learning_rate=learning_rate,
+                    auto_tune_defaults=auto_tune_defaults,
+                    per_device_train_batch_size=per_device_train_batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                     load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.train_grpo_async",
+                        dataset_path=dataset_path,
+                        job_id=job.job_id,
+                        note=self._format_preference_auto_tune_note(auto_tune_summary),
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3206,19 +3707,34 @@ class TunaGateway:
         async def train_kto_async(
             dataset_path: str, output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             beta: float = 0.1,
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
             desirable_weight: float = 1.0,
             undesirable_weight: float = 1.0,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             load_in_4bit: bool = True,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            dataset_obj = load_result["dataset_object"]
+            num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
+                technique="kto",
+                dataset=dataset_obj,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                auto_tune_defaults=auto_tune_defaults,
+            )
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="kto",
@@ -3228,24 +3744,40 @@ class TunaGateway:
                     "num_epochs": num_epochs,
                     "beta": beta,
                     "load_in_4bit": load_in_4bit,
+                    "use_lora": use_lora,
+                    "adapter_path": adapter_path,
+                    "learning_rate": learning_rate,
+                    "auto_tuned_defaults": auto_tune_summary if auto_tune_summary.get("applied") else None,
                 },
             )
-            dataset_obj = load_result["dataset_object"]
 
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_kto_model(
                     dataset=dataset_obj,
                     output_dir=output_dir,
                     base_model=base_model,
+                    adapter_path=adapter_path,
                     num_epochs=num_epochs,
                     beta=beta,
                     use_lora=use_lora,
                     lora_r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
                     desirable_weight=desirable_weight,
                     undesirable_weight=undesirable_weight,
+                    learning_rate=learning_rate,
+                    auto_tune_defaults=auto_tune_defaults,
+                    per_device_train_batch_size=per_device_train_batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
                     load_in_4bit=load_in_4bit,
                     resume_from_checkpoint=resume_from_checkpoint,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.train_kto_async",
+                        dataset_path=dataset_path,
+                        job_id=job.job_id,
+                        note=self._format_preference_auto_tune_note(auto_tune_summary),
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3259,25 +3791,33 @@ class TunaGateway:
             name="finetune.train_curriculum_async",
             description=(
                 "Start curriculum learning in the background. Returns job_id. "
-                "Scores dataset, buckets by difficulty, trains stage-by-stage. "
+                "Accepts one scored dataset or explicit stage datasets and trains stage-by-stage. "
                 "Use finetune.job_status(job_id) to monitor."
             ),
         )
         async def train_curriculum_async(
-            dataset_path: str, output_dir: str,
+            output_dir: str,
+            dataset_path: Optional[str] = None,
             base_model: Optional[str] = None,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
             score_column: str = "weighted_score",
             difficulty_order: DifficultyOrder = "easy_first",
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            stage_dataset_paths: Optional[List[str]] = None,
+            stage_training_overrides: Optional[List[Dict[str, Any]]] = None,
+            lora_stage_transition: str = "continue_adapter",
             load_in_4bit: bool = True,
         ) -> str:
-            load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
-            if not load_result["success"]:
-                return json.dumps(load_result, indent=2)
+            curriculum_inputs = await self._load_curriculum_training_inputs(
+                dataset_path=dataset_path,
+                stage_dataset_paths=stage_dataset_paths,
+            )
+            if not curriculum_inputs["success"]:
+                return json.dumps(curriculum_inputs, indent=2)
 
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
@@ -3287,14 +3827,17 @@ class TunaGateway:
                 config_summary={
                     "num_stages": num_stages,
                     "epochs_per_stage": num_epochs_per_stage,
+                    "lora_stage_transition": lora_stage_transition,
                     "load_in_4bit": load_in_4bit,
                 },
             )
-            dataset_obj = load_result["dataset_object"]
+            dataset_obj = curriculum_inputs.get("dataset")
+            stage_dataset_objs = curriculum_inputs.get("stage_datasets")
 
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_curriculum_model(
                     dataset=dataset_obj,
+                    stage_datasets=stage_dataset_objs,
                     output_dir=output_dir,
                     base_model=base_model,
                     num_stages=num_stages,
@@ -3304,8 +3847,16 @@ class TunaGateway:
                     use_lora=use_lora,
                     lora_r=lora_r,
                     lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    stage_training_overrides=stage_training_overrides,
+                    lora_stage_transition=lora_stage_transition,
                     load_in_4bit=load_in_4bit,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.train_curriculum_async",
+                        dataset_path=dataset_path,
+                        job_id=job.job_id,
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3349,6 +3900,10 @@ class TunaGateway:
                     base_model=base_model,
                     merge_between_stages=merge_between_stages,
                     extra_callbacks=extra_callbacks,
+                    **self._training_artifact_context(
+                        run_source="finetune.sequential_train_async",
+                        job_id=job.job_id,
+                    ),
                 )
 
             await self.job_manager.start_job(job.job_id, _run_training)
@@ -3642,6 +4197,28 @@ class TunaGateway:
                 result["p95_text_length"] = stats.get("p95_length", 0)
                 result["empty_count"] = stats.get("empty_count", 0)
 
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="validate.preference_dataset",
+            description=(
+                "Analyze preference dataset quality for DPO, GRPO, or KTO. "
+                "Returns prompt diversity, duplicate rates, technique-specific "
+                "reward or preference signal checks, plus warnings and recommendations."
+            ),
+        )
+        async def validate_preference_dataset(
+            dataset_path: str,
+            technique: Optional[PreferenceTechniqueName] = None,
+            max_rows: int = 2000,
+            top_k: int = 5,
+        ) -> str:
+            result = await self.preference_dataset_analyzer.analyze(
+                dataset_path,
+                technique=technique,
+                max_rows=max_rows,
+                top_k=top_k,
+            )
             return json.dumps(result, indent=2)
 
     # -- Host --
@@ -4154,6 +4731,7 @@ class TunaGateway:
             output_dir: str = "./output",
             quality_threshold: float = 0.7,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
             push_to_hub: Optional[str] = None,
@@ -4169,6 +4747,7 @@ class TunaGateway:
                 output_dir=output_dir,
                 quality_threshold=quality_threshold,
                 base_model=base_model,
+                adapter_path=adapter_path,
                 num_epochs=num_epochs,
                 use_lora=use_lora,
                 push_to_hub=push_to_hub,
@@ -4216,7 +4795,7 @@ class TunaGateway:
             num_epochs_per_stage: int = 1,
             difficulty_order: DifficultyOrder = "easy_first",
             use_lora: bool = True,
-            lora_r: int = 8,
+            lora_r: int = DEFAULT_LORA_R,
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -4262,12 +4841,12 @@ class TunaGateway:
             difficulty_order: DifficultyOrder = "easy_first",
             score_column: str = "weighted_score",
             use_lora: bool = True,
-            lora_r: int = 8,
-            lora_alpha: int = 16,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
             load_in_4bit: bool = True,
-            learning_rate: float = 2e-4,
-            per_device_train_batch_size: int = 1,
-            gradient_accumulation_steps: int = 4,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
             gradient_checkpointing: bool = False,
             max_seq_length: int = 2048,
             warmup_ratio: float = 0.0,
@@ -4302,6 +4881,116 @@ class TunaGateway:
                 warmup_ratio=warmup_ratio,
                 test_data_path=test_data_path,
                 test_prompts=parsed_prompts,
+            )
+            return json.dumps(result, indent=2)
+
+        @self.mcp.tool(
+            name="workflow.benchmark_finetuning",
+            description=(
+                "Run a repeatable fine-tuning benchmark with fixed evaluation packs, "
+                "multiple seeds, optional internal training candidates, and optional "
+                "reference models. Trains configured MCP Tuna methods such as flat "
+                "SFT, curriculum SFT, DPO, GRPO, or KTO, scores outputs on "
+                "dev/holdout/safety datasets, and returns aggregate rankings plus "
+                "pass/fail gates."
+            ),
+        )
+        async def benchmark_finetuning(
+            train_dataset_path: str,
+            output_dir: str = "./output/benchmark",
+            base_model: Optional[str] = None,
+            stage_dataset_paths: Optional[List[str]] = None,
+            eval_file_path: Optional[str] = None,
+            dev_data_path: Optional[str] = None,
+            holdout_data_path: Optional[str] = None,
+            safety_data_path: Optional[str] = None,
+            training_methods: Optional[List[Dict[str, Any]]] = None,
+            reference_models: Optional[List[Dict[str, Any]]] = None,
+            include_flat_sft: bool = True,
+            include_curriculum_sft: bool = True,
+            seeds: Optional[List[int]] = None,
+            primary_pack: Optional[str] = None,
+            primary_metric: str = "avg_composite_score",
+            benchmark_gates: Optional[List[Dict[str, Any]]] = None,
+            eval_system_prompt: Optional[str] = None,
+            eval_quantization: Optional[str] = "4bit",
+            eval_max_new_tokens: int = 128,
+            num_epochs_flat: int = 3,
+            num_stages: int = 3,
+            num_epochs_per_stage: int = 1,
+            difficulty_order: DifficultyOrder = "easy_first",
+            score_column: str = "weighted_score",
+            use_lora: bool = True,
+            lora_r: int = DEFAULT_LORA_R,
+            lora_alpha: int = DEFAULT_LORA_ALPHA,
+            lora_dropout: float = DEFAULT_LORA_DROPOUT,
+            load_in_4bit: bool = True,
+            learning_rate: float = DEFAULT_LEARNING_RATE,
+            per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+            gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+            gradient_checkpointing: bool = False,
+            max_seq_length: int = 2048,
+            warmup_ratio: float = 0.0,
+            weight_decay: float = 0.01,
+            save_best_model: bool = True,
+            recipe: Optional[str] = None,
+            lora_stage_transition: str = "continue_adapter",
+            stage_training_overrides: Optional[List[Dict[str, Any]]] = None,
+        ) -> str:
+            if isinstance(stage_dataset_paths, str):
+                stage_dataset_paths = json.loads(stage_dataset_paths)
+            if isinstance(training_methods, str):
+                training_methods = json.loads(training_methods)
+            if isinstance(reference_models, str):
+                reference_models = json.loads(reference_models)
+            if isinstance(seeds, str):
+                seeds = json.loads(seeds)
+            if isinstance(benchmark_gates, str):
+                benchmark_gates = json.loads(benchmark_gates)
+            if isinstance(stage_training_overrides, str):
+                stage_training_overrides = json.loads(stage_training_overrides)
+
+            result = await self.orchestrator.benchmark_finetuning(
+                train_dataset_path=train_dataset_path,
+                output_dir=output_dir,
+                base_model=base_model,
+                stage_dataset_paths=stage_dataset_paths,
+                eval_file_path=eval_file_path,
+                dev_data_path=dev_data_path,
+                holdout_data_path=holdout_data_path,
+                safety_data_path=safety_data_path,
+                training_methods=training_methods,
+                reference_models=reference_models,
+                include_flat_sft=include_flat_sft,
+                include_curriculum_sft=include_curriculum_sft,
+                seeds=seeds,
+                primary_pack=primary_pack,
+                primary_metric=primary_metric,
+                benchmark_gates=benchmark_gates,
+                eval_system_prompt=eval_system_prompt,
+                eval_quantization=eval_quantization,
+                eval_max_new_tokens=eval_max_new_tokens,
+                num_epochs_flat=num_epochs_flat,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                score_column=score_column,
+                use_lora=use_lora,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                load_in_4bit=load_in_4bit,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                max_seq_length=max_seq_length,
+                warmup_ratio=warmup_ratio,
+                weight_decay=weight_decay,
+                save_best_model=save_best_model,
+                recipe=recipe,
+                lora_stage_transition=lora_stage_transition,
+                stage_training_overrides=stage_training_overrides,
             )
             return json.dumps(result, indent=2)
 
@@ -4416,6 +5105,7 @@ class TunaGateway:
             output_dir: str = "./output",
             quality_threshold: float = 0.7,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
             push_to_hub: Optional[str] = None,
@@ -4435,6 +5125,7 @@ class TunaGateway:
                     "technique": technique,
                     "file_count": len(resolved_paths),
                     "use_lora": use_lora,
+                    "adapter_path": adapter_path,
                     "push_to_hub": push_to_hub,
                     "deploy": deploy,
                     "quantization": quantization,
@@ -4454,6 +5145,7 @@ class TunaGateway:
                     output_dir=output_dir,
                     quality_threshold=quality_threshold,
                     base_model=base_model,
+                    adapter_path=adapter_path,
                     num_epochs=num_epochs,
                     use_lora=use_lora,
                     push_to_hub=push_to_hub,

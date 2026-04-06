@@ -370,3 +370,64 @@ async def test_full_pipeline_passes_push_to_hub_to_training():
     assert result["success"] is True
     train_kwargs = finetuner.train_model.await_args.kwargs
     assert train_kwargs["push_to_hub"] == "my-org/my-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("technique", "trainer_attr"),
+    [
+        ("dpo", "train_dpo_model"),
+        ("grpo", "train_grpo_model"),
+        ("kto", "train_kto_model"),
+    ],
+)
+async def test_full_pipeline_dispatches_preference_trainers_with_adapter_path(technique, trainer_attr):
+    generator = AsyncMock()
+    generator.generate_from_document = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}]}
+    )
+    generator.export_dataset = AsyncMock(return_value={"success": True, "file_path": "/out/dataset.jsonl"})
+    cleaner = AsyncMock()
+    cleaner.clean_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}], "cleaned_count": 1}
+    )
+    normalizer = AsyncMock()
+    normalizer.normalize_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1"}], "count": 1}
+    )
+    evaluator = AsyncMock()
+    evaluator.evaluate_dataset = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1", "weighted_score": 0.9}], "count": 1}
+    )
+    evaluator.filter_by_quality = AsyncMock(
+        return_value={"success": True, "data_points": [{"instruction": "q1", "output": "a1", "weighted_score": 0.9}], "filtered_count": 1}
+    )
+    evaluator.analyze_statistics = AsyncMock(return_value={"success": True, "statistics": {}})
+    finetuner = AsyncMock()
+    finetuner.load_dataset_from_file = AsyncMock(return_value={"success": True, "dataset_object": [{"prompt": "q1", "response": "a1"}]})
+    finetuner.train_model = AsyncMock()
+    finetuner.train_dpo_model = AsyncMock(return_value={"success": True, "model_path": "/out/model", "config": {"trainer": technique, "use_lora": True}})
+    finetuner.train_grpo_model = AsyncMock(return_value={"success": True, "model_path": "/out/model", "config": {"trainer": technique, "use_lora": True}})
+    finetuner.train_kto_model = AsyncMock(return_value={"success": True, "model_path": "/out/model", "config": {"trainer": technique, "use_lora": True}})
+    finetuner.run_inference = AsyncMock(return_value={"success": True, "results": [{"response": "ok"}]})
+
+    orch = _make_orchestrator(
+        generator=generator,
+        cleaner=cleaner,
+        normalizer=normalizer,
+        evaluator=evaluator,
+        finetuner=finetuner,
+    )
+    result = await orch.full_pipeline(
+        file_path="/docs/a.md",
+        output_dir="/out",
+        technique=technique,
+        base_model="base/model",
+        adapter_path="/models/best_sft",
+    )
+
+    assert result["success"] is True
+    getattr(finetuner, trainer_attr).assert_awaited_once()
+    train_kwargs = getattr(finetuner, trainer_attr).await_args.kwargs
+    assert train_kwargs["base_model"] == "base/model"
+    assert train_kwargs["adapter_path"] == "/models/best_sft"

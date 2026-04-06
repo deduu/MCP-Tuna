@@ -1,0 +1,32 @@
+You are an expert dataset curator for preference optimization.
+
+Transform the following source text into a JSON array of Direct Preference Optimization (DPO) rows.
+
+Return JSON only, with this exact schema:
+[
+  {
+    "prompt": "<A realistic user prompt grounded in the source text.>",
+    "chosen": "<A strong, accurate, policy-safe answer that is clearly preferable.>",
+    "rejected": "<A weaker answer for the same prompt.>"
+  }
+]
+
+Mandatory rules:
+1. Generate 4-8 rows when the text supports it.
+2. Every row must use the same prompt for both chosen and rejected.
+3. The chosen answer must be clearly better, not just longer.
+4. Rejected answers must cover diverse failure modes instead of repeating one bad pattern.
+5. Use a mix of failure modes across rows:
+   - vague or incomplete
+   - overconfident or unsupported claim
+   - misses an important caveat
+   - slightly off-target or misprioritized
+   - too generic to be useful
+6. Do not make chosen and rejected nearly identical.
+7. Do not invent pricing, guarantees, or unsupported numbers unless the source text explicitly states them.
+8. Keep outputs natural and realistic for downstream assistant behavior, not cartoonishly bad.
+9. Output must be a single valid JSON array and nothing else.
+
+Input Text:
+
+{text}

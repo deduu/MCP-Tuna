@@ -141,6 +141,7 @@ class FineTuningMCP:
             lora_r: int = 8,
             lora_alpha: int = 16,
             beta: float = 0.1,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             """Train a model with DPO."""
@@ -156,6 +157,7 @@ class FineTuningMCP:
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
                 beta=beta,
+                auto_tune_defaults=auto_tune_defaults,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             return json.dumps(result, indent=2)
@@ -176,6 +178,7 @@ class FineTuningMCP:
             num_generations: int = 4,
             max_prompt_length: int = 512,
             max_completion_length: int = 256,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             """Train a model with GRPO."""
@@ -190,6 +193,7 @@ class FineTuningMCP:
                 num_generations=num_generations,
                 max_prompt_length=max_prompt_length,
                 max_completion_length=max_completion_length,
+                auto_tune_defaults=auto_tune_defaults,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             return json.dumps(result, indent=2)
@@ -198,28 +202,60 @@ class FineTuningMCP:
             name="train_curriculum",
             description=(
                 "Fine-tune a model using curriculum learning. "
-                "Automatically scores the dataset, splits into difficulty stages "
-                "(easy -> hard), and trains stage-by-stage. "
-                "Dataset must have instruction/input/output OR prompt/response columns."
+                "Automatically scores one dataset or accepts explicit stage datasets, "
+                "then trains stage-by-stage. Dataset rows may use instruction/input/output, "
+                "prompt/response, or system/user/assistant columns."
             ),
         )
         async def train_curriculum(
-            dataset_path: str,
             output_dir: str,
+            dataset_path: Optional[str] = None,
             base_model: Optional[str] = None,
             num_stages: int = 3,
             num_epochs_per_stage: int = 1,
             difficulty_order: str = "easy_first",
             use_lora: bool = True,
             lora_r: int = 8,
+            lora_alpha: int = 16,
+            lora_dropout: float = 0.05,
+            stage_dataset_paths_json: Optional[str] = None,
+            stage_training_overrides_json: Optional[str] = None,
+            lora_stage_transition: str = "continue_adapter",
             resume_stage: Optional[int] = None,
         ) -> str:
             """Train a model with curriculum learning."""
-            load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
-            if not load_result["success"]:
-                return json.dumps(load_result, indent=2)
+            stage_datasets = None
+            if stage_dataset_paths_json:
+                try:
+                    stage_paths = json.loads(stage_dataset_paths_json)
+                except json.JSONDecodeError as exc:
+                    return json.dumps({"success": False, "error": f"Invalid stage_dataset_paths_json: {exc}"}, indent=2)
+                if not isinstance(stage_paths, list) or not stage_paths:
+                    return json.dumps({"success": False, "error": "stage_dataset_paths_json must decode to a non-empty JSON array."}, indent=2)
+                stage_datasets = []
+                for stage_path in stage_paths:
+                    load_result = await self.service.load_dataset_from_file(stage_path, "jsonl")
+                    if not load_result["success"]:
+                        return json.dumps(load_result, indent=2)
+                    stage_datasets.append(load_result["dataset_object"])
+                dataset_object = []
+            else:
+                if not dataset_path:
+                    return json.dumps({"success": False, "error": "Provide dataset_path or stage_dataset_paths_json."}, indent=2)
+                load_result = await self.service.load_dataset_from_file(dataset_path, "jsonl")
+                if not load_result["success"]:
+                    return json.dumps(load_result, indent=2)
+                dataset_object = load_result["dataset_object"]
+
+            stage_training_overrides = None
+            if stage_training_overrides_json:
+                try:
+                    stage_training_overrides = json.loads(stage_training_overrides_json)
+                except json.JSONDecodeError as exc:
+                    return json.dumps({"success": False, "error": f"Invalid stage_training_overrides_json: {exc}"}, indent=2)
             result = await self.service.train_curriculum_model(
-                dataset=load_result["dataset_object"],
+                dataset=dataset_object,
+                stage_datasets=stage_datasets,
                 output_dir=output_dir,
                 base_model=base_model,
                 num_stages=num_stages,
@@ -227,6 +263,10 @@ class FineTuningMCP:
                 difficulty_order=difficulty_order,
                 use_lora=use_lora,
                 lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                stage_training_overrides=stage_training_overrides,
+                lora_stage_transition=lora_stage_transition,
                 resume_stage=resume_stage,
             )
             return json.dumps(result, indent=2)
@@ -243,6 +283,7 @@ class FineTuningMCP:
             dataset_path: str,
             output_dir: str,
             base_model: Optional[str] = None,
+            adapter_path: Optional[str] = None,
             num_epochs: int = 3,
             use_lora: bool = True,
             lora_r: int = 8,
@@ -250,6 +291,7 @@ class FineTuningMCP:
             beta: float = 0.1,
             desirable_weight: float = 1.0,
             undesirable_weight: float = 1.0,
+            auto_tune_defaults: bool = True,
             resume_from_checkpoint: Optional[str] = None,
         ) -> str:
             """Train a model with KTO."""
@@ -260,6 +302,7 @@ class FineTuningMCP:
                 dataset=load_result["dataset_object"],
                 output_dir=output_dir,
                 base_model=base_model,
+                adapter_path=adapter_path,
                 num_epochs=num_epochs,
                 use_lora=use_lora,
                 lora_r=lora_r,
@@ -267,6 +310,7 @@ class FineTuningMCP:
                 beta=beta,
                 desirable_weight=desirable_weight,
                 undesirable_weight=undesirable_weight,
+                auto_tune_defaults=auto_tune_defaults,
                 resume_from_checkpoint=resume_from_checkpoint,
             )
             return json.dumps(result, indent=2)

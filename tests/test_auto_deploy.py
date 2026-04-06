@@ -135,6 +135,31 @@ async def test_auto_deploy_handles_final_model_path():
 
 
 @pytest.mark.asyncio
+async def test_auto_deploy_uses_training_result_adapter_base_model():
+    """Curriculum results can override the adapter base model without a user arg."""
+    from mcp_gateway import TunaGateway
+
+    gw = TunaGateway.__new__(TunaGateway)
+    gw._finetuning_svc = MagicMock()
+    gw._finetuning_svc.config.base_model = "fake-base"
+    gw._hosting_svc = AsyncMock()
+    gw._hosting_svc.deploy_as_mcp = AsyncMock(return_value={"success": True})
+
+    train_result = {
+        "success": True,
+        "final_model_path": "/output/curriculum/stage_3",
+        "adapter_base_model": "/output/curriculum/stage_2/merged",
+    }
+    await gw._auto_deploy_if_requested(
+        train_result, deploy=True, deploy_port=8001
+    )
+
+    config = gw._hosting_svc.deploy_as_mcp.call_args.args[0]
+    assert config.model_path == "/output/curriculum/stage_2/merged"
+    assert config.adapter_path == "/output/curriculum/stage_3"
+
+
+@pytest.mark.asyncio
 async def test_auto_deploy_uses_trained_model_directly_when_lora_disabled():
     """Non-LoRA training outputs should deploy without adapter_path."""
     from mcp_gateway import TunaGateway

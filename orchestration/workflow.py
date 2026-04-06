@@ -5,18 +5,38 @@ Composes: Extract → Generate → Clean → Normalize → Evaluate → Filter �
 """
 
 import asyncio
+import json
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from shared.async_utils import call_maybe_async
+from shared.training_defaults import (
+    DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_LORA_ALPHA,
+    DEFAULT_LORA_DROPOUT,
+    DEFAULT_LORA_R,
+    DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+)
 
 from shared.config import (
     CleaningConfig,
     NormalizationConfig,
     HostingConfig,
 )
+from .benchmarking import (
+    DEFAULT_PRIMARY_METRIC,
+    aggregate_benchmark_runs,
+    infer_primary_pack,
+    normalize_benchmark_cases,
+    normalize_seed_list,
+)
+from .benchmark_eval import evaluate_candidate_with_finetuner
 
 
 class PipelineOrchestrator:
@@ -70,6 +90,168 @@ class PipelineOrchestrator:
         return train_result.get("model_path") or train_result.get("final_model_path")
 
     @staticmethod
+    def _dataset_format_for_path(file_path: str) -> str:
+        suffix = Path(file_path).suffix.lower()
+        if suffix == ".jsonl":
+            return "jsonl"
+        if suffix == ".csv":
+            return "csv"
+        return "json"
+
+    @staticmethod
+    def _training_artifact_context(
+        *,
+        run_source: str,
+        dataset_path: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        context: Dict[str, Any] = {"run_source": run_source}
+        if dataset_path:
+            context["dataset_path"] = dataset_path
+        if note:
+            context["artifact_note"] = note
+        return context
+
+    async def _load_dataset_rows(self, file_path: str) -> Dict[str, Any]:
+        load_result = await self.finetuner.load_dataset_from_file(
+            file_path,
+            self._dataset_format_for_path(file_path),
+        )
+        if not load_result.get("success"):
+            return load_result
+
+        dataset_object = load_result.get("dataset_object")
+        rows: List[Dict[str, Any]] = []
+        if isinstance(dataset_object, list):
+            rows = [dict(row) for row in dataset_object if isinstance(row, dict)]
+        else:
+            try:
+                rows = [dict(row) for row in dataset_object]
+            except Exception:
+                rows = []
+
+        return {
+            **load_result,
+            "rows": rows,
+        }
+
+    @staticmethod
+    def _average_metric(rows: List[Dict[str, Any]], key: str) -> Optional[float]:
+        values = [
+            float(row[key])
+            for row in rows
+            if isinstance(row.get(key), (int, float))
+        ]
+        if not values:
+            return None
+        return round(sum(values) / len(values), 4)
+
+    def _candidate_model_args(
+        self,
+        *,
+        train_result: Dict[str, Any],
+        base_model: Optional[str],
+        default_base_model: str,
+    ) -> Dict[str, Optional[str]]:
+        preferred_base = train_result.get("adapter_base_model") or base_model
+        return self._deployment_model_args(
+            train_result,
+            base_model=preferred_base,
+            default_base_model=default_base_model,
+        )
+
+    async def _evaluate_benchmark_candidate(
+        self,
+        *,
+        model_path: str,
+        adapter_path: Optional[str],
+        evaluation_packs: Dict[str, List[Dict[str, Any]]],
+        eval_system_prompt: Optional[str],
+        eval_quantization: Optional[str],
+        eval_max_new_tokens: int,
+        eval_process_isolation: bool = False,
+        base_model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if eval_process_isolation:
+            return await asyncio.to_thread(
+                self._evaluate_benchmark_candidate_in_subprocess,
+                model_path=model_path,
+                adapter_path=adapter_path,
+                evaluation_packs=evaluation_packs,
+                eval_system_prompt=eval_system_prompt,
+                eval_quantization=eval_quantization,
+                eval_max_new_tokens=eval_max_new_tokens,
+                base_model=base_model,
+            )
+
+        return await evaluate_candidate_with_finetuner(
+            finetuner=self.finetuner,
+            model_path=model_path,
+            adapter_path=adapter_path,
+            evaluation_packs=evaluation_packs,
+            eval_system_prompt=eval_system_prompt,
+            eval_quantization=eval_quantization,
+            eval_max_new_tokens=eval_max_new_tokens,
+        )
+
+    @staticmethod
+    def _evaluate_benchmark_candidate_in_subprocess(
+        *,
+        model_path: str,
+        adapter_path: Optional[str],
+        evaluation_packs: Dict[str, List[Dict[str, Any]]],
+        eval_system_prompt: Optional[str],
+        eval_quantization: Optional[str],
+        eval_max_new_tokens: int,
+        base_model: Optional[str],
+    ) -> Dict[str, Any]:
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "evaluate_benchmark_candidate.py"
+        request = {
+            "model_path": model_path,
+            "adapter_path": adapter_path,
+            "base_model": base_model,
+            "evaluation_packs": evaluation_packs,
+            "eval_system_prompt": eval_system_prompt,
+            "eval_quantization": eval_quantization,
+            "eval_max_new_tokens": eval_max_new_tokens,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="benchmark_eval_") as temp_dir:
+            request_path = Path(temp_dir) / "request.json"
+            response_path = Path(temp_dir) / "response.json"
+            request_path.write_text(
+                json.dumps(request, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [sys.executable, str(script_path), str(request_path), str(response_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                stderr = (completed.stderr or completed.stdout or "").strip()
+                return {
+                    "success": False,
+                    "error": stderr or (
+                        "Benchmark evaluator subprocess failed "
+                        f"with exit code {completed.returncode}."
+                    ),
+                }
+            if not response_path.exists():
+                return {
+                    "success": False,
+                    "error": "Benchmark evaluator subprocess produced no response.",
+                }
+            try:
+                return json.loads(response_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "error": f"Invalid benchmark evaluator response: {exc}",
+                }
+
+    @staticmethod
     def _collect_generation_errors(
         file_path: str,
         gen_result: Dict[str, Any],
@@ -113,8 +295,6 @@ class PipelineOrchestrator:
             use_lora = config.get("use_lora")
             if isinstance(use_lora, bool):
                 return use_lora
-            if config.get("trainer") == "grpo":
-                return False
 
         stage_results = train_result.get("stage_results")
         if isinstance(stage_results, list) and stage_results:
@@ -147,6 +327,407 @@ class PipelineOrchestrator:
             "model_path": trained_model_path,
             "adapter_path": None,
         }
+
+    async def _train_dataset_for_technique(
+        self,
+        *,
+        technique: str,
+        dataset: Any,
+        dataset_path: Optional[str],
+        output_dir: str,
+        base_model: Optional[str],
+        adapter_path: Optional[str],
+        num_epochs: int,
+        use_lora: bool,
+        push_to_hub: Optional[str] = None,
+        extra_callbacks: Optional[List[Any]] = None,
+        run_source: str = "workflow.training",
+    ) -> Dict[str, Any]:
+        common_kwargs: Dict[str, Any] = {
+            "dataset": dataset,
+            "output_dir": output_dir,
+            "base_model": base_model,
+            "adapter_path": adapter_path,
+            "num_epochs": num_epochs,
+            "use_lora": use_lora,
+            "extra_callbacks": extra_callbacks,
+            **self._training_artifact_context(
+                run_source=run_source,
+                dataset_path=dataset_path,
+            ),
+        }
+
+        if technique == "sft":
+            return await self.finetuner.train_model(
+                push_to_hub=push_to_hub,
+                **common_kwargs,
+            )
+        if technique == "dpo":
+            return await self.finetuner.train_dpo_model(**common_kwargs)
+        if technique == "grpo":
+            return await self.finetuner.train_grpo_model(**common_kwargs)
+        if technique == "kto":
+            return await self.finetuner.train_kto_model(**common_kwargs)
+        return {
+            "success": False,
+            "error": f"Unsupported technique for full pipeline: {technique}",
+            "output_dir": output_dir,
+        }
+
+    @staticmethod
+    def _canonical_benchmark_method(method_name: Any) -> Optional[str]:
+        normalized = str(method_name or "").strip().lower()
+        aliases = {
+            "sft": "flat_sft",
+            "flat": "flat_sft",
+            "flat_sft": "flat_sft",
+            "curriculum": "curriculum_sft",
+            "curriculum_sft": "curriculum_sft",
+            "curriculum_learning": "curriculum_sft",
+            "dpo": "dpo",
+            "grpo": "grpo",
+            "kto": "kto",
+        }
+        return aliases.get(normalized)
+
+    @classmethod
+    def _default_benchmark_training_methods(
+        cls,
+        *,
+        train_dataset_path: str,
+        stage_dataset_paths: Optional[List[str]],
+        include_flat_sft: bool,
+        include_curriculum_sft: bool,
+        num_epochs_flat: int,
+        num_stages: int,
+        num_epochs_per_stage: int,
+        difficulty_order: str,
+        score_column: str,
+        lora_stage_transition: str,
+        stage_training_overrides: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        methods: List[Dict[str, Any]] = []
+        if include_flat_sft:
+            methods.append(
+                {
+                    "name": "flat_sft",
+                    "trainer": "flat_sft",
+                    "dataset_path": train_dataset_path,
+                    "stage_dataset_paths": [],
+                    "training_kwargs": {
+                        "num_epochs": num_epochs_flat,
+                    },
+                }
+            )
+        if include_curriculum_sft:
+            training_kwargs: Dict[str, Any] = {
+                "num_stages": num_stages,
+                "num_epochs_per_stage": num_epochs_per_stage,
+                "difficulty_order": difficulty_order,
+                "score_column": score_column,
+                "lora_stage_transition": lora_stage_transition,
+            }
+            if stage_training_overrides is not None:
+                training_kwargs["stage_training_overrides"] = stage_training_overrides
+            methods.append(
+                {
+                    "name": "curriculum_sft",
+                    "trainer": "curriculum_sft",
+                    "dataset_path": train_dataset_path,
+                    "stage_dataset_paths": list(stage_dataset_paths or []),
+                    "training_kwargs": training_kwargs,
+                }
+            )
+        return methods
+
+    @classmethod
+    def _resolve_benchmark_training_methods(
+        cls,
+        *,
+        training_methods: Optional[List[Dict[str, Any]]],
+        train_dataset_path: str,
+        stage_dataset_paths: Optional[List[str]],
+        include_flat_sft: bool,
+        include_curriculum_sft: bool,
+        num_epochs_flat: int,
+        num_stages: int,
+        num_epochs_per_stage: int,
+        difficulty_order: str,
+        score_column: str,
+        lora_stage_transition: str,
+        stage_training_overrides: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        raw_methods = (
+            list(training_methods)
+            if training_methods is not None
+            else cls._default_benchmark_training_methods(
+                train_dataset_path=train_dataset_path,
+                stage_dataset_paths=stage_dataset_paths,
+                include_flat_sft=include_flat_sft,
+                include_curriculum_sft=include_curriculum_sft,
+                num_epochs_flat=num_epochs_flat,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                score_column=score_column,
+                lora_stage_transition=lora_stage_transition,
+                stage_training_overrides=stage_training_overrides,
+            )
+        )
+        reserved_keys = {
+            "name",
+            "method",
+            "trainer",
+            "technique",
+            "dataset_path",
+            "stage_dataset_paths",
+            "training_kwargs",
+        }
+        normalized_methods: List[Dict[str, Any]] = []
+        seen_names = set()
+
+        for index, raw_method in enumerate(raw_methods, start=1):
+            if not isinstance(raw_method, dict):
+                raise ValueError(f"training_methods[{index}] must be an object.")
+
+            method_value = (
+                raw_method.get("method")
+                or raw_method.get("trainer")
+                or raw_method.get("technique")
+                or raw_method.get("name")
+            )
+            trainer = cls._canonical_benchmark_method(method_value)
+            if not trainer:
+                raise ValueError(
+                    f"Unsupported benchmark training method: {method_value!r}."
+                )
+
+            name = str(raw_method.get("name") or trainer).strip()
+            if not name:
+                raise ValueError(f"training_methods[{index}] requires a non-empty name.")
+            if name in seen_names:
+                raise ValueError(
+                    f"Duplicate benchmark training method name: {name!r}."
+                )
+            seen_names.add(name)
+
+            dataset_path = str(
+                raw_method.get("dataset_path") or train_dataset_path or ""
+            ).strip()
+            if not dataset_path:
+                raise ValueError(
+                    f"training_methods[{index}] requires dataset_path."
+                )
+
+            raw_stage_paths = (
+                raw_method.get("stage_dataset_paths")
+                if raw_method.get("stage_dataset_paths") is not None
+                else (stage_dataset_paths or [] if trainer == "curriculum_sft" else [])
+            )
+            if isinstance(raw_stage_paths, str):
+                stage_paths = [raw_stage_paths.strip()] if raw_stage_paths.strip() else []
+            else:
+                stage_paths = [
+                    str(path).strip()
+                    for path in list(raw_stage_paths or [])
+                    if str(path).strip()
+                ]
+
+            training_kwargs = dict(raw_method.get("training_kwargs") or {})
+            for key, value in raw_method.items():
+                if key not in reserved_keys:
+                    training_kwargs.setdefault(key, value)
+
+            if trainer == "flat_sft":
+                training_kwargs.setdefault("num_epochs", num_epochs_flat)
+            elif trainer == "curriculum_sft":
+                training_kwargs.setdefault("num_stages", num_stages)
+                training_kwargs.setdefault("num_epochs_per_stage", num_epochs_per_stage)
+                training_kwargs.setdefault("difficulty_order", difficulty_order)
+                training_kwargs.setdefault("score_column", score_column)
+                training_kwargs.setdefault(
+                    "lora_stage_transition", lora_stage_transition
+                )
+                if (
+                    stage_training_overrides is not None
+                    and "stage_training_overrides" not in training_kwargs
+                ):
+                    training_kwargs["stage_training_overrides"] = (
+                        stage_training_overrides
+                    )
+            else:
+                training_kwargs.setdefault("num_epochs", 3)
+
+            normalized_methods.append(
+                {
+                    "name": name,
+                    "trainer": trainer,
+                    "dataset_path": dataset_path,
+                    "stage_dataset_paths": stage_paths if trainer == "curriculum_sft" else [],
+                    "training_kwargs": training_kwargs,
+                }
+            )
+
+        return normalized_methods
+
+    async def _run_benchmark_training_method(
+        self,
+        *,
+        method_spec: Dict[str, Any],
+        seed: int,
+        output_path: Path,
+        common_training_kwargs: Dict[str, Any],
+        default_base_model: str,
+        dataset_cache: Dict[str, Dict[str, Any]],
+        evaluation_packs: Dict[str, List[Dict[str, Any]]],
+        eval_system_prompt: Optional[str],
+        eval_quantization: Optional[str],
+        eval_max_new_tokens: int,
+        eval_process_isolation: bool,
+    ) -> Dict[str, Any]:
+        method_name = str(method_spec.get("name") or "").strip()
+        trainer = str(method_spec.get("trainer") or "").strip()
+        dataset_path = str(method_spec.get("dataset_path") or "").strip()
+        stage_dataset_paths = list(method_spec.get("stage_dataset_paths") or [])
+        run = {
+            "method": method_name,
+            "trainer": trainer,
+            "seed": seed,
+            "dataset_path": dataset_path,
+            "stage_dataset_paths": stage_dataset_paths,
+            "training": {},
+            "evaluation": {},
+        }
+
+        dataset_result = dataset_cache.get(dataset_path)
+        if dataset_result is None:
+            dataset_result = await self._load_dataset_rows(dataset_path)
+            dataset_cache[dataset_path] = dataset_result
+        if not dataset_result.get("success"):
+            run["training"] = {
+                "success": False,
+                "error": (
+                    f"Failed to load dataset {dataset_path}: "
+                    f"{dataset_result.get('error')}"
+                ),
+            }
+            return run
+
+        candidate_training_kwargs = {
+            **common_training_kwargs,
+            **dict(method_spec.get("training_kwargs") or {}),
+        }
+        candidate_training_kwargs["seed"] = seed
+        candidate_training_kwargs.pop("output_dir", None)
+        effective_base_model = candidate_training_kwargs.get("base_model")
+        output_dir = str(output_path / method_name / f"seed_{seed}")
+        dataset = dataset_result.get("dataset_object")
+
+        if trainer == "flat_sft":
+            train_result = await self.finetuner.train_model(
+                dataset=dataset,
+                output_dir=output_dir,
+                **self._training_artifact_context(
+                    run_source="workflow.benchmark_finetuning",
+                    dataset_path=dataset_path,
+                    note=f"benchmark_method={method_name}; seed={seed}",
+                ),
+                **candidate_training_kwargs,
+            )
+        elif trainer == "curriculum_sft":
+            stage_datasets = []
+            for stage_path in stage_dataset_paths:
+                stage_result = dataset_cache.get(stage_path)
+                if stage_result is None:
+                    stage_result = await self._load_dataset_rows(stage_path)
+                    dataset_cache[stage_path] = stage_result
+                if not stage_result.get("success"):
+                    run["training"] = {
+                        "success": False,
+                        "error": (
+                            f"Failed to load stage dataset {stage_path}: "
+                            f"{stage_result.get('error')}"
+                        ),
+                    }
+                    return run
+                stage_datasets.append(stage_result.get("dataset_object"))
+
+            train_result = await self.finetuner.train_curriculum_model(
+                dataset=dataset,
+                output_dir=output_dir,
+                stage_datasets=stage_datasets or None,
+                **self._training_artifact_context(
+                    run_source="workflow.benchmark_finetuning",
+                    dataset_path=dataset_path,
+                    note=f"benchmark_method={method_name}; seed={seed}",
+                ),
+                **candidate_training_kwargs,
+            )
+        elif trainer == "dpo":
+            train_result = await self.finetuner.train_dpo_model(
+                dataset=dataset,
+                output_dir=output_dir,
+                **self._training_artifact_context(
+                    run_source="workflow.benchmark_finetuning",
+                    dataset_path=dataset_path,
+                    note=f"benchmark_method={method_name}; seed={seed}",
+                ),
+                **candidate_training_kwargs,
+            )
+        elif trainer == "grpo":
+            train_result = await self.finetuner.train_grpo_model(
+                dataset=dataset,
+                output_dir=output_dir,
+                **self._training_artifact_context(
+                    run_source="workflow.benchmark_finetuning",
+                    dataset_path=dataset_path,
+                    note=f"benchmark_method={method_name}; seed={seed}",
+                ),
+                **candidate_training_kwargs,
+            )
+        elif trainer == "kto":
+            train_result = await self.finetuner.train_kto_model(
+                dataset=dataset,
+                output_dir=output_dir,
+                **self._training_artifact_context(
+                    run_source="workflow.benchmark_finetuning",
+                    dataset_path=dataset_path,
+                    note=f"benchmark_method={method_name}; seed={seed}",
+                ),
+                **candidate_training_kwargs,
+            )
+        else:
+            run["training"] = {
+                "success": False,
+                "error": f"Unsupported trainer: {trainer}",
+            }
+            return run
+
+        run["training"] = train_result
+        if not train_result.get("success"):
+            return run
+
+        model_args = self._candidate_model_args(
+            train_result=train_result,
+            base_model=effective_base_model,
+            default_base_model=default_base_model,
+        )
+        evaluation_result = await self._evaluate_benchmark_candidate(
+            model_path=model_args["model_path"],
+            adapter_path=model_args["adapter_path"],
+            evaluation_packs=evaluation_packs,
+            eval_system_prompt=eval_system_prompt,
+            eval_quantization=eval_quantization,
+            eval_max_new_tokens=eval_max_new_tokens,
+            eval_process_isolation=eval_process_isolation,
+            base_model=effective_base_model or default_base_model,
+        )
+        if evaluation_result.get("success"):
+            run["evaluation"] = evaluation_result["packs"]
+            run["model_spec"] = model_args
+        else:
+            run["evaluation_error"] = evaluation_result.get("error")
+        return run
 
     async def _report_stage(
         self,
@@ -465,6 +1046,7 @@ class PipelineOrchestrator:
         output_dir: str = "./output",
         quality_threshold: float = 0.7,
         base_model: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         num_epochs: int = 3,
         use_lora: bool = True,
         push_to_hub: Optional[str] = None,
@@ -540,7 +1122,10 @@ class PipelineOrchestrator:
             "train",
             7,
             9,
-            status_message=f"Loading dataset and starting training for {num_epochs} epoch(s)",
+            status_message=(
+                f"Loading dataset and starting {technique.upper()} training "
+                f"for {num_epochs} epoch(s)"
+            ),
         )
         load_result = await self._run_with_stage_heartbeat(
             self.finetuner.load_dataset_from_file(dataset_path, "jsonl"),
@@ -549,19 +1134,25 @@ class PipelineOrchestrator:
             stage_name="train",
             current_step=7,
             total_steps=9,
-            status_message="Loading exported dataset and initializing training",
+            status_message=(
+                f"Loading exported dataset and initializing {technique.upper()} training"
+            ),
         )
         if not load_result.get("success"):
             return {**ge_result, "training": load_result}
 
-        train_result = await self.finetuner.train_model(
+        train_result = await self._train_dataset_for_technique(
+            technique=technique,
             dataset=load_result["dataset_object"],
+            dataset_path=dataset_path,
             output_dir=str(output_path / "model"),
             base_model=base_model,
+            adapter_path=adapter_path,
             num_epochs=num_epochs,
             use_lora=use_lora,
             push_to_hub=push_to_hub,
             extra_callbacks=extra_callbacks,
+            run_source="workflow.full_pipeline",
         )
 
         if not train_result.get("success"):
@@ -691,8 +1282,8 @@ class PipelineOrchestrator:
         num_epochs_per_stage: int = 1,
         difficulty_order: str = "easy_first",
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
         custom_template: Optional[str] = None,
         deploy: bool = False,
         deploy_port: int = 8001,
@@ -797,6 +1388,10 @@ class PipelineOrchestrator:
             use_lora=use_lora,
             lora_r=lora_r,
             lora_alpha=lora_alpha,
+            **self._training_artifact_context(
+                run_source="workflow.end_to_end_curriculum",
+                dataset_path=dataset_path,
+            ),
         )
 
         # ── 9. Compare: base model vs curriculum-trained model ────────────
@@ -868,12 +1463,12 @@ class PipelineOrchestrator:
         difficulty_order: str = "easy_first",
         score_column: str = "weighted_score",
         use_lora: bool = True,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
         load_in_4bit: bool = True,
-        learning_rate: float = 2e-4,
-        per_device_train_batch_size: int = 1,
-        gradient_accumulation_steps: int = 4,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
+        per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+        gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
         gradient_checkpointing: bool = False,
         max_seq_length: int = 2048,
         warmup_ratio: float = 0.0,
@@ -922,6 +1517,11 @@ class PipelineOrchestrator:
             dataset=dataset,
             output_dir=flat_dir,
             num_epochs=num_epochs_flat,
+            **self._training_artifact_context(
+                run_source="workflow.compare_flat_vs_curriculum",
+                dataset_path=dataset_path,
+                note="flat_sft",
+            ),
             **common_training_kwargs,
         )
 
@@ -934,6 +1534,11 @@ class PipelineOrchestrator:
             num_epochs_per_stage=num_epochs_per_stage,
             difficulty_order=difficulty_order,
             score_column=score_column,
+            **self._training_artifact_context(
+                run_source="workflow.compare_flat_vs_curriculum",
+                dataset_path=dataset_path,
+                note="curriculum_sft",
+            ),
             **common_training_kwargs,
         )
 
@@ -996,6 +1601,277 @@ class PipelineOrchestrator:
             },
             "comparison": comparison_result,
         }
+
+    async def benchmark_finetuning(
+        self,
+        train_dataset_path: str,
+        output_dir: str = "./output/benchmark",
+        base_model: Optional[str] = None,
+        stage_dataset_paths: Optional[List[str]] = None,
+        eval_file_path: Optional[str] = None,
+        dev_data_path: Optional[str] = None,
+        holdout_data_path: Optional[str] = None,
+        safety_data_path: Optional[str] = None,
+        training_methods: Optional[List[Dict[str, Any]]] = None,
+        reference_models: Optional[List[Dict[str, Any]]] = None,
+        include_flat_sft: bool = True,
+        include_curriculum_sft: bool = True,
+        seeds: Optional[List[int]] = None,
+        primary_pack: Optional[str] = None,
+        primary_metric: str = DEFAULT_PRIMARY_METRIC,
+        benchmark_gates: Optional[List[Dict[str, Any]]] = None,
+        eval_system_prompt: Optional[str] = None,
+        eval_quantization: Optional[str] = "4bit",
+        eval_max_new_tokens: int = 128,
+        num_epochs_flat: int = 3,
+        num_stages: int = 3,
+        num_epochs_per_stage: int = 1,
+        difficulty_order: str = "easy_first",
+        score_column: str = "weighted_score",
+        use_lora: bool = True,
+        lora_r: int = DEFAULT_LORA_R,
+        lora_alpha: int = DEFAULT_LORA_ALPHA,
+        lora_dropout: float = DEFAULT_LORA_DROPOUT,
+        load_in_4bit: bool = True,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
+        per_device_train_batch_size: int = DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE,
+        gradient_accumulation_steps: int = DEFAULT_GRADIENT_ACCUMULATION_STEPS,
+        gradient_checkpointing: bool = False,
+        max_seq_length: int = 2048,
+        warmup_ratio: float = 0.0,
+        weight_decay: float = 0.01,
+        save_best_model: bool = True,
+        recipe: Optional[str] = None,
+        lora_stage_transition: str = "continue_adapter",
+        stage_training_overrides: Optional[List[Dict[str, Any]]] = None,
+        eval_process_isolation: bool = False,
+    ) -> Dict[str, Any]:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        resolved_base = base_model or "meta-llama/Llama-3.2-3B-Instruct"
+
+        evaluation_pack_paths = {
+            "dev": dev_data_path,
+            "hidden_holdout": holdout_data_path,
+            "safety": safety_data_path,
+        }
+        configured_pack_paths = {
+            name: path
+            for name, path in evaluation_pack_paths.items()
+            if isinstance(path, str) and path.strip()
+        }
+        if not configured_pack_paths:
+            return {
+                "success": False,
+                "error": (
+                    "Provide at least one evaluation pack: dev_data_path, "
+                    "holdout_data_path, or safety_data_path."
+                ),
+            }
+
+        try:
+            normalized_training_methods = self._resolve_benchmark_training_methods(
+                training_methods=training_methods,
+                train_dataset_path=train_dataset_path,
+                stage_dataset_paths=stage_dataset_paths,
+                include_flat_sft=include_flat_sft,
+                include_curriculum_sft=include_curriculum_sft,
+                num_epochs_flat=num_epochs_flat,
+                num_stages=num_stages,
+                num_epochs_per_stage=num_epochs_per_stage,
+                difficulty_order=difficulty_order,
+                score_column=score_column,
+                lora_stage_transition=lora_stage_transition,
+                stage_training_overrides=stage_training_overrides,
+            )
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+        if not normalized_training_methods and not reference_models:
+            return {
+                "success": False,
+                "error": "Enable at least one training method or provide reference_models.",
+            }
+
+        normalized_seeds = normalize_seed_list(seeds)
+        common_training_kwargs = {
+            "base_model": resolved_base,
+            "use_lora": use_lora,
+            "lora_r": lora_r,
+            "lora_alpha": lora_alpha,
+            "lora_dropout": lora_dropout,
+            "load_in_4bit": load_in_4bit,
+            "learning_rate": learning_rate,
+            "per_device_train_batch_size": per_device_train_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "gradient_checkpointing": gradient_checkpointing,
+            "max_seq_length": max_seq_length,
+            "warmup_ratio": warmup_ratio,
+            "weight_decay": weight_decay,
+            "eval_file_path": eval_file_path,
+            "save_best_model": save_best_model,
+            "recipe": recipe,
+        }
+
+        evaluation_packs: Dict[str, List[Dict[str, Any]]] = {}
+        pack_metadata: Dict[str, Any] = {}
+        for pack_name, pack_path in configured_pack_paths.items():
+            pack_load = await self._load_dataset_rows(pack_path)
+            if not pack_load.get("success"):
+                return {
+                    "success": False,
+                    "error": (
+                        f"Failed to load {pack_name} dataset: "
+                        f"{pack_load.get('error')}"
+                    ),
+                }
+            cases = normalize_benchmark_cases(
+                pack_load.get("rows"),
+                pack_name=pack_name,
+            )
+            if not cases:
+                return {
+                    "success": False,
+                    "error": f"{pack_name} dataset contains no benchmarkable rows.",
+                }
+            evaluation_packs[pack_name] = cases
+            pack_metadata[pack_name] = {
+                "file_path": pack_path,
+                "num_cases": len(cases),
+            }
+
+        resolved_primary_pack = infer_primary_pack(
+            evaluation_packs.keys(),
+            requested_pack=primary_pack,
+        )
+        if not resolved_primary_pack:
+            return {
+                "success": False,
+                "error": (
+                    f"primary_pack={primary_pack!r} is not available in the "
+                    "evaluation packs."
+                ),
+            }
+
+        runs: List[Dict[str, Any]] = []
+        dataset_cache: Dict[str, Dict[str, Any]] = {}
+
+        for seed in normalized_seeds:
+            for method_spec in normalized_training_methods:
+                runs.append(
+                    await self._run_benchmark_training_method(
+                        method_spec=method_spec,
+                        seed=seed,
+                        output_path=output_path,
+                        common_training_kwargs=common_training_kwargs,
+                        default_base_model=resolved_base,
+                        dataset_cache=dataset_cache,
+                        evaluation_packs=evaluation_packs,
+                        eval_system_prompt=eval_system_prompt,
+                        eval_quantization=eval_quantization,
+                        eval_max_new_tokens=eval_max_new_tokens,
+                        eval_process_isolation=eval_process_isolation,
+                    )
+                )
+
+        for reference in list(reference_models or []):
+            name = str(reference.get("name") or "").strip()
+            model_path = str(reference.get("model_path") or "").strip()
+            if not name or not model_path:
+                continue
+            reference_eval = await self._evaluate_benchmark_candidate(
+                model_path=model_path,
+                adapter_path=reference.get("adapter_path"),
+                evaluation_packs=evaluation_packs,
+                eval_system_prompt=reference.get("system_prompt") or eval_system_prompt,
+                eval_quantization=reference.get("quantization") or eval_quantization,
+                eval_max_new_tokens=eval_max_new_tokens,
+                eval_process_isolation=eval_process_isolation,
+                base_model=model_path,
+            )
+            reference_run = {
+                "method": name,
+                "seed": None,
+                "training": {
+                    "success": True,
+                    "skipped": True,
+                    "type": "reference_model",
+                },
+                "evaluation": reference_eval.get("packs", {}),
+                "model_spec": {
+                    "model_path": model_path,
+                    "adapter_path": reference.get("adapter_path"),
+                },
+            }
+            if not reference_eval.get("success"):
+                reference_run["evaluation_error"] = reference_eval.get("error")
+            runs.append(reference_run)
+
+        summary = aggregate_benchmark_runs(
+            runs,
+            primary_pack=resolved_primary_pack,
+            primary_metric=primary_metric,
+            benchmark_gates=benchmark_gates,
+        )
+
+        benchmark_success = any(bool(run.get("evaluation")) for run in runs)
+        result = {
+            "success": benchmark_success,
+            "train_dataset_path": train_dataset_path,
+            "stage_dataset_paths": stage_dataset_paths or [],
+            "output_dir": str(output_path),
+            "results_path": str(output_path / "benchmark_results.json"),
+            "base_model": resolved_base,
+            "evaluation_packs": pack_metadata,
+            "methods": {
+                "include_flat_sft": include_flat_sft,
+                "include_curriculum_sft": include_curriculum_sft,
+                "training_methods": [
+                    {
+                        "name": method["name"],
+                        "trainer": method["trainer"],
+                        "dataset_path": method["dataset_path"],
+                        "stage_dataset_paths": method["stage_dataset_paths"],
+                    }
+                    for method in normalized_training_methods
+                ],
+                "reference_models": [
+                    ref.get("name")
+                    for ref in list(reference_models or [])
+                    if ref.get("name")
+                ],
+            },
+            "benchmark_config": {
+                "seeds": normalized_seeds,
+                "primary_pack": resolved_primary_pack,
+                "primary_metric": primary_metric,
+                "eval_system_prompt": eval_system_prompt,
+                "eval_quantization": eval_quantization,
+                "eval_max_new_tokens": eval_max_new_tokens,
+                "eval_do_sample": False,
+                "eval_process_isolation": eval_process_isolation,
+                "num_epochs_flat": num_epochs_flat,
+                "num_stages": num_stages,
+                "num_epochs_per_stage": num_epochs_per_stage,
+                "difficulty_order": difficulty_order,
+                "score_column": score_column,
+                "eval_file_path": eval_file_path,
+                "lora_dropout": lora_dropout,
+                "weight_decay": weight_decay,
+                "save_best_model": save_best_model,
+                "recipe": recipe,
+                "lora_stage_transition": lora_stage_transition,
+            },
+            "runs": runs,
+            "summary": summary,
+        }
+        if not benchmark_success:
+            result["error"] = "No benchmark run completed evaluation successfully."
+        Path(result["results_path"]).write_text(
+            json.dumps(result, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return result
 
     async def train_orchestrator(
         self,
@@ -1062,6 +1938,11 @@ class PipelineOrchestrator:
                 output_dir=train_output_dir,
                 base_model=base_model,
                 num_epochs=num_epochs,
+                **self._training_artifact_context(
+                    run_source="workflow.train_orchestrator",
+                    dataset_path=dataset_path,
+                    note=output_format,
+                ),
             )
         elif output_format == "dpo":
             train_result = await self.finetuner.train_dpo_model(
@@ -1069,6 +1950,11 @@ class PipelineOrchestrator:
                 output_dir=train_output_dir,
                 base_model=base_model,
                 num_epochs=num_epochs,
+                **self._training_artifact_context(
+                    run_source="workflow.train_orchestrator",
+                    dataset_path=dataset_path,
+                    note=output_format,
+                ),
             )
         elif output_format == "grpo":
             train_result = await self.finetuner.train_grpo_model(
@@ -1076,6 +1962,11 @@ class PipelineOrchestrator:
                 output_dir=train_output_dir,
                 base_model=base_model,
                 num_epochs=num_epochs,
+                **self._training_artifact_context(
+                    run_source="workflow.train_orchestrator",
+                    dataset_path=dataset_path,
+                    note=output_format,
+                ),
             )
         else:
             return {
