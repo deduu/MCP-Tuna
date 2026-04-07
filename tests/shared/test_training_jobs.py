@@ -7,9 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from unittest.mock import AsyncMock
 
 import pytest
 
+import shared.training_jobs as training_jobs_module
+from shared.ownership import (
+    reset_current_ownership_context,
+    set_current_ownership_context,
+)
 from shared.training_jobs import (
     JobStatus,
     TrainingJob,
@@ -106,6 +112,20 @@ class TestTrainingJob:
         payload = job.model_dump(mode="json")
         assert payload["status"] == "running"
 
+    def test_ownership_defaults_to_local_workspace_context(self):
+        job = TrainingJob(job_id="test-owner")
+        assert job.ownership.workspace_id
+
+    def test_model_validate_accepts_ownership_dict(self):
+        job = TrainingJob.model_validate(
+            {
+                "job_id": "test-owner-dict",
+                "ownership": {"workspace_id": "alpha-ws", "user_id": "user-1"},
+            }
+        )
+        assert job.ownership.workspace_id == "alpha-ws"
+        assert job.ownership.user_id == "user-1"
+
 
 # ──────────────────────────────────────────────
 # TrainingJobManager tests
@@ -120,12 +140,15 @@ class TestTrainingJobManager:
             base_model="test-model",
             output_dir="/tmp/out",
             config_summary={"num_epochs": 3},
+            ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
         )
         assert job.job_id.startswith("job-")
         assert job.status == JobStatus.PENDING
         assert job.trainer_type == "sft"
         assert job.base_model == "test-model"
         assert job.config_summary == {"num_epochs": 3}
+        assert job.ownership.workspace_id == "alpha-ws"
+        assert job.ownership.user_id == "user-1"
         assert job.created_at != ""
 
     def test_get_job_returns_created_job(self):
@@ -138,6 +161,19 @@ class TestTrainingJobManager:
     def test_get_job_returns_none_for_unknown_id(self):
         mgr = TrainingJobManager()
         assert mgr.get_job("nonexistent-id") is None
+
+    def test_create_job_uses_current_context_when_ownership_omitted(self):
+        mgr = TrainingJobManager()
+        token = set_current_ownership_context(
+            {"workspace_id": "ctx-ws", "user_id": "ctx-user"}
+        )
+        try:
+            job = mgr.create_job("sft", "model", "/out", {})
+        finally:
+            reset_current_ownership_context(token)
+
+        assert job.ownership.workspace_id == "ctx-ws"
+        assert job.ownership.user_id == "ctx-user"
 
     def test_list_jobs_returns_all(self):
         mgr = TrainingJobManager()
@@ -154,6 +190,28 @@ class TestTrainingJobManager:
         jobs = mgr.list_jobs(status=JobStatus.RUNNING)
         assert len(jobs) == 1
         assert jobs[0].job_id == j1.job_id
+
+    def test_list_jobs_filters_by_ownership(self):
+        mgr = TrainingJobManager()
+        mgr.create_job(
+            "sft",
+            "m1",
+            "/o1",
+            {},
+            ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
+        )
+        mgr.create_job(
+            "dpo",
+            "m2",
+            "/o2",
+            {},
+            ownership={"workspace_id": "beta-ws", "user_id": "user-2"},
+        )
+
+        jobs = mgr.list_jobs(ownership={"workspace_id": "alpha-ws", "user_id": "user-1"})
+
+        assert len(jobs) == 1
+        assert jobs[0].trainer_type == "sft"
 
     def test_list_jobs_respects_limit(self):
         mgr = TrainingJobManager()
@@ -181,6 +239,19 @@ class TestTrainingJobManager:
         job = mgr.create_job("sft", "model", "/out", {})
         job.status = JobStatus.COMPLETED
         assert mgr.cancel_job(job.job_id) is False
+
+    def test_cancel_pending_queued_job_marks_cancelled(self):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+        job.status = JobStatus.PENDING
+        mgr._cancel_events[job.job_id] = threading.Event()
+
+        result = mgr.cancel_job(job.job_id)
+
+        assert result is True
+        assert job.status == JobStatus.CANCELLED
+        assert job.completed_at is not None
+        assert job.progress.current_stage == "cancelled"
 
     def test_cancel_orphaned_running_job_marks_cancelled(self):
         mgr = TrainingJobManager()
@@ -228,6 +299,41 @@ class TestTrainingJobManager:
         assert job.completed_at is not None
 
     @pytest.mark.asyncio
+    async def test_acancel_job_marks_pending_queued_job_cancelled_even_with_live_task(self):
+        mgr = TrainingJobManager(max_concurrent=1)
+        first = mgr.create_job("sft", "model", "/out/one", {})
+        second = mgr.create_job("sft", "model", "/out/two", {})
+        release_first = threading.Event()
+        first_started = threading.Event()
+
+        async def slow_training(extra_callbacks=None):
+            first_started.set()
+            while not release_first.is_set():
+                await asyncio.sleep(0.01)
+            return {"success": True}
+
+        async def fast_training(extra_callbacks=None):
+            return {"success": True}
+
+        await mgr.start_job(first.job_id, slow_training)
+        while not first_started.is_set():
+            await asyncio.sleep(0.01)
+
+        await mgr.start_job(second.job_id, fast_training)
+        await asyncio.sleep(0.05)
+
+        result = await mgr.acancel_job(second.job_id)
+        updated = mgr.get_job(second.job_id)
+
+        assert result is True
+        assert updated is not None
+        assert updated.status == JobStatus.CANCELLED
+        assert updated.progress.current_stage == "cancelled"
+
+        release_first.set()
+        await asyncio.sleep(0.2)
+
+    @pytest.mark.asyncio
     async def test_acancel_job_marks_persisted_orphan_running_job_cancelled(self):
         mgr = TrainingJobManager()
         payload = TrainingJob(
@@ -239,9 +345,10 @@ class TestTrainingJobManager:
             created_at="2026-03-20T00:00:00+00:00",
         ).model_dump(mode="json")
 
-        async def fake_get_job(namespace, job_id):
+        async def fake_get_job(namespace, job_id, ownership=None):
             assert namespace == "training"
             assert job_id == "job-persisted"
+            assert ownership is None
             return payload
 
         mgr._persistence.get_job = fake_get_job  # type: ignore[method-assign]
@@ -252,6 +359,30 @@ class TestTrainingJobManager:
         assert result is True
         assert updated is not None
         assert updated.status == JobStatus.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_adelete_job_rejects_persisted_record_for_other_owner(self):
+        mgr = TrainingJobManager()
+        payload = TrainingJob(
+            job_id="job-owned",
+            status=JobStatus.COMPLETED,
+            trainer_type="sft",
+            base_model="model",
+            output_dir="/out",
+            created_at="2026-03-20T00:00:00+00:00",
+            ownership={"workspace_id": "beta-ws", "user_id": "user-2"},
+        ).model_dump(mode="json")
+
+        mgr._persistence.get_job = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        mgr._persistence.delete_job = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        result = await mgr.adelete_job(
+            "job-owned",
+            ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
+        )
+
+        assert result is False
+        mgr._persistence.delete_job.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_start_job_runs_to_completion(self):
@@ -278,6 +409,64 @@ class TestTrainingJobManager:
         assert updated.result["success"] is True
         assert updated.completed_at is not None
         assert updated.elapsed_seconds > 0
+
+    @pytest.mark.asyncio
+    async def test_start_job_sets_pending_queue_state_before_worker_runs(self):
+        mgr = TrainingJobManager(max_concurrent=1)
+        job = mgr.create_job("sft", "model", "/out", {})
+        gate = threading.Event()
+
+        async def blocked_training(extra_callbacks=None):
+            while not gate.is_set():
+                await asyncio.sleep(0.01)
+            return {"success": True}
+
+        await mgr.start_job(job.job_id, blocked_training)
+
+        queued = mgr.get_job(job.job_id)
+        assert queued is not None
+        assert queued.status == JobStatus.PENDING
+        assert queued.progress.current_stage == "queued"
+        assert queued.progress.status_message == "Queued for execution"
+
+        gate.set()
+        await asyncio.sleep(0.2)
+
+    @pytest.mark.asyncio
+    async def test_second_job_stays_pending_while_first_worker_is_busy(self):
+        mgr = TrainingJobManager(max_concurrent=1)
+        first = mgr.create_job("sft", "model", "/out/one", {})
+        second = mgr.create_job("sft", "model", "/out/two", {})
+        release_first = threading.Event()
+        first_started = threading.Event()
+
+        async def slow_training(extra_callbacks=None):
+            first_started.set()
+            while not release_first.is_set():
+                await asyncio.sleep(0.01)
+            return {"success": True}
+
+        async def fast_training(extra_callbacks=None):
+            return {"success": True}
+
+        await mgr.start_job(first.job_id, slow_training)
+        while not first_started.is_set():
+            await asyncio.sleep(0.01)
+
+        await mgr.start_job(second.job_id, fast_training)
+        await asyncio.sleep(0.05)
+
+        updated_first = mgr.get_job(first.job_id)
+        updated_second = mgr.get_job(second.job_id)
+        assert updated_first is not None
+        assert updated_second is not None
+        assert updated_first.status == JobStatus.RUNNING
+        assert updated_first.progress.current_stage == "startup"
+        assert updated_second.status == JobStatus.PENDING
+        assert updated_second.progress.current_stage == "queued"
+
+        release_first.set()
+        await asyncio.sleep(0.2)
 
     @pytest.mark.asyncio
     async def test_start_job_handles_failure(self):
@@ -355,3 +544,25 @@ class TestTrainingJobManager:
         assert updated.progress.current_step == 50
         assert updated.progress.loss == 1.5
         assert updated.progress.percent_complete == 50.0
+
+    @pytest.mark.asyncio
+    async def test_alist_jobs_returns_local_jobs_when_persistence_is_slow(self, monkeypatch):
+        mgr = TrainingJobManager()
+        job = mgr.create_job("sft", "model", "/out", {})
+        job.status = JobStatus.RUNNING
+
+        async def slow_list_jobs(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return []
+
+        monkeypatch.setattr(
+            training_jobs_module,
+            "_PERSISTED_JOB_LIST_TIMEOUT_WITH_LOCAL_JOBS_S",
+            0.01,
+        )
+        mgr._persistence.list_jobs = slow_list_jobs  # type: ignore[method-assign]
+
+        jobs = await mgr.alist_jobs()
+
+        assert len(jobs) == 1
+        assert jobs[0].job_id == job.job_id

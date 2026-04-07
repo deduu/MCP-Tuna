@@ -29,6 +29,8 @@ from shared.preference_reward_lookup import (
     resolve_completion_termination_ids,
 )
 from shared.grpo_training_diagnostics import summarize_grpo_log_history
+from shared.ownership import effective_ownership_context
+from shared.owned_paths import resolve_owned_output_path
 from shared.training_run_artifacts import TrainingRunArtifacts
 from shared.training_seed import set_global_seed
 from shared.training_defaults import (
@@ -86,13 +88,18 @@ class TrainingService:
         return normalized.dataset, normalized.summary
 
     @staticmethod
-    def _extract_run_artifact_context(kwargs: dict) -> dict[str, Optional[str]]:
+    def _extract_run_artifact_context(kwargs: dict) -> dict[str, Any]:
         return {
             "dataset_path": str(kwargs.pop("dataset_path", "") or "").strip() or None,
             "run_source": str(kwargs.pop("run_source", "") or "").strip() or None,
             "job_id": str(kwargs.pop("job_id", "") or "").strip() or None,
             "note": str(kwargs.pop("artifact_note", "") or "").strip() or None,
+            "ownership": effective_ownership_context(kwargs.pop("ownership", None)),
         }
+
+    @staticmethod
+    def _resolve_run_output_dir(output_dir: str, ownership: Any) -> str:
+        return str(resolve_owned_output_path(output_dir, ownership))
 
     @staticmethod
     def _filter_none_values(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1044,7 +1051,12 @@ class TrainingService:
         model_name = base_model or self.config.base_model
         original_kwargs = dict(kwargs)
         artifact_context = self._extract_run_artifact_context(kwargs)
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="sft")
+        output_dir = self._resolve_run_output_dir(output_dir, artifact_context["ownership"])
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="sft",
+            ownership=artifact_context["ownership"],
+        )
 
         if adapter_path and not use_lora:
             result = {
@@ -1125,6 +1137,7 @@ class TrainingService:
                 run_source=artifact_context["run_source"],
                 job_id=artifact_context["job_id"],
                 note=artifact_context["note"],
+                ownership=artifact_context["ownership"],
             )
             if dataset_schema["kind"] == "unsupported":
                 result = {
@@ -1506,7 +1519,12 @@ class TrainingService:
         start_time = time.time()
         model_name = base_model or self.config.base_model
         artifact_context = self._extract_run_artifact_context(kwargs)
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="vlm_sft")
+        output_dir = self._resolve_run_output_dir(output_dir, artifact_context["ownership"])
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="vlm_sft",
+            ownership=artifact_context["ownership"],
+        )
 
         try:
             from datasets import Dataset
@@ -1592,6 +1610,7 @@ class TrainingService:
                 run_source=artifact_context["run_source"],
                 job_id=artifact_context["job_id"],
                 note=artifact_context["note"],
+                ownership=artifact_context["ownership"],
             )
 
             model_kwargs = dict(kwargs)
@@ -1782,7 +1801,12 @@ class TrainingService:
         start_time = time.time()
         model_name = base_model or self.config.base_model
         artifact_context = self._extract_run_artifact_context(kwargs)
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="dpo")
+        output_dir = self._resolve_run_output_dir(output_dir, artifact_context["ownership"])
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="dpo",
+            ownership=artifact_context["ownership"],
+        )
         if adapter_path and not use_lora:
             result = {
                 "success": False,
@@ -1864,6 +1888,7 @@ class TrainingService:
                 run_source=artifact_context["run_source"],
                 job_id=artifact_context["job_id"],
                 note=artifact_context["note"],
+                ownership=artifact_context["ownership"],
             )
 
             required = {"prompt", "chosen", "rejected"}
@@ -2155,7 +2180,12 @@ class TrainingService:
         start_time = time.time()
         model_name = base_model or self.config.base_model
         artifact_context = self._extract_run_artifact_context(kwargs)
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="grpo")
+        output_dir = self._resolve_run_output_dir(output_dir, artifact_context["ownership"])
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="grpo",
+            ownership=artifact_context["ownership"],
+        )
         if adapter_path and not use_lora:
             result = {
                 "success": False,
@@ -2227,6 +2257,7 @@ class TrainingService:
                 run_source=artifact_context["run_source"],
                 job_id=artifact_context["job_id"],
                 note=artifact_context["note"],
+                ownership=artifact_context["ownership"],
             )
 
             required = {"prompt", "responses", "rewards"}
@@ -2528,7 +2559,12 @@ class TrainingService:
         start_time = time.time()
         model_name = base_model or self.config.base_model
         artifact_context = self._extract_run_artifact_context(kwargs)
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="kto")
+        output_dir = self._resolve_run_output_dir(output_dir, artifact_context["ownership"])
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="kto",
+            ownership=artifact_context["ownership"],
+        )
         if adapter_path and not use_lora:
             result = {
                 "success": False,
@@ -2599,6 +2635,7 @@ class TrainingService:
                 run_source=artifact_context["run_source"],
                 job_id=artifact_context["job_id"],
                 note=artifact_context["note"],
+                ownership=artifact_context["ownership"],
             )
 
             required = {"prompt", "completion", "label"}

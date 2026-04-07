@@ -102,6 +102,18 @@ class EmailSettings:
 
 
 # --------------------------------------------------
+# Auth
+# --------------------------------------------------
+@dataclass
+class AuthSettings:
+    enabled: bool = os.getenv("MCP_TUNA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
+    api_key: str = os.getenv("MCP_TUNA_API_KEY", "").strip()
+    api_key_header_name: str = os.getenv("MCP_TUNA_API_KEY_HEADER", "X-API-Key").strip() or "X-API-Key"
+    workspace_header_name: str = os.getenv("MCP_TUNA_WORKSPACE_HEADER", "X-Workspace-Id").strip() or "X-Workspace-Id"
+    user_header_name: str = os.getenv("MCP_TUNA_USER_HEADER", "X-User-Id").strip() or "X-User-Id"
+
+
+# --------------------------------------------------
 # MCP Server Connections
 # --------------------------------------------------
 @dataclass
@@ -141,6 +153,7 @@ class AppSettings:
     files: FileSettings = field(default_factory=FileSettings)
     object_storage: ObjectStorageSettings = field(default_factory=ObjectStorageSettings)
     email: EmailSettings = field(default_factory=EmailSettings)
+    auth: AuthSettings = field(default_factory=AuthSettings)
     mcp: MCPSettings = field(default_factory=MCPSettings)
 
     backend_url: str = os.getenv("BACKEND_URL", "")

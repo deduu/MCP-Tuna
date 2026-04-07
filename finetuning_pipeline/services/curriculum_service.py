@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from shared.config import FinetuningConfig
+from shared.owned_paths import resolve_owned_output_path
+from shared.ownership import normalize_ownership_context
 from shared.training_run_artifacts import TrainingRunArtifacts
 
 
@@ -63,7 +65,13 @@ class CurriculumService:
         job_id = str(kwargs.get("job_id", "") or "").strip() or None
         artifact_note = str(kwargs.get("artifact_note", "") or "").strip() or None
         dataset_path = str(kwargs.get("dataset_path", "") or "").strip() or None
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="curriculum")
+        ownership_context = normalize_ownership_context(kwargs.get("ownership"))
+        output_dir = str(resolve_owned_output_path(output_dir, ownership_context))
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="curriculum",
+            ownership=ownership_context,
+        )
         stage_results: List[Dict[str, Any]] = []
 
         if lora_stage_transition not in {"continue_adapter", "merge_adapter"}:
@@ -185,6 +193,7 @@ class CurriculumService:
             run_source=run_source,
             job_id=job_id,
             note=artifact_note,
+            ownership=ownership_context,
         )
         run_artifacts.write_json_artifact(
             "curriculum_plan",
@@ -366,6 +375,7 @@ class CurriculumService:
                     "run_source": stage_run_source,
                     "job_id": job_id,
                     "artifact_note": stage_note,
+                    "ownership": ownership_context,
                 }
             )
             train_result = await training_svc.train_model(

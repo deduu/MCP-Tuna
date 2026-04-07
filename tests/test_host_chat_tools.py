@@ -191,7 +191,7 @@ async def test_host_chat_uses_live_provider_for_mcp_deployment():
     assert _FakeChatSession.last_config.endpoint is None
     assert _FakeChatSession.last_config.model_path == "base/model"
     assert _FakeChatSession.last_config.adapter_path == "./adapter"
-    assert _FakeChatSession.last_config.use_tokenizer_chat_template is True
+    assert _FakeChatSession.last_config.use_tokenizer_chat_template is False
 
 
 @pytest.mark.asyncio
@@ -452,7 +452,7 @@ async def test_host_chat_can_prefer_runtime_metrics_for_api_deployment():
     assert result["success"] is True
     assert _FakeStructuredChatSession.last_provider is provider
     assert _FakeStructuredChatSession.last_config.endpoint is None
-    assert _FakeStructuredChatSession.last_config.use_tokenizer_chat_template is True
+    assert _FakeStructuredChatSession.last_config.use_tokenizer_chat_template is False
 
 
 @pytest.mark.asyncio

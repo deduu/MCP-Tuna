@@ -69,6 +69,8 @@ class ProgressCallback(TrainerCallback):  # type: ignore[misc]
             max_steps=state.max_steps,
             max_epochs=int(args.num_train_epochs),
             percent_complete=0.0,
+            current_stage="train",
+            status_message="Training loop started",
         )
 
     def on_log(self, args: Any, state: Any, control: Any, logs: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:

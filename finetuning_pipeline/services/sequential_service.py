@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from agentsoul.utils.logger import get_logger
 from shared.config import FinetuningConfig
+from shared.owned_paths import resolve_owned_output_path
+from shared.ownership import normalize_ownership_context
 from shared.training_run_artifacts import TrainingRunArtifacts
 
 logger = get_logger(__name__)
@@ -44,6 +46,7 @@ class SequentialTrainingService:
         run_source: Optional[str] = None,
         job_id: Optional[str] = None,
         artifact_note: Optional[str] = None,
+        ownership: Any = None,
     ) -> Dict[str, Any]:
         """Run multiple training stages sequentially.
 
@@ -63,7 +66,13 @@ class SequentialTrainingService:
         t_start = time.perf_counter()
         original_base = base_model or self.config.base_model
         current_base = original_base
-        run_artifacts = TrainingRunArtifacts(output_dir=output_dir, trainer="sequential")
+        ownership_context = normalize_ownership_context(ownership)
+        output_dir = str(resolve_owned_output_path(output_dir, ownership_context))
+        run_artifacts = TrainingRunArtifacts(
+            output_dir=output_dir,
+            trainer="sequential",
+            ownership=ownership_context,
+        )
         stage_results: List[Dict[str, Any]] = []
 
         run_artifacts.start(
@@ -79,6 +88,7 @@ class SequentialTrainingService:
             run_source=run_source,
             job_id=job_id,
             note=artifact_note,
+            ownership=ownership_context,
         )
         run_artifacts.write_json_artifact("stage_plan", "stage_plan.json", {"stages": stages})
 
@@ -137,9 +147,11 @@ class SequentialTrainingService:
             stage_num = i + 1
             technique = stage["technique"].lower()
             dataset_path = stage["dataset_path"]
-            stage_output = stage.get("output_dir") or str(
-                Path(output_dir) / f"stage_{stage_num}_{technique}"
-            )
+            stage_output = stage.get("output_dir")
+            if stage_output:
+                stage_output = str(resolve_owned_output_path(stage_output, ownership_context))
+            else:
+                stage_output = str(Path(output_dir) / f"stage_{stage_num}_{technique}")
 
             logger.info(
                 "sequential_stage_start stage=%d technique=%s dataset=%s base=%s",
@@ -193,6 +205,7 @@ class SequentialTrainingService:
                     "run_source": stage_run_source,
                     "job_id": job_id,
                     "artifact_note": stage_note,
+                    "ownership": ownership_context,
                 }
             )
             if extra_callbacks:

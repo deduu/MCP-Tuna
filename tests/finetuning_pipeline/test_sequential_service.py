@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import shared.workspace_paths as workspace_paths
+
 
 # ----------------------------------------------------------------
 # Helpers
@@ -349,6 +351,47 @@ async def test_stage_training_receives_artifact_context(mock_load, mock_train, t
     assert call_kwargs["job_id"] == "job-123"
     assert "stage=1/1" in call_kwargs["artifact_note"]
     assert Path(result["artifacts"]["run_manifest"]).exists()
+
+
+@pytest.mark.asyncio
+@patch("finetuning_pipeline.services.training_service.TrainingService.train_model")
+@patch("finetuning_pipeline.services.training_service.TrainingService.load_dataset_from_file")
+async def test_sequential_scopes_relative_output_dir_by_ownership(
+    mock_load,
+    mock_train,
+    tmp_path,
+    monkeypatch,
+):
+    from finetuning_pipeline.services.sequential_service import SequentialTrainingService
+
+    monkeypatch.setattr(workspace_paths, "WORKSPACE_ROOT", tmp_path)
+    mock_load.return_value = _mock_load_result()
+    mock_train.return_value = _mock_train_result(
+        str(tmp_path / "output" / "workspaces" / "alpha-ws" / "users" / "user-1" / "seq-owned" / "stage_1_sft")
+    )
+
+    svc = SequentialTrainingService()
+    result = await svc.train_sequential(
+        stages=[{"technique": "sft", "dataset_path": "/d.jsonl"}],
+        output_dir="output/seq-owned",
+        base_model="fake-base",
+        ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
+    )
+
+    expected_stage_dir = (
+        tmp_path
+        / "output"
+        / "workspaces"
+        / "alpha-ws"
+        / "users"
+        / "user-1"
+        / "seq-owned"
+        / "stage_1_sft"
+    ).resolve()
+
+    call_kwargs = mock_train.call_args.kwargs
+    assert call_kwargs["output_dir"] == str(expected_stage_dir)
+    assert result["final_model_path"] == str(expected_stage_dir)
 
 
 # ----------------------------------------------------------------

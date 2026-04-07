@@ -17,6 +17,7 @@ from shared.multimodal_models import (
     extract_text_from_content,
     is_vlm_sample,
 )
+from shared.ownership import effective_ownership_context
 from shared.output_naming import compact_source_hint
 from shared.workspace_paths import resolve_workspace_path, to_workspace_relative_path
 
@@ -35,6 +36,10 @@ class DatasetService:
         self.config = config or DatasetConfig()
         self._persistence = get_persistence_service()
         self._object_storage = get_object_storage_service()
+
+    @staticmethod
+    def _resolve_ownership(ownership: Any = None) -> Dict[str, Any]:
+        return effective_ownership_context(ownership).model_dump(exclude_none=True)
 
     @staticmethod
     def _validate_loaded_rows(data: Any, file_path: str) -> tuple[bool, List[Dict[str, Any]] | str]:
@@ -62,6 +67,7 @@ class DatasetService:
         data_points: List[Dict[str, Any]],
         output_path: str,
         format: str = "jsonl",
+        ownership: Any = None,
     ) -> Dict[str, Any]:
         """Save data_points to disk.
 
@@ -102,6 +108,7 @@ class DatasetService:
             ),
         )
         payload = meta.model_dump()
+        payload["ownership"] = self._resolve_ownership(ownership)
         upload_result = await self._sync_dataset_blob(path)
         if upload_result.get("success"):
             payload["object_key"] = upload_result.get("object_key")
@@ -113,7 +120,7 @@ class DatasetService:
     # load
     # ------------------------------------------------------------------
 
-    async def load(self, file_path: str) -> Dict[str, Any]:
+    async def load(self, file_path: str, ownership: Any = None) -> Dict[str, Any]:
         """Load dataset from disk — auto-detects format from extension."""
         path = resolve_workspace_path(file_path)
         if not path.exists():
@@ -157,7 +164,7 @@ class DatasetService:
     # preview
     # ------------------------------------------------------------------
 
-    async def preview(self, file_path: str, n: int = 5) -> Dict[str, Any]:
+    async def preview(self, file_path: str, n: int = 5, ownership: Any = None) -> Dict[str, Any]:
         """Return first *n* rows without loading the entire file (JSONL-optimised)."""
         path = resolve_workspace_path(file_path)
         if not path.exists():
@@ -169,7 +176,7 @@ class DatasetService:
             rows, total = await asyncio.to_thread(self._preview_jsonl, path, n)
         else:
             # For other formats fall back to full load then slice
-            full = await self.load(file_path)
+            full = await self.load(file_path, ownership=ownership)
             if not full["success"]:
                 return full
             all_rows = full["data_points"]
@@ -188,7 +195,7 @@ class DatasetService:
     # info
     # ------------------------------------------------------------------
 
-    async def info(self, file_path: str) -> Dict[str, Any]:
+    async def info(self, file_path: str, ownership: Any = None) -> Dict[str, Any]:
         """Return metadata about a dataset file (or first dataset in a dir)."""
         path = resolve_workspace_path(file_path)
         if not path.exists():
@@ -206,7 +213,7 @@ class DatasetService:
         if ext == ".jsonl":
             row_count, columns, sample_row = await asyncio.to_thread(self._inspect_jsonl, path)
         else:
-            full = await self.load(file_path)
+            full = await self.load(file_path, ownership=ownership)
             if not full["success"]:
                 return full
             row_count = full["row_count"]
@@ -224,12 +231,18 @@ class DatasetService:
             modified_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         )
         payload = meta.model_dump()
-        persisted = await self._persistence.get_dataset(str(path.resolve()))
+        payload["ownership"] = self._resolve_ownership(ownership)
+        persisted = await self._persistence.get_dataset(
+            str(path.resolve()),
+            ownership=ownership,
+        )
         if persisted:
             if persisted.get("object_key"):
                 payload["object_key"] = persisted["object_key"]
             if persisted.get("object_url"):
                 payload["object_url"] = persisted["object_url"]
+            if persisted.get("ownership"):
+                payload["ownership"] = persisted["ownership"]
         else:
             upload_result = await self._sync_dataset_blob(path)
             if upload_result.get("success"):
@@ -242,17 +255,17 @@ class DatasetService:
     # delete
     # ------------------------------------------------------------------
 
-    async def delete(self, file_path: str) -> Dict[str, Any]:
+    async def delete(self, file_path: str, ownership: Any = None) -> Dict[str, Any]:
         """Delete a dataset file from disk."""
         path = resolve_workspace_path(file_path)
         resolved = str(path.resolve())
-        persisted = await self._persistence.get_dataset(resolved)
+        persisted = await self._persistence.get_dataset(resolved, ownership=ownership)
 
         if not path.exists():
             if persisted:
                 if persisted.get("object_key"):
                     await self._object_storage.delete_object(persisted.get("object_key"))
-                await self._persistence.mark_dataset_deleted(resolved)
+                await self._persistence.mark_dataset_deleted(resolved, ownership=ownership)
                 return {
                     "success": True,
                     "file_path": resolved,
@@ -275,11 +288,11 @@ class DatasetService:
 
         resolved = str(path.resolve())
         if persisted is None or resolved != str(resolve_workspace_path(file_path)):
-            persisted = await self._persistence.get_dataset(resolved)
+            persisted = await self._persistence.get_dataset(resolved, ownership=ownership)
         await asyncio.to_thread(path.unlink)
         if persisted and persisted.get("object_key"):
             await self._object_storage.delete_object(persisted.get("object_key"))
-        await self._persistence.mark_dataset_deleted(resolved)
+        await self._persistence.mark_dataset_deleted(resolved, ownership=ownership)
         return {"success": True, "file_path": resolved, "deleted": True}
 
     # ------------------------------------------------------------------
@@ -295,6 +308,7 @@ class DatasetService:
         test_ratio: float = 0.1,
         seed: int = 42,
         format: str = "jsonl",
+        ownership: Any = None,
     ) -> Dict[str, Any]:
         """Split a dataset into train/val/test files.
 
@@ -317,7 +331,7 @@ class DatasetService:
             )
 
         # Fallback: load full dataset for non-JSONL formats
-        loaded = await self.load(file_path)
+        loaded = await self.load(file_path, ownership=ownership)
         if not loaded["success"]:
             return loaded
 
@@ -339,7 +353,7 @@ class DatasetService:
         splits: Dict[str, Dict[str, Any]] = {}
         for name, subset in [("train", train_data), ("val", val_data), ("test", test_data)]:
             sp = out / f"{stem}_{name}.{format}"
-            await self.save(subset, str(sp), format=format)
+            await self.save(subset, str(sp), format=format, ownership=ownership)
             splits[name] = {"path": str(sp.resolve()), "count": len(subset), "format": format}
 
         return {"success": True, "splits": splits}
@@ -425,6 +439,7 @@ class DatasetService:
         output_path: str,
         deduplicate: bool = False,
         dedup_key: str = "instruction",
+        ownership: Any = None,
     ) -> Dict[str, Any]:
         """Merge multiple dataset files into one.
 
@@ -451,7 +466,7 @@ class DatasetService:
         per_file: Dict[str, int] = {}
 
         for fp in resolved_file_paths:
-            loaded = await self.load(fp)
+            loaded = await self.load(fp, ownership=ownership)
             if not loaded["success"]:
                 return {"success": False, "error": f"Failed to load {fp}: {loaded.get('error')}"}
             pts = loaded["data_points"]
@@ -468,7 +483,12 @@ class DatasetService:
                     unique.append(dp)
             all_points = unique
 
-        save_result = await self.save(all_points, str(resolved_output_path), format=out_fmt)
+        save_result = await self.save(
+            all_points,
+            str(resolved_output_path),
+            format=out_fmt,
+            ownership=ownership,
+        )
         if not save_result["success"]:
             return save_result
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from sqlalchemy import Select, desc, select
 
@@ -17,8 +17,12 @@ from app.db.models import (
     JobRunRecord,
 )
 from app.db.session import session_manager
+from shared.ownership import OwnershipContext, effective_ownership_context, normalize_ownership_context
 
 logger = logging.getLogger(__name__)
+
+_JOB_META_KEY = "_mcp_tuna"
+_DATASET_META_KEY = "_mcp_tuna"
 
 
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
@@ -108,6 +112,16 @@ class PersistenceService:
 
     @staticmethod
     def _job_to_dict(record: JobRunRecord) -> Dict[str, Any]:
+        config_summary = dict(record.config_summary or {})
+        internal_meta = config_summary.pop(_JOB_META_KEY, None)
+        ownership: Dict[str, Any] = {}
+        if isinstance(internal_meta, dict):
+            raw_ownership = internal_meta.get("ownership")
+            if raw_ownership is not None:
+                ownership = normalize_ownership_context(raw_ownership).model_dump(
+                    exclude_none=True
+                )
+
         return {
             "job_id": record.job_id,
             "status": _normalize_job_status(record.status),
@@ -121,8 +135,24 @@ class PersistenceService:
             "progress": record.progress or {},
             "result": record.result,
             "error": record.error,
-            "config_summary": record.config_summary or {},
+            "config_summary": config_summary,
+            "ownership": ownership,
         }
+
+    @staticmethod
+    def _job_visible_to_owner(
+        payload: Mapping[str, Any],
+        ownership: OwnershipContext,
+    ) -> bool:
+        raw_ownership = payload.get("ownership")
+        if raw_ownership is None:
+            return True
+        record_ownership = normalize_ownership_context(raw_ownership)
+        if record_ownership.workspace_id != ownership.workspace_id:
+            return False
+        if ownership.user_id and record_ownership.user_id and record_ownership.user_id != ownership.user_id:
+            return False
+        return True
 
     async def upsert_job(self, namespace: str, job: Dict[str, Any]) -> bool:
         async def _op(session):
@@ -135,6 +165,12 @@ class PersistenceService:
                 record = JobRunRecord(namespace=namespace, job_id=job["job_id"])
                 session.add(record)
 
+            ownership = normalize_ownership_context(job.get("ownership"))
+            config_summary = dict(job.get("config_summary") or {})
+            internal_meta = dict(config_summary.get(_JOB_META_KEY) or {})
+            internal_meta["ownership"] = ownership.model_dump(exclude_none=True)
+            config_summary[_JOB_META_KEY] = internal_meta
+
             record.status = _normalize_job_status(job.get("status", record.status or "pending"))
             record.trainer_type = str(job.get("trainer_type") or "")
             record.base_model = str(job.get("base_model") or "")
@@ -146,21 +182,30 @@ class PersistenceService:
             record.progress = job.get("progress") or {}
             record.result = job.get("result")
             record.error = job.get("error")
-            record.config_summary = job.get("config_summary") or {}
+            record.config_summary = config_summary
             await session.commit()
             return True
 
         result = await self._with_session(_op)
         return bool(result)
 
-    async def get_job(self, namespace: str, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_job(
+        self,
+        namespace: str,
+        job_id: str,
+        ownership: Any = None,
+    ) -> Optional[Dict[str, Any]]:
         async def _op(session):
+            resolved_ownership = effective_ownership_context(ownership)
             stmt = select(JobRunRecord).where(
                 JobRunRecord.namespace == namespace,
                 JobRunRecord.job_id == job_id,
             )
             record = (await session.execute(stmt)).scalar_one_or_none()
-            return self._job_to_dict(record) if record is not None else None
+            payload = self._job_to_dict(record) if record is not None else None
+            if payload is not None and not self._job_visible_to_owner(payload, resolved_ownership):
+                return None
+            return payload
 
         result = await self._with_session(_op)
         return result if isinstance(result, dict) else None
@@ -171,28 +216,46 @@ class PersistenceService:
         *,
         status: Optional[str] = None,
         limit: int = 20,
+        ownership: Any = None,
     ) -> List[Dict[str, Any]]:
         async def _op(session):
+            resolved_ownership = effective_ownership_context(ownership)
             stmt: Select[tuple[JobRunRecord]] = select(JobRunRecord).where(
                 JobRunRecord.namespace == namespace,
             )
             if status:
                 stmt = stmt.where(JobRunRecord.status == status)
-            stmt = stmt.order_by(desc(JobRunRecord.updated_at)).limit(limit)
+            stmt = stmt.order_by(desc(JobRunRecord.updated_at))
             rows = (await session.execute(stmt)).scalars().all()
-            return [self._job_to_dict(row) for row in rows]
+            payloads = [self._job_to_dict(row) for row in rows]
+            return [
+                payload
+                for payload in payloads
+                if self._job_visible_to_owner(payload, resolved_ownership)
+            ][:limit]
 
         result = await self._with_session(_op)
         return result if isinstance(result, list) else []
 
-    async def delete_job(self, namespace: str, job_id: str) -> bool:
+    async def delete_job(
+        self,
+        namespace: str,
+        job_id: str,
+        ownership: Any = None,
+    ) -> bool:
         async def _op(session):
+            resolved_ownership = effective_ownership_context(ownership)
             stmt = select(JobRunRecord).where(
                 JobRunRecord.namespace == namespace,
                 JobRunRecord.job_id == job_id,
             )
             record = (await session.execute(stmt)).scalar_one_or_none()
             if record is None:
+                return False
+            if not self._job_visible_to_owner(
+                self._job_to_dict(record),
+                resolved_ownership,
+            ):
                 return False
             await session.delete(record)
             await session.commit()
@@ -467,7 +530,33 @@ class PersistenceService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _extract_dataset_ownership(record: DatasetRecord) -> Optional[OwnershipContext]:
+        metadata = dict(record.metadata_json or {})
+        internal_meta = metadata.get(_DATASET_META_KEY)
+        if not isinstance(internal_meta, dict):
+            return None
+        raw_ownership = internal_meta.get("ownership")
+        if raw_ownership is None:
+            return None
+        return normalize_ownership_context(raw_ownership)
+
+    @staticmethod
+    def _dataset_visible_to_owner(
+        record: DatasetRecord,
+        ownership: OwnershipContext,
+    ) -> bool:
+        record_ownership = PersistenceService._extract_dataset_ownership(record)
+        if record_ownership is None:
+            return True
+        if record_ownership.workspace_id != ownership.workspace_id:
+            return False
+        if ownership.user_id and record_ownership.user_id and record_ownership.user_id != ownership.user_id:
+            return False
+        return True
+
+    @staticmethod
     def _dataset_to_dict(record: DatasetRecord) -> Dict[str, Any]:
+        ownership = PersistenceService._extract_dataset_ownership(record)
         metadata = {
             "dataset_id": record.dataset_id,
             "file_path": record.file_path,
@@ -482,6 +571,8 @@ class PersistenceService:
             metadata["object_key"] = record.object_key
         if record.object_url:
             metadata["object_url"] = record.object_url
+        if ownership is not None:
+            metadata["ownership"] = ownership.model_dump(exclude_none=True)
         return metadata
 
     async def upsert_dataset(self, metadata: Dict[str, Any]) -> bool:
@@ -494,6 +585,12 @@ class PersistenceService:
                 record = DatasetRecord(file_path=metadata["file_path"])
                 session.add(record)
 
+            ownership = normalize_ownership_context(metadata.get("ownership"))
+            record_metadata = dict(metadata.get("metadata") or {})
+            internal_meta = dict(record_metadata.get(_DATASET_META_KEY) or {})
+            internal_meta["ownership"] = ownership.model_dump(exclude_none=True)
+            record_metadata[_DATASET_META_KEY] = internal_meta
+
             record.dataset_id = str(metadata.get("dataset_id") or "")
             record.format = str(metadata.get("format") or "")
             record.row_count = int(metadata.get("row_count") or 0)
@@ -503,7 +600,7 @@ class PersistenceService:
             record.modified_at = _parse_dt(metadata.get("modified_at"))
             record.object_key = metadata.get("object_key")
             record.object_url = metadata.get("object_url")
-            record.metadata_json = metadata.get("metadata") or {}
+            record.metadata_json = record_metadata
             record.deleted_at = None
             await session.commit()
             return True
@@ -511,35 +608,46 @@ class PersistenceService:
         result = await self._with_session(_op)
         return bool(result)
 
-    async def get_dataset(self, file_path: str) -> Optional[Dict[str, Any]]:
+    async def get_dataset(self, file_path: str, ownership: Any = None) -> Optional[Dict[str, Any]]:
         async def _op(session):
             stmt = select(DatasetRecord).where(
                 DatasetRecord.file_path == file_path,
             )
             record = (await session.execute(stmt)).scalar_one_or_none()
+            resolved_ownership = effective_ownership_context(ownership)
+            if record is not None and not self._dataset_visible_to_owner(record, resolved_ownership):
+                return None
             return self._dataset_to_dict(record) if record is not None else None
 
         result = await self._with_session(_op)
         return result if isinstance(result, dict) else None
 
-    async def list_datasets(self) -> List[Dict[str, Any]]:
+    async def list_datasets(self, ownership: Any = None) -> List[Dict[str, Any]]:
         async def _op(session):
+            resolved_ownership = effective_ownership_context(ownership)
             stmt: Select[tuple[DatasetRecord]] = (
                 select(DatasetRecord)
                 .where(DatasetRecord.deleted_at.is_(None))
                 .order_by(desc(DatasetRecord.updated_at))
             )
             rows = (await session.execute(stmt)).scalars().all()
-            return [self._dataset_to_dict(row) for row in rows]
+            return [
+                self._dataset_to_dict(row)
+                for row in rows
+                if self._dataset_visible_to_owner(row, resolved_ownership)
+            ]
 
         result = await self._with_session(_op)
         return result if isinstance(result, list) else []
 
-    async def mark_dataset_deleted(self, file_path: str) -> bool:
+    async def mark_dataset_deleted(self, file_path: str, ownership: Any = None) -> bool:
         async def _op(session):
             stmt = select(DatasetRecord).where(DatasetRecord.file_path == file_path)
             record = (await session.execute(stmt)).scalar_one_or_none()
             if record is None:
+                return False
+            resolved_ownership = effective_ownership_context(ownership)
+            if not self._dataset_visible_to_owner(record, resolved_ownership):
                 return False
             record.deleted_at = utc_now()
             await session.commit()

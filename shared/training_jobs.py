@@ -17,9 +17,18 @@ from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from shared.ownership import (
+    OwnershipContext,
+    default_ownership_context,
+    effective_ownership_context,
+    normalize_ownership_context,
+)
 from shared.persistence import get_persistence_service
 
 logger = logging.getLogger(__name__)
+
+_PERSISTED_JOB_LIST_TIMEOUT_WITH_LOCAL_JOBS_S = 0.75
+_PERSISTED_JOB_LIST_TIMEOUT_WITHOUT_LOCAL_JOBS_S = 5.0
 
 
 # ──────────────────────────────────────────────
@@ -95,11 +104,17 @@ class TrainingJob(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     config_summary: Dict[str, Any] = Field(default_factory=dict)
+    ownership: OwnershipContext = Field(default_factory=default_ownership_context)
 
     @field_validator("status", mode="before")
     @classmethod
     def _coerce_status(cls, value: Any) -> Any:
         return _normalize_job_status(value)
+
+    @field_validator("ownership", mode="before")
+    @classmethod
+    def _coerce_ownership(cls, value: Any) -> OwnershipContext:
+        return normalize_ownership_context(value)
 
 
 # ──────────────────────────────────────────────
@@ -138,8 +153,10 @@ class TrainingJobManager:
         base_model: str,
         output_dir: str,
         config_summary: Dict[str, Any],
+        ownership: Any = None,
     ) -> TrainingJob:
         job_id = f"job-{uuid.uuid4().hex[:8]}"
+        ownership_context = effective_ownership_context(ownership)
         job = TrainingJob(
             job_id=job_id,
             trainer_type=trainer_type,
@@ -147,6 +164,7 @@ class TrainingJobManager:
             output_dir=output_dir,
             created_at=_now_iso(),
             config_summary=config_summary,
+            ownership=ownership_context,
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -174,8 +192,10 @@ class TrainingJobManager:
         with self._lock:
             self._cancel_events[job_id] = cancel_event
 
-        job.status = JobStatus.RUNNING
-        job.started_at = _now_iso()
+        job.status = JobStatus.PENDING
+        job.progress.current_stage = "queued"
+        job.progress.status_message = "Queued for execution"
+        job.progress.last_updated = _now_iso()
         self._schedule_persist(job)
 
         async def _run() -> None:
@@ -191,6 +211,13 @@ class TrainingJobManager:
                 )
 
                 def _run_in_worker() -> Any:
+                    with self._lock:
+                        job.status = JobStatus.RUNNING
+                        job.started_at = job.started_at or _now_iso()
+                        job.progress.current_stage = "startup"
+                        job.progress.status_message = "Loading model weights"
+                        job.progress.last_updated = _now_iso()
+                    self._schedule_persist(job)
                     return asyncio.run(training_coro(extra_callbacks=[callback]))
 
                 loop = asyncio.get_running_loop()
@@ -204,6 +231,8 @@ class TrainingJobManager:
                 job.result = result
                 job.completed_at = _now_iso()
                 job.elapsed_seconds = round(elapsed, 2)
+                job.progress.current_stage = "completed"
+                job.progress.status_message = "Training completed"
                 self._schedule_persist(job)
             except Exception as exc:
                 job.status = JobStatus.FAILED
@@ -212,6 +241,8 @@ class TrainingJobManager:
                     job.result = getattr(exc, "result")
                 job.completed_at = _now_iso()
                 job.elapsed_seconds = round(time.monotonic() - start, 2)
+                job.progress.current_stage = "failed"
+                job.progress.status_message = "Training failed"
                 logger.exception("Training job %s failed", job_id)
                 self._schedule_persist(job)
 
@@ -224,32 +255,65 @@ class TrainingJobManager:
     def get_job(self, job_id: str) -> Optional[TrainingJob]:
         return self._jobs.get(job_id)
 
+    @staticmethod
+    def _job_visible_to_owner(job: TrainingJob, ownership: Any = None) -> bool:
+        resolved = effective_ownership_context(ownership)
+        record = job.ownership
+        if record.workspace_id != resolved.workspace_id:
+            return False
+        if resolved.user_id and record.user_id and record.user_id != resolved.user_id:
+            return False
+        return True
+
+    def get_job_for_owner(self, job_id: str, ownership: Any = None) -> Optional[TrainingJob]:
+        job = self.get_job(job_id)
+        if job is None:
+            return None
+        if not self._job_visible_to_owner(job, ownership):
+            return None
+        return job
+
     def list_jobs(
         self,
         status: Optional[JobStatus] = None,
         limit: int = 20,
+        ownership: Any = None,
     ) -> List[TrainingJob]:
         with self._lock:
             jobs = list(self._jobs.values())
         if status is not None:
             jobs = [j for j in jobs if j.status == status]
+        jobs = [j for j in jobs if self._job_visible_to_owner(j, ownership)]
         return jobs[:limit]
 
     # ── cancel ──
 
-    def cancel_job(self, job_id: str) -> bool:
-        job = self.get_job(job_id)
-        if job is None or job.status != JobStatus.RUNNING:
+    def cancel_job(self, job_id: str, ownership: Any = None) -> bool:
+        job = self.get_job_for_owner(job_id, ownership)
+        if job is None or job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
             return False
 
         task = self._tasks.get(job_id)
         event = self._cancel_events.get(job_id)
+        if job.status == JobStatus.PENDING and job.started_at is None:
+            if event is not None:
+                event.set()
+            if task is not None and not task.done():
+                task.cancel()
+            job.status = JobStatus.CANCELLED
+            job.completed_at = job.completed_at or _now_iso()
+            job.progress.current_stage = "cancelled"
+            job.progress.status_message = "Cancelled before execution started"
+            self._schedule_persist(job)
+            return True
         if event is not None:
             event.set()
         elif task is None or task.done():
             # Persisted orphan record: no live worker remains to stop, so mark it cancelled.
             job.status = JobStatus.CANCELLED
             job.completed_at = job.completed_at or _now_iso()
+            job.progress.current_stage = "cancelled"
+            job.progress.status_message = "Training cancelled"
             self._schedule_persist(job)
             return True
         else:
@@ -260,10 +324,14 @@ class TrainingJobManager:
     def get_cancel_event(self, job_id: str) -> Optional[threading.Event]:
         return self._cancel_events.get(job_id)
 
-    async def acancel_job(self, job_id: str) -> bool:
-        job = self.get_job(job_id)
+    async def acancel_job(self, job_id: str, ownership: Any = None) -> bool:
+        job = self.get_job_for_owner(job_id, ownership)
         if job is None:
-            persisted = await self._persistence.get_job(self._namespace, job_id)
+            persisted = await self._persistence.get_job(
+                self._namespace,
+                job_id,
+                ownership=ownership,
+            )
             if persisted is None:
                 return False
             job = TrainingJob.model_validate(persisted)
@@ -275,6 +343,17 @@ class TrainingJobManager:
 
         event = self._cancel_events.get(job_id)
         task = self._tasks.get(job_id)
+        if job.status == JobStatus.PENDING and job.started_at is None:
+            if event is not None:
+                event.set()
+            if task is not None and not task.done():
+                task.cancel()
+            job.status = JobStatus.CANCELLED
+            job.completed_at = job.completed_at or _now_iso()
+            job.progress.current_stage = "cancelled"
+            job.progress.status_message = "Cancelled before execution started"
+            self._schedule_persist(job)
+            return True
         if event is not None:
             event.set()
             self._schedule_persist(job)
@@ -286,13 +365,26 @@ class TrainingJobManager:
         # Persisted orphan record or queued job with no live worker: cancel in place.
         job.status = JobStatus.CANCELLED
         job.completed_at = job.completed_at or _now_iso()
+        job.progress.current_stage = "cancelled"
+        job.progress.status_message = "Training cancelled"
         self._schedule_persist(job)
         return True
 
-    async def adelete_job(self, job_id: str) -> bool:
-        job = self.get_job(job_id)
+    async def adelete_job(self, job_id: str, ownership: Any = None) -> bool:
+        job = self.get_job_for_owner(job_id, ownership)
         if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
             return False
+        if job is None:
+            persisted = await self._persistence.get_job(
+                self._namespace,
+                job_id,
+                ownership=ownership,
+            )
+            if persisted is None:
+                return False
+            persisted_job = TrainingJob.model_validate(persisted)
+            if persisted_job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+                return False
 
         removed = False
         with self._lock:
@@ -300,7 +392,11 @@ class TrainingJobManager:
             self._tasks.pop(job_id, None)
             self._cancel_events.pop(job_id, None)
 
-        persisted_removed = await self._persistence.delete_job(self._namespace, job_id)
+        persisted_removed = await self._persistence.delete_job(
+            self._namespace,
+            job_id,
+            ownership=ownership,
+        )
         return removed or persisted_removed
 
     # ── progress update ──
@@ -317,30 +413,57 @@ class TrainingJobManager:
             job.progress.last_updated = _now_iso()
         self._schedule_persist(job)
 
-    async def aget_job(self, job_id: str) -> Optional[TrainingJob]:
-        job = self.get_job(job_id)
+    async def aget_job(self, job_id: str, ownership: Any = None) -> Optional[TrainingJob]:
+        job = self.get_job_for_owner(job_id, ownership)
         if job is not None:
             return job
 
-        persisted = await self._persistence.get_job(self._namespace, job_id)
+        persisted = await self._persistence.get_job(
+            self._namespace,
+            job_id,
+            ownership=ownership,
+        )
         if persisted is None:
             return None
-        return TrainingJob.model_validate(persisted)
+        job = TrainingJob.model_validate(persisted)
+        if not self._job_visible_to_owner(job, ownership):
+            return None
+        return job
 
     async def alist_jobs(
         self,
         status: Optional[JobStatus] = None,
         limit: int = 20,
+        ownership: Any = None,
     ) -> List[TrainingJob]:
-        jobs = self.list_jobs(status=status, limit=limit)
-        persisted = await self._persistence.list_jobs(
-            self._namespace,
-            status=status.value if status is not None else None,
-            limit=limit,
+        jobs = self.list_jobs(status=status, limit=limit, ownership=ownership)
+        persisted: List[Dict[str, Any]] = []
+        timeout_s = (
+            _PERSISTED_JOB_LIST_TIMEOUT_WITH_LOCAL_JOBS_S
+            if jobs
+            else _PERSISTED_JOB_LIST_TIMEOUT_WITHOUT_LOCAL_JOBS_S
         )
+        try:
+            persisted = await asyncio.wait_for(
+                self._persistence.list_jobs(
+                    self._namespace,
+                    status=status.value if status is not None else None,
+                    limit=limit,
+                    ownership=ownership,
+                ),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Timed out loading persisted %s jobs after %.2fs; returning in-memory job state only",
+                self._namespace,
+                timeout_s,
+            )
         merged: Dict[str, TrainingJob] = {job.job_id: job for job in jobs}
         for item in persisted:
             job = TrainingJob.model_validate(item)
+            if not self._job_visible_to_owner(job, ownership):
+                continue
             merged.setdefault(job.job_id, job)
 
         return sorted(

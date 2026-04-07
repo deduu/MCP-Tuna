@@ -7,6 +7,8 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+from shared.ownership import effective_ownership_context, normalize_ownership_context
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -322,7 +324,9 @@ class TrainingRunArtifacts:
         *,
         output_dir: str,
         trainer: str,
+        ownership: Any = None,
     ) -> None:
+        ownership = effective_ownership_context(ownership).model_dump(exclude_none=True)
         self.output_path = Path(output_dir)
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.trainer = trainer
@@ -338,6 +342,7 @@ class TrainingRunArtifacts:
                 "job_id": None,
                 "note": None,
             },
+            "ownership": ownership,
             "model": {
                 "base_model": None,
                 "adapter_path": None,
@@ -355,6 +360,7 @@ class TrainingRunArtifacts:
             "updated_at": self.created_at,
             "completed_at": None,
             "output_dir": str(self.output_path),
+            "ownership": ownership,
             "model_path": None,
             "error": None,
             "artifacts": {},
@@ -399,10 +405,14 @@ class TrainingRunArtifacts:
         run_source: Optional[str] = None,
         job_id: Optional[str] = None,
         note: Optional[str] = None,
+        ownership: Any = None,
     ) -> dict[str, Any]:
         dataset_diagnostics = summarize_training_dataset(
             dataset,
             dataset_path=dataset_path,
+        )
+        normalized_ownership = normalize_ownership_context(ownership).model_dump(
+            exclude_none=True
         )
         self._manifest = {
             "schema_version": 1,
@@ -414,6 +424,7 @@ class TrainingRunArtifacts:
                 "job_id": _readable_path(job_id),
                 "note": _readable_path(note),
             },
+            "ownership": normalized_ownership,
             "model": {
                 "base_model": _readable_path(base_model),
                 "adapter_path": _readable_path(adapter_path),
@@ -431,6 +442,7 @@ class TrainingRunArtifacts:
             "updated_at": self.created_at,
             "completed_at": None,
             "output_dir": str(self.output_path),
+            "ownership": normalized_ownership,
             "model_path": None,
             "error": None,
             "artifacts": {},
@@ -480,6 +492,7 @@ class TrainingRunArtifacts:
                     "trainer": self.trainer,
                     "error": error,
                     "output_dir": str(self.output_path),
+                    "ownership": self._manifest.get("ownership") or {},
                     "updated_at": self._status["updated_at"],
                 },
             )
@@ -502,12 +515,15 @@ class TrainingRunArtifacts:
     def _write_summary(self) -> None:
         dataset = self._manifest.get("dataset") or {}
         invocation = self._manifest.get("invocation") or {}
+        ownership = self._manifest.get("ownership") or {}
         lines = [
             "# Training Run Summary",
             "",
             f"- Trainer: {self.trainer}",
             f"- Status: {self._status.get('state', 'unknown')}",
             f"- Output dir: {self.output_path}",
+            f"- Workspace: {ownership.get('workspace_id') or 'not recorded'}",
+            f"- User: {ownership.get('user_id') or 'not recorded'}",
             f"- Base model: {self._manifest.get('model', {}).get('base_model') or 'unknown'}",
             f"- Adapter init: {self._manifest.get('model', {}).get('adapter_path') or 'none'}",
             f"- Dataset path: {dataset.get('dataset_path') or 'not recorded'}",

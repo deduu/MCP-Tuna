@@ -178,6 +178,33 @@ async def test_save_empty_dataset(svc: DatasetService, tmp_path: Path):
     assert result["row_count"] == 0
 
 
+async def test_save_persists_ownership_metadata(
+    svc: DatasetService,
+    sft_data: list,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    persistence = AsyncMock()
+    object_storage = AsyncMock()
+    object_storage.enabled = False
+    monkeypatch.setattr(svc, "_persistence", persistence)
+    monkeypatch.setattr(svc, "_object_storage", object_storage)
+
+    out = tmp_path / "owned.jsonl"
+    result = await svc.save(
+        sft_data,
+        str(out),
+        ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
+    )
+
+    assert result["success"] is True
+    persisted_payload = persistence.upsert_dataset.await_args.args[0]
+    assert persisted_payload["ownership"] == {
+        "workspace_id": "alpha-ws",
+        "user_id": "user-1",
+    }
+
+
 # ---------------------------------------------------------------------------
 # load
 # ---------------------------------------------------------------------------
@@ -277,6 +304,32 @@ async def test_info_returns_metadata(svc: DatasetService, sft_data: list, tmp_pa
     assert meta["size_bytes"] > 0
 
 
+async def test_info_preserves_owned_dataset_metadata(
+    svc: DatasetService,
+    sft_data: list,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    out = tmp_path / "owned-info.jsonl"
+    await svc.save(sft_data, str(out))
+
+    persistence = AsyncMock()
+    persistence.get_dataset.return_value = {
+        "file_path": str(out.resolve()),
+        "ownership": {"workspace_id": "alpha-ws", "user_id": "user-2"},
+    }
+    persistence.upsert_dataset.return_value = True
+    monkeypatch.setattr(svc, "_persistence", persistence)
+
+    result = await svc.info(str(out), ownership={"workspace_id": "alpha-ws"})
+
+    assert result["success"] is True
+    assert result["metadata"]["ownership"] == {
+        "workspace_id": "alpha-ws",
+        "user_id": "user-2",
+    }
+
+
 async def test_info_detects_sft_technique(svc: DatasetService, sft_data: list, tmp_path: Path):
     out = tmp_path / "sft.jsonl"
     await svc.save(sft_data, str(out))
@@ -366,7 +419,10 @@ async def test_delete_missing_file_prunes_persisted_dataset_record(
 
     assert result["success"] is True
     assert result["record_deleted"] is True
-    persistence.mark_dataset_deleted.assert_awaited_once_with(str(missing.resolve()))
+    persistence.mark_dataset_deleted.assert_awaited_once_with(
+        str(missing.resolve()),
+        ownership=None,
+    )
     object_storage.delete_object.assert_awaited_once_with("datasets/missing.jsonl")
 
 

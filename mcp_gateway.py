@@ -17,6 +17,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -39,6 +40,8 @@ from shared.config import (
     ModelEvaluationConfig,
 )
 from shared.persistence import get_persistence_service
+from shared.owned_paths import resolve_owned_output_path
+from shared.ownership import effective_ownership_context
 from shared.training_defaults import (
     DEFAULT_DPO_MAX_LENGTH,
     DEFAULT_DPO_MAX_PROMPT_LENGTH,
@@ -325,7 +328,9 @@ class TunaGateway:
                 quantization = quantization or deployment.get("quantization")
                 provider = deployment.get("provider")
                 inference_service = deployment.get("inference_service")
-                use_tokenizer_chat_template = True
+                # Reuse the live deployment provider when one exists so deployment chat
+                # does not trigger a second model load on first message.
+                use_tokenizer_chat_template = provider is None
         elif resolved_model_path:
             use_tokenizer_chat_template = True
 
@@ -755,7 +760,11 @@ class TunaGateway:
             entries = []
             for entry in sorted(
                 target_path.iterdir(),
-                key=lambda item: (not item.is_dir(), item.name.lower()),
+                key=lambda item: (
+                    not item.is_dir(),
+                    -item.stat().st_mtime,
+                    item.name.lower(),
+                ),
             ):
                 rel_path = entry.relative_to(root_path)
                 entries.append({
@@ -764,6 +773,10 @@ class TunaGateway:
                     "absolute_path": str(entry),
                     "type": "directory" if entry.is_dir() else "file",
                     "selectable": entry.is_dir(),
+                    "modified_at": datetime.fromtimestamp(
+                        entry.stat().st_mtime,
+                        tz=timezone.utc,
+                    ).isoformat(),
                 })
 
             current_rel = "." if target_path == root_path else str(
@@ -980,6 +993,10 @@ class TunaGateway:
         return "jsonl"
 
     @staticmethod
+    def _resolve_training_output_dir(output_dir: str) -> str:
+        return str(resolve_owned_output_path(output_dir, effective_ownership_context()))
+
+    @staticmethod
     def _training_artifact_context(
         *,
         run_source: str,
@@ -994,6 +1011,7 @@ class TunaGateway:
             context["job_id"] = job_id
         if note:
             context["artifact_note"] = note
+        context["ownership"] = effective_ownership_context().model_dump(exclude_none=True)
         return context
 
     @staticmethod
@@ -3368,11 +3386,12 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="sft",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "num_epochs": num_epochs, "lora_r": lora_r,
                     "batch_size": per_device_train_batch_size,
@@ -3387,7 +3406,7 @@ class TunaGateway:
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_model(
                     dataset=dataset_obj,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     num_epochs=num_epochs,
                     use_lora=use_lora,
@@ -3460,11 +3479,12 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="vlm_sft",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "num_epochs": num_epochs,
                     "lora_r": lora_r,
@@ -3479,7 +3499,7 @@ class TunaGateway:
                 return await self.finetuner.train_vlm_model(
                     dataset=dataset_obj,
                     dataset_path=dataset_path,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     num_epochs=num_epochs,
                     use_lora=use_lora,
@@ -3537,6 +3557,7 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             dataset_obj = load_result["dataset_object"]
             num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
                 technique="dpo",
@@ -3549,7 +3570,7 @@ class TunaGateway:
             job = self.job_manager.create_job(
                 trainer_type="dpo",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "adapter_path": adapter_path,
                     "num_epochs": num_epochs,
@@ -3566,7 +3587,7 @@ class TunaGateway:
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_dpo_model(
                     dataset=dataset_obj,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     adapter_path=adapter_path,
                     num_epochs=num_epochs,
@@ -3633,6 +3654,7 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             dataset_obj = load_result["dataset_object"]
             num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
                 technique="grpo",
@@ -3645,7 +3667,7 @@ class TunaGateway:
             job = self.job_manager.create_job(
                 trainer_type="grpo",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "adapter_path": adapter_path,
                     "num_epochs": num_epochs,
@@ -3661,7 +3683,7 @@ class TunaGateway:
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_grpo_model(
                     dataset=dataset_obj,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     adapter_path=adapter_path,
                     num_epochs=num_epochs,
@@ -3727,6 +3749,7 @@ class TunaGateway:
             if not load_result["success"]:
                 return json.dumps(load_result, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             dataset_obj = load_result["dataset_object"]
             num_epochs, learning_rate, auto_tune_summary = self._resolve_preference_training_defaults(
                 technique="kto",
@@ -3739,7 +3762,7 @@ class TunaGateway:
             job = self.job_manager.create_job(
                 trainer_type="kto",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "num_epochs": num_epochs,
                     "beta": beta,
@@ -3754,7 +3777,7 @@ class TunaGateway:
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_kto_model(
                     dataset=dataset_obj,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     adapter_path=adapter_path,
                     num_epochs=num_epochs,
@@ -3819,11 +3842,12 @@ class TunaGateway:
             if not curriculum_inputs["success"]:
                 return json.dumps(curriculum_inputs, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             resolved_base = base_model or self.finetuner.config.base_model
             job = self.job_manager.create_job(
                 trainer_type="curriculum",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={
                     "num_stages": num_stages,
                     "epochs_per_stage": num_epochs_per_stage,
@@ -3838,7 +3862,7 @@ class TunaGateway:
                 return await self.finetuner.train_curriculum_model(
                     dataset=dataset_obj,
                     stage_datasets=stage_dataset_objs,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     num_stages=num_stages,
                     num_epochs_per_stage=num_epochs_per_stage,
@@ -3884,19 +3908,20 @@ class TunaGateway:
             except json.JSONDecodeError as e:
                 return json.dumps({"success": False, "error": f"Invalid stages JSON: {e}"}, indent=2)
 
+            resolved_output_dir = self._resolve_training_output_dir(output_dir)
             resolved_base = base_model or self.finetuner.config.base_model
             techniques = [s.get("technique", "?") for s in stages_list]
             job = self.job_manager.create_job(
                 trainer_type="sequential",
                 base_model=resolved_base,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 config_summary={"techniques": techniques, "num_stages": len(stages_list)},
             )
 
             async def _run_training(extra_callbacks=None):
                 return await self.finetuner.train_sequential(
                     stages=stages_list,
-                    output_dir=output_dir,
+                    output_dir=resolved_output_dir,
                     base_model=base_model,
                     merge_between_stages=merge_between_stages,
                     extra_callbacks=extra_callbacks,
