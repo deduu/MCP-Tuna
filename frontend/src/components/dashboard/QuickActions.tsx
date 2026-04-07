@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router'
 import { Card, CardContent } from '@/components/ui/card'
 import { Sparkles, FlaskConical, Rocket, GitBranch, MessageSquare, BarChart3 } from 'lucide-react'
+import { FINE_TUNE_QUICK_ACTION_DESCRIPTION } from '@/lib/training-copy'
 
 const ACTIONS = [
   {
@@ -12,7 +13,7 @@ const ACTIONS = [
   },
   {
     label: 'Train Model',
-    description: 'Fine-tune with LoRA/QLoRA',
+    description: FINE_TUNE_QUICK_ACTION_DESCRIPTION,
     icon: FlaskConical,
     path: '/training',
     color: 'var(--color-ns-finetune)',

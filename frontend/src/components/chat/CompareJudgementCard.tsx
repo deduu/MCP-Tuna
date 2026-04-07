@@ -25,7 +25,7 @@ export function CompareJudgementCard({
         : 'outline'
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/70 bg-secondary/20 px-3 py-2">
+    <div className="space-y-2 rounded-lg border border-border/90 bg-muted px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={winnerVariant}>{winnerLabel}</Badge>
         {judgement.confidence != null && (

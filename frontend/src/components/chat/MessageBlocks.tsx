@@ -16,7 +16,7 @@ export function MessageBlocks({ blocks, className }: MessageBlocksProps) {
           {imageBlocks.map((block) => (
             <figure
               key={`${block.image_path}-${block.file_name ?? ''}`}
-              className="overflow-hidden rounded-lg border border-border/70 bg-secondary/20"
+              className="overflow-hidden rounded-lg border border-border/90 bg-secondary"
             >
               {block.preview_url ? (
                 <img

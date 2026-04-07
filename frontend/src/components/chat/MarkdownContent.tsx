@@ -20,13 +20,13 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
             const isBlock = className?.includes('language-')
             if (isBlock) {
               return (
-                <pre className="bg-background/80 border rounded-lg p-3 overflow-x-auto my-2">
+                <pre className="my-2 overflow-x-auto rounded-lg border border-border/90 bg-card p-3">
                   <code className="text-xs font-mono">{children}</code>
                 </pre>
               )
             }
             return (
-              <code className="bg-background/80 border rounded px-1.5 py-0.5 text-xs font-mono">
+              <code className="rounded border border-border/90 bg-card px-1.5 py-0.5 text-xs font-mono">
                 {children}
               </code>
             )

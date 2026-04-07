@@ -23,6 +23,12 @@ import { CompareTargetConfigurator } from './CompareTargetConfigurator'
 import { AVAILABLE_CHAT_MODELS } from './chat-model-options'
 import { useChatCompareStore, type CompareMetrics, type CompareTargetConfig } from '@/stores/chatCompare'
 
+const COMPARE_STARTERS = [
+  'Summarize the strongest and weakest parts of each answer.',
+  'Which target gives the clearest step-by-step explanation for this task?',
+  'Compare how each target handles concise instruction-following.',
+]
+
 function createAgentTarget(index: number): CompareTargetConfig {
   const model = AVAILABLE_CHAT_MODELS[index % AVAILABLE_CHAT_MODELS.length] ?? AVAILABLE_CHAT_MODELS[0]
   return {
@@ -107,6 +113,11 @@ export function CompareChatView() {
     resolvedSessions.every((session) =>
       session.target.kind === 'agent' ? Boolean(session.target.model) : Boolean(session.target.deploymentId),
     )
+  const showStarterPrompts =
+    !anyMessages &&
+    input.trim().length === 0 &&
+    imageBlocks.length === 0 &&
+    !isRunning
 
   useEffect(() => {
     if (allTargetsConfigured) {
@@ -284,10 +295,14 @@ export function CompareChatView() {
     }
   }
 
+  function applyStarterPrompt(prompt: string) {
+    setInput(prompt)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        <div className="rounded-2xl border bg-card/95">
+        <div className="rounded-2xl border border-border/90 bg-card shadow-[0_20px_54px_rgba(0,0,0,0.3)]">
           <div className="px-5 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
@@ -335,7 +350,7 @@ export function CompareChatView() {
                     key={session.target.id}
                     type="button"
                     onClick={() => setIsSetupCollapsed(false)}
-                    className="rounded-xl border border-border/70 bg-secondary/15 px-4 py-3 text-left transition-colors hover:bg-secondary/25"
+                    className="rounded-xl border border-border/90 bg-secondary px-4 py-3 text-left transition-colors hover:bg-accent"
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
                       {session.target.kind === 'agent' ? (
@@ -397,7 +412,27 @@ export function CompareChatView() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-5xl rounded-2xl border bg-card/95 p-4 shadow-sm">
+      <div className="mx-auto w-full max-w-5xl rounded-2xl border border-border/90 bg-card p-4 shadow-[0_20px_48px_rgba(0,0,0,0.28)]">
+        {showStarterPrompts && (
+          <div className="mb-4 space-y-2">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              Start With
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {COMPARE_STARTERS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => applyStarterPrompt(prompt)}
+                  className="rounded-full border border-border/90 bg-secondary px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:border-primary/35 hover:bg-accent hover:text-foreground"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{resolvedSessions.length} targets</Badge>
@@ -422,7 +457,7 @@ export function CompareChatView() {
               {imageBlocks.map((block, index) => (
                 <div
                   key={`${block.image_path}-${index}`}
-                  className="relative overflow-hidden rounded-lg border border-border/70 bg-secondary/20"
+                  className="relative overflow-hidden rounded-lg border border-border/90 bg-secondary"
                 >
                   {block.preview_url ? (
                     <img

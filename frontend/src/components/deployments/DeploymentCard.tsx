@@ -19,6 +19,7 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onRedeploy, o
   const modelName = deployment.name?.trim() || deployment.model_path.split('/').pop() || deployment.model_path
   const shortId = deployment.deployment_id.slice(0, 8)
   const lastUpdated = formatTimeAgo(deployment.updated_at ?? deployment.created_at)
+  const baseModelName = deployment.model_path.split('/').pop() ?? deployment.model_path
 
   const copyEndpoint = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -46,16 +47,18 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onRedeploy, o
   return (
     <Card
       className={cn(
-        'cursor-pointer transition-colors hover:border-primary/50',
-        isSelected && 'border-primary',
+        'cursor-pointer border-border/90 bg-card shadow-[0_12px_28px_rgba(0,0,0,0.18)] transition-all hover:border-primary/45 hover:bg-accent/30 hover:shadow-[0_16px_34px_rgba(0,0,0,0.24)]',
+        isSelected && 'border-primary/50 bg-primary/10 shadow-[0_18px_38px_rgba(59,130,246,0.12)]',
       )}
       onClick={onSelect}
     >
       <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex flex-col gap-1.5 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-muted-foreground">{shortId}</span>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-border/80 bg-muted px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+                {shortId}
+              </span>
               <Badge
                 className={cn(
                   deployment.type === 'mcp'
@@ -72,42 +75,79 @@ export function DeploymentCard({ deployment, isSelected, onSelect, onRedeploy, o
                 {deployment.modality === 'vision-language' ? 'VLM' : 'Text'}
               </Badge>
             </div>
-            <p className="text-sm font-medium truncate">{modelName}</p>
-            {deployment.name && (
-              <p className="text-xs text-muted-foreground truncate">{deployment.model_path.split('/').pop() ?? deployment.model_path}</p>
-            )}
+
+            <div className="space-y-1">
+              <p className="truncate text-sm font-medium">{modelName}</p>
+              {deployment.name && (
+                <p className="truncate text-xs text-muted-foreground">{baseModelName}</p>
+              )}
+            </div>
+
             {lastUpdated && (
               <p className="text-[11px] text-muted-foreground">
                 {deployment.status === 'stopped' ? 'Stopped' : 'Updated'} {lastUpdated}
               </p>
             )}
-            <div className="flex items-center gap-1">
-              <code className="text-xs text-muted-foreground truncate">{deployment.endpoint}</code>
-              <button
-                onClick={copyEndpoint}
-                className="shrink-0 p-0.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <Clipboard className="h-3 w-3" />
-              </button>
+
+            <div className="rounded-lg border border-border/80 bg-muted px-3 py-2">
+              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Endpoint
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {deployment.endpoint}
+                </code>
+                <button
+                  onClick={copyEndpoint}
+                  className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                  title="Copy endpoint"
+                >
+                  <Clipboard className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex shrink-0 items-center gap-1">
             {deployment.status === 'stopped' && (
               <>
-                <Button variant="outline" size="icon" className="h-7 w-7" onClick={(e) => handleRedeploy(e, 'mcp')} title="Redeploy as MCP">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 border-border/90 bg-secondary"
+                  onClick={(e) => handleRedeploy(e, 'mcp')}
+                  title="Redeploy as MCP"
+                >
                   <RotateCcw className="h-3 w-3" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleRedeploy(e, 'api')} title="Redeploy as API">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={(e) => handleRedeploy(e, 'api')}
+                  title="Redeploy as API"
+                >
                   <span className="text-[10px] font-semibold">API</span>
                 </Button>
               </>
             )}
             {deployment.status === 'running' && (
-              <Button variant="outline" size="icon" className="h-7 w-7" onClick={handleStop}>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 border-border/90 bg-secondary"
+                onClick={handleStop}
+                title="Stop deployment"
+              >
                 <Square className="h-3 w-3" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={handleUndeploy}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={handleUndeploy}
+              title="Undeploy"
+            >
               <Trash2 className="h-3 w-3" />
             </Button>
           </div>

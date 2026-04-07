@@ -1,9 +1,7 @@
 import { useMemo } from 'react'
 import { DashboardHero } from './DashboardHero'
-import { DashboardReadinessPanel } from './DashboardReadinessPanel'
+import { DashboardOperationsPanel } from './DashboardOperationsPanel'
 import { DashboardRecentActivity } from './DashboardRecentActivity'
-import { DashboardStatsGrid } from './DashboardStatsGrid'
-import { DashboardWorkflowSection } from './DashboardWorkflowSection'
 import { SystemStatusCard } from './SystemStatusCard'
 import { useToolCount, useToolRegistry } from '@/api/hooks/useToolRegistry'
 import { useDatasets } from '@/api/hooks/useDatasets'
@@ -48,18 +46,6 @@ export function DashboardPage() {
   const setupIssues = setup?.checks.filter((check) => check.status !== 'pass') ?? []
   const warningCount = (health?.warnings.length ?? 0) + setupIssues.length
   const vlmToolCount = tools?.filter((tool) => tool.name.includes('vlm')).length ?? 0
-  const reviewPath =
-    setupIssues.length === 1 && setupIssues[0].action_path
-      ? setupIssues[0].action_path
-      : warningCount > 0
-        ? '/settings#diagnostics'
-        : '/settings'
-  const reviewDetail =
-    setupIssues.length === 1
-      ? setupIssues[0].detail ?? `${setupIssues[0].name} needs attention`
-      : health?.warnings.length === 1 && setupIssues.length === 0
-        ? health.warnings[0]
-        : 'Warnings or setup checks need attention'
 
   const namespaceSummary = Object.entries(toolsByNamespace)
     .map(([namespace, count]) => ({
@@ -82,16 +68,6 @@ export function DashboardPage() {
         completedJobs={completedJobs}
       />
 
-      <DashboardStatsGrid
-        activeRuns={activeRuns}
-        activeDeployments={activeDeployments}
-        readyDatasets={readyDatasets}
-        warningCount={warningCount}
-        completedJobs={completedJobs}
-        reviewPath={reviewPath}
-        reviewDetail={reviewDetail}
-      />
-
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
         <div className="space-y-6">
           <DashboardRecentActivity
@@ -100,19 +76,16 @@ export function DashboardPage() {
             deployments={deployments}
             datasets={datasets}
           />
-          <SystemStatusCard />
+          <SystemStatusCard compact />
         </div>
 
-        <div className="space-y-6">
-          <DashboardWorkflowSection />
-          <DashboardReadinessPanel
-            namespaceSummary={namespaceSummary}
-            setupIssues={setupIssues}
-            warnings={health?.warnings ?? []}
-            toolCount={toolCount}
-            vlmToolCount={vlmToolCount}
-          />
-        </div>
+        <DashboardOperationsPanel
+          namespaceSummary={namespaceSummary}
+          setupIssues={setupIssues}
+          warnings={health?.warnings ?? []}
+          toolCount={toolCount}
+          vlmToolCount={vlmToolCount}
+        />
       </div>
     </div>
   )

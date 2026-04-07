@@ -34,7 +34,7 @@ export function DeploymentList({ deployments, selectedId, onSelect, onRedeploy, 
     return (
       <div className="flex flex-col gap-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-36 w-full rounded-xl" />
+          <Skeleton key={i} className="h-40 w-full rounded-xl bg-muted" />
         ))}
       </div>
     )
@@ -42,7 +42,7 @@ export function DeploymentList({ deployments, selectedId, onSelect, onRedeploy, 
 
   if (deployments.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed p-8 text-center">
+      <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-secondary p-8 text-center shadow-sm shadow-black/20">
         <p className="text-sm font-medium text-muted-foreground">No deployments</p>
         <p className="text-xs text-muted-foreground">
           Deploy a model as an MCP server or API endpoint to get started.

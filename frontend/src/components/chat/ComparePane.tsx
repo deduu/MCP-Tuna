@@ -74,7 +74,7 @@ export function ComparePane({
   }
 
   return (
-    <div className="flex min-h-[420px] flex-col overflow-hidden rounded-2xl border bg-card">
+    <div className="flex min-h-[420px] flex-col overflow-hidden rounded-2xl border border-border/90 bg-card shadow-[0_16px_34px_rgba(0,0,0,0.24)]">
       <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -156,7 +156,7 @@ function CompareUserMessage({ message }: { message: CompareMessage }) {
       {message.parts ? (
         <MessageBlocks blocks={message.parts} />
       ) : (
-        <div className="whitespace-pre-wrap rounded-xl border border-border/70 bg-secondary/20 px-4 py-3 text-sm leading-6">
+        <div className="whitespace-pre-wrap rounded-xl border border-border/90 bg-secondary px-4 py-3 text-sm leading-6">
           {message.content}
         </div>
       )}
@@ -190,7 +190,7 @@ function CompareAssistantMessage({
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         <span>Response</span>
         {message.modelId && (
-          <span className="truncate rounded bg-secondary/20 px-1.5 py-0.5 normal-case text-[10px]">
+          <span className="truncate rounded bg-secondary px-1.5 py-0.5 normal-case text-[10px]">
             {message.modelId}
           </span>
         )}
@@ -215,7 +215,7 @@ function CompareAssistantMessage({
       <div
         className={cn(
           'min-h-[120px] rounded-xl border px-4 py-3',
-          message.error ? 'border-destructive/50 bg-destructive/5' : 'border-border/70',
+          message.error ? 'border-destructive/50 bg-destructive/10' : 'border-border/90 bg-muted',
         )}
       >
         {message.content ? (

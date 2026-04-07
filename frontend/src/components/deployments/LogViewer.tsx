@@ -15,7 +15,7 @@ export function LogViewer({ logs, isLoading }: LogViewerProps) {
 
   if (isLoading) {
     return (
-      <div className="rounded-lg bg-black/40 p-4 max-h-80 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto rounded-xl border border-border/90 bg-[#0b1016] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <p className="text-sm font-mono text-muted-foreground animate-pulse">Loading logs...</p>
       </div>
     )
@@ -23,14 +23,14 @@ export function LogViewer({ logs, isLoading }: LogViewerProps) {
 
   if (logs.length === 0) {
     return (
-      <div className="rounded-lg bg-black/40 p-4">
+      <div className="rounded-xl border border-border/90 bg-[#0b1016] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <p className="text-sm font-mono text-muted-foreground">No logs available</p>
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg bg-black/40 p-4 max-h-80 overflow-y-auto">
+    <div className="max-h-80 overflow-y-auto rounded-xl border border-border/90 bg-[#0b1016] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
       {logs.map((line, i) => (
         <p key={i} className={cn('text-xs font-mono leading-5', colorForLogLine(line))}>
           {line}

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useSystemHealth, useSystemResources, useSetupCheck } from '@/api/hooks/useSystemResources'
 import type { GPUInfo } from '@/api/types'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
@@ -50,6 +50,57 @@ function InlineMeta({ children }: { children: ReactNode }) {
     <span className="rounded-full border border-border/60 bg-secondary/30 px-2 py-0.5 text-[11px] text-muted-foreground">
       {children}
     </span>
+  )
+}
+
+function formatUsagePercent(used: number, total: number) {
+  if (total <= 0) return 'Waiting for data'
+  return `${Math.round((used / total) * 100)}% used`
+}
+
+function formatAttentionSummary(warningCount: number, setupIssueCount: number) {
+  const segments: string[] = []
+
+  if (warningCount > 0) {
+    segments.push(`${warningCount} live warning${warningCount === 1 ? '' : 's'}`)
+  }
+
+  if (setupIssueCount > 0) {
+    segments.push(`${setupIssueCount} prerequisite${setupIssueCount === 1 ? '' : 's'} to review`)
+  }
+
+  return segments.join(' and ')
+}
+
+function CompactResourceTile({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  color,
+}: {
+  icon: typeof Cpu
+  label: string
+  value: string
+  detail: string
+  color: string
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-secondary/10 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border/60"
+            style={{ backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)` }}
+          >
+            <Icon className="h-4 w-4" style={{ color }} />
+          </div>
+          <span className="text-sm font-medium">{label}</span>
+        </div>
+        <span className="text-sm font-semibold">{value}</span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+    </div>
   )
 }
 
@@ -129,7 +180,12 @@ function GPUInventory({ gpus }: { gpus: GPUInfo[] }) {
   )
 }
 
-export function SystemStatusCard() {
+interface SystemStatusCardProps {
+  compact?: boolean
+}
+
+export function SystemStatusCard({ compact = false }: SystemStatusCardProps) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const resourcesQuery = useSystemResources()
   const healthQuery = useSystemHealth()
@@ -176,6 +232,7 @@ export function SystemStatusCard() {
   const disk = resources.disk
   const lastUpdated = Math.max(resourcesUpdatedAt, healthUpdatedAt)
   const warnings = health?.warnings ?? []
+  const setupIssues = setup?.checks.filter((check) => check.status !== 'pass') ?? []
   const healthStatus = healthError ? 'yellow' : health?.status
   const healthText = healthError ? 'Health Unavailable' : healthLabel(health?.status)
 
@@ -211,6 +268,134 @@ export function SystemStatusCard() {
   const gpuUsed = gpu?.vram_used_gb ?? 0
   const gpuTotal = gpu?.vram_total_gb ?? 0
   const gpuReserved = gpu?.vram_reserved_gb ?? 0
+  const attentionCount = warnings.length + setupIssues.length
+
+  if (compact) {
+    const gpuValue = gpu?.available ? `${gpuUsed.toFixed(1)} / ${gpuTotal.toFixed(1)} GB` : 'CPU mode'
+    const gpuDetail = gpu?.available
+      ? `${formatUsagePercent(gpuUsed, gpuTotal)}${gpus.length > 1 ? ` across ${gpus.length} GPUs` : ''}`
+      : 'No GPU detected'
+    const ramValue = `${(ram.used_gb ?? 0).toFixed(1)} / ${(ram.total_gb ?? 0).toFixed(1)} GB`
+    const diskValue = `${(disk.used_gb ?? 0).toFixed(1)} / ${(disk.total_gb ?? 0).toFixed(1)} GB`
+
+    return (
+      <Card className="border-border/70">
+        <CardHeader className="space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <MonitorCheck className="h-4 w-4" />
+                System Status
+              </CardTitle>
+              <CardDescription className="mt-1">
+                Updated {formatTimestamp(lastUpdated)}. Keep live capacity visible without turning the
+                dashboard into a diagnostics page.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Badge variant={healthBadgeVariant(healthStatus)}>{healthText}</Badge>
+              {(resources.gpu_count ?? gpus.length) > 1 && (
+                <Badge variant="outline">{resources.gpu_count ?? gpus.length} GPUs</Badge>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="gap-1.5">
+              <Rocket className="h-3 w-3" />
+              {health?.active_training_jobs ?? 0} jobs
+            </Badge>
+            <Badge variant="outline" className="gap-1.5">
+              <Server className="h-3 w-3" />
+              {health?.active_deployments ?? 0} deployments
+            </Badge>
+            {attentionCount > 0 ? (
+              <Badge variant="warning">{attentionCount} items need review</Badge>
+            ) : (
+              <Badge variant="success">No active warnings</Badge>
+            )}
+            <div className="ml-auto flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={healthFetching}>
+                <RefreshCw className={`h-3.5 w-3.5 ${healthFetching ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={runGpuRecovery}
+                disabled={!gpu?.available || clearGpuCache.isPending}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {clearGpuCache.isPending ? 'Freeing VRAM...' : 'Free VRAM'}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <CompactResourceTile
+              icon={Cpu}
+              label={gpu?.name ?? 'GPU'}
+              value={gpuValue}
+              detail={gpuDetail}
+              color="var(--color-ns-finetune)"
+            />
+            <CompactResourceTile
+              icon={MemoryStick}
+              label="RAM"
+              value={ramValue}
+              detail={`${formatUsagePercent(ram.used_gb ?? 0, ram.total_gb ?? 0)} with ${(ram.free_gb ?? 0).toFixed(1)} GB free`}
+              color="var(--color-ns-generate)"
+            />
+            <CompactResourceTile
+              icon={HardDrive}
+              label="Disk"
+              value={diskValue}
+              detail={`${formatUsagePercent(disk.used_gb ?? 0, disk.total_gb ?? 0)} in ${disk.output_dir}`}
+              color="var(--color-ns-dataset)"
+            />
+          </div>
+
+          {attentionCount > 0 ? (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-amber-200">Needs attention</p>
+                  <p className="mt-1 text-xs text-amber-100/80">
+                    {formatAttentionSummary(warnings.length, setupIssues.length)}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate('/settings#diagnostics')}>
+                  Open diagnostics
+                </Button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {warnings.slice(0, 2).map((warning) => (
+                  <Badge key={warning} variant="warning" title={warning}>
+                    {warning}
+                  </Badge>
+                ))}
+                {setupIssues.slice(0, 3).map((check) => (
+                  <Badge
+                    key={check.name}
+                    variant={check.status === 'fail' ? 'error' : 'warning'}
+                    title={check.detail}
+                  >
+                    {check.name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+              Checks are passing. Open Settings only when you need the full diagnostics view.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card>

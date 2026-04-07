@@ -40,8 +40,8 @@ export function Sidebar() {
     >
       <div
         className={cn(
-          'flex items-center border-b',
-          collapsed ? 'justify-center px-2 py-3' : 'justify-between gap-3 p-4',
+          'flex h-14 items-center border-b',
+          collapsed ? 'justify-center px-2' : 'justify-between gap-3 px-4',
         )}
       >
         {collapsed ? (

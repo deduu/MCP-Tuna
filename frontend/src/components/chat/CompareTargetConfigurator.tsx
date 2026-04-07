@@ -29,7 +29,7 @@ export function CompareTargetConfigurator({
   const deploymentSelectValue = selectedDeployment?.deployment_id ?? ''
 
   return (
-    <Card className="border-border/80">
+    <Card className="border-border/90 bg-secondary shadow-sm shadow-black/20">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -143,7 +143,7 @@ export function CompareTargetConfigurator({
           />
         </div>
 
-        <div className="flex items-center justify-between rounded-md border border-border/70 bg-secondary/20 px-3 py-2">
+        <div className="flex items-center justify-between rounded-md border border-border/90 bg-muted px-3 py-2">
           <div className="text-xs text-muted-foreground">
             {session.target.kind === 'agent'
               ? 'Baseline deltas compare MCP agent behavior and tool usage.'

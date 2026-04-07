@@ -209,8 +209,9 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
         ? 'Messages use the live deployed VLM runtime managed by the gateway.'
         : 'Messages stream from the live deployed model runtime managed by the gateway.'
 
-  const activeConversationUpdatedAt = selectedConversation?.updated_at
-    ?? savedConversations.find((conversation) => conversation.conversation_id === conversationId)?.updated_at
+  const activeConversationUpdatedAt =
+    selectedConversation?.updated_at ??
+    savedConversations.find((conversation) => conversation.conversation_id === conversationId)?.updated_at
 
   const activeConversationLabel = activeConversationUpdatedAt
     ? `${formatTimeAgo(activeConversationUpdatedAt) ?? 'recently'}`
@@ -342,29 +343,54 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-lg">Deployment Chat</CardTitle>
-            <CardDescription>{subtitle}</CardDescription>
+    <Card className="border-border/90 shadow-[0_20px_48px_rgba(0,0,0,0.24)]">
+      <CardHeader className="gap-4 border-b pb-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                className={cn(
+                  deployment.type === 'api'
+                    ? 'border-transparent bg-primary/20 text-primary'
+                    : 'border-transparent bg-[var(--color-ns-host)]/20 text-[var(--color-ns-host)]',
+                )}
+              >
+                {deployment.type === 'api' ? 'API Runtime' : 'MCP Runtime'}
+              </Badge>
+              <Badge variant={deployment.status === 'running' ? 'success' : 'secondary'}>
+                {deployment.status}
+              </Badge>
+              <Badge variant="outline">
+                {deployment.modality === 'vision-language' ? 'Images enabled' : 'Text only'}
+              </Badge>
+            </div>
+
+            <div>
+              <CardTitle className="text-lg">Deployment Chat</CardTitle>
+              <CardDescription>{subtitle}</CardDescription>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex flex-wrap items-center gap-2">
             {conversationId && (
               <Badge variant="outline" className="font-mono text-[10px]">
                 {conversationId}
               </Badge>
             )}
-            <Button variant="ghost" size="sm" onClick={handleClear} disabled={isPending}>
+            {activeConversationLabel && (
+              <span className="text-[11px] text-muted-foreground">Updated {activeConversationLabel}</span>
+            )}
+            <Button variant="ghost" size="sm" onClick={handleClear} disabled={isPending} className="gap-1.5">
               <Trash2 className="h-4 w-4" />
               Clear
             </Button>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <div className="rounded-lg border bg-secondary/10 p-3">
+
+      <CardContent className="space-y-4 pt-4">
+        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="rounded-xl border border-border/90 bg-muted p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <History className="h-4 w-4 text-muted-foreground" />
@@ -381,8 +407,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                 className={cn(
                   'w-full rounded-lg border px-3 py-2 text-left transition-colors',
                   !selectedHistoryConversationId && !conversationId
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border hover:border-primary/40 hover:bg-background/60',
+                    ? 'border-primary/45 bg-primary/15'
+                    : 'border-border/90 bg-secondary hover:border-primary/40 hover:bg-accent',
                 )}
               >
                 <div className="flex items-center gap-2">
@@ -395,13 +421,16 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               </button>
 
               {savedConversations.length === 0 ? (
-                <p className="rounded-lg border border-dashed px-3 py-4 text-xs text-muted-foreground">
+                <p className="rounded-lg border border-dashed border-border/80 bg-secondary px-3 py-4 text-xs text-muted-foreground">
                   No persisted conversations yet for this deployment.
                 </p>
               ) : (
                 savedConversations.map((conversation) => {
                   const isSelected = conversation.conversation_id === (selectedHistoryConversationId ?? conversationId)
-                  const updatedLabel = formatTimeAgo(conversation.updated_at) ?? formatDateTime(conversation.updated_at) ?? 'unknown'
+                  const updatedLabel =
+                    formatTimeAgo(conversation.updated_at) ??
+                    formatDateTime(conversation.updated_at) ??
+                    'unknown'
 
                   return (
                     <button
@@ -412,8 +441,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                       className={cn(
                         'w-full rounded-lg border px-3 py-2 text-left transition-colors',
                         isSelected
-                          ? 'border-primary bg-primary/10'
-                          : 'border-border hover:border-primary/40 hover:bg-background/60',
+                          ? 'border-primary/45 bg-primary/15'
+                          : 'border-border/90 bg-secondary hover:border-primary/40 hover:bg-accent',
                       )}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -428,7 +457,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                               event.stopPropagation()
                               handleRenameConversation(conversation.conversation_id, conversation.title)
                             }}
-                            className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                            className="rounded p-1 text-muted-foreground hover:bg-card hover:text-foreground"
                             title="Rename conversation"
                           >
                             <Pencil className="h-3 w-3" />
@@ -439,7 +468,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                               event.stopPropagation()
                               handleDeleteConversation(conversation.conversation_id)
                             }}
-                            className="rounded p-1 text-muted-foreground hover:bg-background/70 hover:text-destructive"
+                            className="rounded p-1 text-muted-foreground hover:bg-card hover:text-destructive"
                             title="Delete conversation"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -464,25 +493,41 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
           <div className="space-y-4">
             <div
               ref={scrollRef}
-              className="min-h-[280px] max-h-[420px] overflow-y-auto rounded-lg border bg-secondary/20 p-4"
+              className="min-h-[320px] max-h-[480px] overflow-y-auto rounded-xl border border-border/90 bg-muted p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             >
               {isLoadingConversation ? (
-                <p className="text-sm text-muted-foreground">Loading saved conversation…</p>
+                <p className="text-sm text-muted-foreground">Loading saved conversation...</p>
               ) : messages.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Send a prompt to verify the deployed model can answer interactively.
-                </p>
+                <div className="flex h-full items-center justify-center text-center">
+                  <div className="max-w-md space-y-2">
+                    <p className="text-sm font-medium">Send a prompt to verify the runtime.</p>
+                    <p className="text-sm text-muted-foreground">
+                      Use this panel to validate direct responses from the deployed model without
+                      the agent layer in between.
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <div className="space-y-4">
                   {messages.map((message) => (
-                    <div key={message.id} className="space-y-1">
+                    <div key={message.id} className="space-y-1.5">
                       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
                         {message.role === 'user' ? 'User' : message.error ? 'Error' : 'Assistant'}
                       </div>
                       {message.parts ? (
                         <MessageBlocks blocks={message.parts} />
                       ) : (
-                        <div className={message.error ? 'text-sm whitespace-pre-wrap text-destructive' : 'text-sm whitespace-pre-wrap'}>
+                        <div
+                          className={cn(
+                            'whitespace-pre-wrap rounded-xl border px-4 py-3 text-sm leading-6',
+                            message.error
+                              ? 'border-destructive/50 bg-destructive/10 text-destructive'
+                              : message.role === 'user'
+                                ? 'border-border/90 bg-secondary'
+                                : 'border-border/90 bg-card',
+                            message.isStreaming && !message.content && 'text-muted-foreground',
+                          )}
+                        >
                           {message.content || (message.isStreaming ? 'Generating response...' : '')}
                         </div>
                       )}
@@ -492,44 +537,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               )}
             </div>
 
-            <div className="space-y-2">
-              {deployment.modality === 'vision-language' && imageBlocks.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {imageBlocks.map((block, index) => (
-                    <div key={`${block.image_path}-${index}`} className="relative overflow-hidden rounded-lg border border-border/70 bg-secondary/20">
-                      {block.preview_url ? (
-                        <img src={block.preview_url} alt={block.file_name ?? 'Uploaded image'} className="h-20 w-20 object-cover" />
-                      ) : (
-                        <div className="flex h-20 w-20 items-center justify-center px-2 text-[11px] text-muted-foreground">
-                          {block.file_name ?? 'Image'}
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => removeImageBlock(index)}
-                        className="absolute right-1 top-1 rounded-full bg-background/90 p-1 text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                {conversationId && (
-                  <Badge variant="outline" className="font-mono text-[10px]">
-                    {conversationId}
-                  </Badge>
-                )}
-                {activeConversationLabel && (
-                  <span>History retained, updated {activeConversationLabel}</span>
-                )}
-                {deployment.status !== 'running' && (
-                  <Badge variant="warning">View-only while stopped</Badge>
-                )}
-              </div>
-
+            <div className="rounded-xl border border-border/90 bg-secondary p-4 shadow-sm shadow-black/20">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Temperature</label>
@@ -578,7 +586,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                 </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="mt-4 space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">System Prompt</label>
                 <textarea
                   value={systemPrompt}
@@ -586,35 +594,56 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   rows={4}
                   disabled={isPending}
                   placeholder="Optional. Use this to mirror notebook-style system instructions."
-                  className="flex min-h-[96px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex min-h-[96px] w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <p className="text-[11px] text-muted-foreground">
                   Applied to new or cleared conversations. If you change it mid-thread, clear the conversation to guarantee a fresh system prompt.
                 </p>
               </div>
+            </div>
 
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={handleKeyDown}
-                rows={3}
-                disabled={isPending || isUploadingImage || deployment.status !== 'running'}
-                placeholder={
-                  deployment.status === 'running'
-                    ? deployment.modality === 'vision-language'
-                      ? 'Ask the deployed vision-language model a question or attach images...'
-                      : 'Ask the deployed model a question...'
-                    : 'Start or redeploy the model to continue this conversation.'
-                }
-                className="flex min-h-[96px] w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              />
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-[11px] text-muted-foreground">
-                  {deployment.modality === 'vision-language'
-                    ? 'Enter to send, Shift+Enter for a new line, image button to attach. Max New Tokens is the reply length cap.'
-                    : 'Enter to send, Shift+Enter for a new line. Max New Tokens is the reply length cap.'}
-                </p>
-                <div className="flex items-center gap-2">
+            <div className="rounded-xl border border-border/90 bg-muted p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+              {deployment.modality === 'vision-language' && imageBlocks.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {imageBlocks.map((block, index) => (
+                    <div key={`${block.image_path}-${index}`} className="relative overflow-hidden rounded-lg border border-border/90 bg-secondary">
+                      {block.preview_url ? (
+                        <img src={block.preview_url} alt={block.file_name ?? 'Uploaded image'} className="h-20 w-20 object-cover" />
+                      ) : (
+                        <div className="flex h-20 w-20 items-center justify-center px-2 text-[11px] text-muted-foreground">
+                          {block.file_name ?? 'Image'}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeImageBlock(index)}
+                        className="absolute right-1 top-1 rounded-full bg-background/90 p-1 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <textarea
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={3}
+                  disabled={isPending || isUploadingImage || deployment.status !== 'running'}
+                  placeholder={
+                    deployment.status === 'running'
+                      ? deployment.modality === 'vision-language'
+                        ? 'Ask the deployed vision-language model a question or attach images...'
+                        : 'Ask the deployed model a question...'
+                      : 'Start or redeploy the model to continue this conversation.'
+                  }
+                  className="flex min-h-[104px] w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                />
+
+                <div className="flex shrink-0 items-end gap-2">
                   {deployment.modality === 'vision-language' && (
                     <>
                       <Button
@@ -622,9 +651,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                         variant="outline"
                         onClick={() => imageInputRef.current?.click()}
                         disabled={isPending || isUploadingImage || deployment.status !== 'running'}
+                        className="gap-2"
                       >
                         <ImagePlus className="h-4 w-4" />
-                        Attach image
+                        <span className="hidden sm:inline">Attach</span>
                       </Button>
                       <input
                         ref={imageInputRef}
@@ -640,10 +670,23 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   <Button
                     onClick={handleSubmit}
                     disabled={(!input.trim() && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running'}
+                    className="gap-2"
                   >
                     <Send className="h-4 w-4" />
                     {isPending ? 'Sending...' : 'Send'}
                   </Button>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+                <p className="text-[11px] text-muted-foreground">
+                  {deployment.modality === 'vision-language'
+                    ? 'Enter to send, Shift+Enter for a new line, attach images when needed.'
+                    : 'Enter to send, Shift+Enter for a new line.'}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>Max New Tokens caps the response length.</span>
+                  {deployment.status !== 'running' && <Badge variant="warning">View-only while stopped</Badge>}
                 </div>
               </div>
             </div>

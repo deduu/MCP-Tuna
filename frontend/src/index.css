@@ -3,23 +3,23 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-background: #0a0a0b;
+  --color-background: #090b10;
   --color-foreground: #fafafa;
-  --color-card: #111113;
+  --color-card: #141821;
   --color-card-foreground: #fafafa;
-  --color-popover: #111113;
+  --color-popover: #141821;
   --color-popover-foreground: #fafafa;
   --color-primary: #3b82f6;
   --color-primary-foreground: #fafafa;
-  --color-secondary: #1e1e22;
+  --color-secondary: #1b2029;
   --color-secondary-foreground: #fafafa;
-  --color-muted: #18181b;
-  --color-muted-foreground: #a1a1aa;
-  --color-accent: #1e1e22;
+  --color-muted: #10141b;
+  --color-muted-foreground: #9da4b0;
+  --color-accent: #202632;
   --color-accent-foreground: #fafafa;
   --color-destructive: #ef4444;
-  --color-border: #27272a;
-  --color-input: #27272a;
+  --color-border: #303743;
+  --color-input: #343b48;
   --color-ring: #3b82f6;
   --radius: 0.5rem;
 
@@ -44,6 +44,9 @@
 body {
   margin: 0;
   background-color: var(--color-background);
+  background-image:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.08), transparent 34%),
+    linear-gradient(180deg, #0d1016 0%, var(--color-background) 100%);
   color: var(--color-foreground);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
