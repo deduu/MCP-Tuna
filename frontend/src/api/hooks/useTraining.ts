@@ -17,6 +17,9 @@ import type {
 } from '../types'
 import { inferModelModality, resolveTrainingToolName } from '@/lib/training-capabilities'
 
+const ASYNC_TRAINING_START_TIMEOUT_MS = 60_000
+const JOB_QUERY_GC_MS = 30 * 60_000
+
 function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): TrainingJob {
   const trainerType = typeof job.trainer_type === 'string' ? job.trainer_type : undefined
   const technique = typeof job.technique === 'string'
@@ -70,11 +73,15 @@ export function useTrainingJobs(limit: number = 50) {
         .map((job) => normalizeTrainingJob(job as TrainingJob & Record<string, unknown>))
         .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''))
     },
+    gcTime: JOB_QUERY_GC_MS,
+    staleTime: 1_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: (query) => {
       const jobs = query.state.data
       const hasRunning = jobs?.some((j) => j.status === 'running' || j.status === 'pending')
       return hasRunning ? 3_000 : 30_000
     },
+    refetchIntervalInBackground: true,
     retry: 1,
   })
 }
@@ -84,7 +91,10 @@ export function useTrainingJobStatus(jobId: string) {
     queryKey: ['training', 'job', jobId],
     queryFn: async () => fetchTrainingJobStatus(jobId),
     enabled: !!jobId,
+    gcTime: JOB_QUERY_GC_MS,
+    placeholderData: (previousData) => previousData,
     refetchInterval: 2_000,
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -203,7 +213,23 @@ export function useDeploymentBrowseRoots() {
 export function useDeploymentBrowseDir(rootId: string, path: string, enabled: boolean) {
   return useQuery<DeploymentBrowseResult>({
     queryKey: ['file', 'deployment-browse', rootId, path],
-    queryFn: () => mcpCall<DeploymentBrowseResult>('file.browse_deployment_dir', { root_id: rootId, path }),
+    queryFn: async () => {
+      const result = await mcpCall<DeploymentBrowseResult>('file.browse_deployment_dir', { root_id: rootId, path })
+      const entries = [...(result.entries ?? [])].sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+        const timeA = Date.parse(a.modified_at ?? '')
+        const timeB = Date.parse(b.modified_at ?? '')
+        const hasTimeA = Number.isFinite(timeA)
+        const hasTimeB = Number.isFinite(timeB)
+        if (hasTimeA && hasTimeB && timeA !== timeB) return timeB - timeA
+        if (hasTimeA !== hasTimeB) return hasTimeA ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      return {
+        ...result,
+        entries,
+      }
+    },
     enabled: enabled && !!rootId,
     staleTime: 10_000,
   })
@@ -223,9 +249,12 @@ export function useStartTraining() {
         throw new Error(`Training technique '${technique}' is not available in this build`)
       }
 
-      return mcpCall(toolName, args)
+      return mcpCall(toolName, args, {
+        timeoutMs: ASYNC_TRAINING_START_TIMEOUT_MS,
+        allowFallbackOnTimeout: false,
+      })
     },
-    onSuccess: () => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['training', 'jobs'] })
     },
   })

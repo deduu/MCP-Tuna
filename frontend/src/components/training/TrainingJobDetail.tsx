@@ -5,6 +5,11 @@ import { LossChart } from './LossChart'
 import { getDeployInitialValues, getTrainingOutputPath, trainingUsesAdapter } from './deployment-paths'
 import { InferenceTest } from '@/components/deployments/InferenceTest'
 import { buildLossChartData } from '@/lib/training-progress'
+import {
+  DEPLOYMENT_ADAPTER_PATH_LABEL,
+  describeAdapterBackedOutput,
+  describeDirectModelOutput,
+} from '@/lib/deployment-copy'
 
 interface TrainingJobDetailProps {
   job: TrainingJob
@@ -26,6 +31,18 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
       {/* Stats grid */}
       {p && (
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          {p.current_stage && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Stage</span>
+              <span className="font-mono uppercase">{p.current_stage}</span>
+            </div>
+          )}
+          {p.status_message && (
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Status</span>
+              <span className="font-mono text-right">{p.status_message}</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">Step</span>
             <span className="font-mono">
@@ -83,8 +100,8 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
               <p className="text-sm font-medium">Deployment Paths</p>
               <p className="text-xs text-muted-foreground">
                 {usesAdapter
-                  ? 'LoRA training output detected. Deploy with the original base model plus this adapter folder.'
-                  : 'Merged/base model output detected. Deploy this folder directly as Model Path.'}
+                  ? describeAdapterBackedOutput()
+                  : describeDirectModelOutput()}
               </p>
             </div>
 
@@ -98,7 +115,7 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
 
               {deployValues.adapterPath && (
                 <div className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Adapter Path</div>
+                  <div className="text-xs text-muted-foreground">{DEPLOYMENT_ADAPTER_PATH_LABEL}</div>
                   <code className="block break-all rounded border border-border bg-background/70 px-2 py-1 text-[11px]">
                     {deployValues.adapterPath}
                   </code>

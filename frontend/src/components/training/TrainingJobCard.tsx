@@ -8,6 +8,7 @@ import { Progress } from '@/components/ui/progress'
 import { cn, formatDateTime, formatDuration, formatTimeAgo } from '@/lib/utils'
 import { getDeployInitialValues } from './deployment-paths'
 import { TrainingJobDetail } from './TrainingJobDetail'
+import { DEPLOYMENT_ADAPTER_PATH_LABEL } from '@/lib/deployment-copy'
 
 interface TrainingJobCardProps {
   job: TrainingJob
@@ -56,6 +57,8 @@ export function TrainingJobCard({
   const deployValues = job.status === 'completed' ? getDeployInitialValues(job) : null
   const createdLabel = formatTimeAgo(job.created_at)
   const completedLabel = formatTimeAgo(job.completed_at)
+  const statusMessage = job.progress?.status_message?.trim()
+  const currentStage = job.progress?.current_stage?.trim()
 
   return (
     <Card>
@@ -100,16 +103,22 @@ export function TrainingJobCard({
           </div>
         )}
 
+        {isActive && (statusMessage || currentStage) && (
+          <div className="rounded-md border border-border/60 bg-secondary/10 px-3 py-2 text-[11px] text-muted-foreground">
+            {statusMessage ?? `Stage: ${currentStage}`}
+          </div>
+        )}
+
         {job.status === 'completed' && deployValues?.adapterPath && (
           <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs">
-            <span className="text-muted-foreground">Adapter:</span>{' '}
+            <span className="text-muted-foreground">{DEPLOYMENT_ADAPTER_PATH_LABEL}:</span>{' '}
             <code className="break-all text-foreground">{deployValues.adapterPath}</code>
           </div>
         )}
 
-        {job.created_at && (
+        {!isActive && job.created_at && (
           <div className="rounded-md border border-border/60 bg-secondary/10 px-3 py-2 text-[11px] text-muted-foreground">
-            Persistent record retained from {formatDateTime(job.created_at) ?? job.created_at}
+            Saved in run history on {formatDateTime(job.created_at) ?? job.created_at}
           </div>
         )}
 

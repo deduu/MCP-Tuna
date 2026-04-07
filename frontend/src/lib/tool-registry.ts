@@ -1,3 +1,5 @@
+import { FINE_TUNE_NAMESPACE_DESCRIPTION } from '@/lib/training-copy'
+
 export interface NamespaceInfo {
   id: string
   label: string
@@ -14,7 +16,7 @@ export const NAMESPACES: NamespaceInfo[] = [
   { id: 'normalize', label: 'Normalize', description: 'Format conversion & key standardization', color: 'var(--color-ns-normalize)', iconName: 'ArrowRightLeft' },
   { id: 'evaluate', label: 'Evaluate', description: 'Quality scoring & filtering', color: 'var(--color-ns-evaluate)', iconName: 'BarChart3' },
   { id: 'dataset', label: 'Dataset', description: 'Load, save, preview, split & merge', color: 'var(--color-ns-dataset)', iconName: 'Database' },
-  { id: 'finetune', label: 'Fine-tune', description: 'LoRA training (SFT/DPO/GRPO/KTO)', color: 'var(--color-ns-finetune)', iconName: 'FlaskConical' },
+  { id: 'finetune', label: 'Fine-tune', description: FINE_TUNE_NAMESPACE_DESCRIPTION, color: 'var(--color-ns-finetune)', iconName: 'FlaskConical' },
   { id: 'test', label: 'Test', description: 'Model inference & comparison', color: 'var(--color-ns-test)', iconName: 'FlaskConical' },
   { id: 'validate', label: 'Validate', description: 'Model discovery & info', color: 'var(--color-ns-validate)', iconName: 'ShieldCheck' },
   { id: 'host', label: 'Host', description: 'Model deployment as MCP or API', color: 'var(--color-ns-host)', iconName: 'Globe' },

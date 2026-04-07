@@ -11,6 +11,20 @@ import {
   resolveTrainingToolName,
   supportsAdapterInitialization,
 } from '@/lib/training-capabilities'
+import {
+  DEPLOYMENT_ADAPTER_PATH_LABEL,
+  describeDeploymentAdapterField,
+  describeInvalidDeploymentAdapterPath,
+  describeModelPathLooksLikeAdapter,
+  describeTrainAndDeployModelPath,
+} from '@/lib/deployment-copy'
+import {
+  describeContinueFromAdapterForPipeline,
+  describeInitialAdapterRecipeHint,
+  describeInitialAdapterRequirement,
+  INITIAL_ADAPTER_LABEL,
+  TRAIN_WITH_ADAPTERS_LABEL,
+} from '@/lib/training-copy'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { DocumentPathInput } from './DocumentPathInput'
@@ -149,7 +163,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
     })
 
     if (patch.start_from_sft_checkpoint && trainSupportsAdapterInit && !initAdapterPath.trim()) {
-      toast.info('This recipe assumes you continue from your best SFT adapter. Set Initial Adapter Path before running.')
+      toast.info(describeInitialAdapterRecipeHint(INITIAL_ADAPTER_LABEL))
     } else {
       toast.success('Applied the safe preference starting recipe to the train step')
     }
@@ -165,7 +179,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       return
     }
     if (deployOnly && modelValidation?.isAdapter && !adapterPath.trim()) {
-      toast.error('That path looks like an adapter folder. Put the base model in Model Path and the adapter folder in Adapter Path.')
+      toast.error(describeModelPathLooksLikeAdapter())
       return
     }
     if (isVlmTechnique) {
@@ -195,7 +209,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
       return
     }
     if (hasTrain && initAdapterPath.trim() && !effectiveTrainUseLora) {
-      toast.error('Initial adapter path requires LoRA training to stay enabled')
+      toast.error(describeInitialAdapterRequirement())
       return
     }
     const trainOutputDir = buildDefaultOutputDir(technique, false, documentPath.trim() || modelPath.trim())
@@ -352,14 +366,13 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
             onChange={setModelPath}
             disabled={isPending}
             onValidationChange={setModelValidation}
+            adapterFieldLabel={deployOnly ? DEPLOYMENT_ADAPTER_PATH_LABEL : undefined}
             placeholder={deployOnly ? './output/my-model-folder or meta-llama/Llama-3-8B' : 'meta-llama/Llama-3-8B or ~/.cache/huggingface/hub/...'}
             helperText={
               deployOnly
                 ? 'Deploy-only accepts either a Hugging Face model ID or a backend-visible model folder. For local deployment, Model Path should point to the model directory, not a single file.'
                 : hasTrain && hasDeploy
-                  ? useLora
-                    ? 'When train and deploy are both selected, this field is the base model for training. Deployment will use the trained adapter output.'
-                    : 'When train and deploy are both selected with LoRA disabled, deployment will use the trained model folder directly.'
+                  ? describeTrainAndDeployModelPath(useLora)
                   : 'Use a Hugging Face model ID or a backend-visible local model folder.'
             }
           />
@@ -381,36 +394,37 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
 
       {hasTrain && trainSupportsAdapterInit && (
         <div>
-          <label className="text-sm font-medium text-foreground mb-1 block">Initial Adapter Path</label>
+          <label className="text-sm font-medium text-foreground mb-1 block">{INITIAL_ADAPTER_LABEL}</label>
           <ModelPathField
             value={initAdapterPath}
             onChange={setInitAdapterPath}
             disabled={isPending}
             validationPurpose="adapter"
             placeholder="./output/best_sft_adapter"
-            helperText="Optional. Continue LoRA training from an existing adapter instead of starting from the base model alone."
+            helperText={describeContinueFromAdapterForPipeline()}
           />
         </div>
       )}
 
       {deployOnly && (
         <div>
-          <label className="text-sm font-medium text-foreground mb-1 block">Adapter Path</label>
+          <label className="text-sm font-medium text-foreground mb-1 block">{DEPLOYMENT_ADAPTER_PATH_LABEL}</label>
           <ModelPathField
             value={adapterPath}
             onChange={setAdapterPath}
             disabled={isPending}
             validationPurpose="adapter"
+            adapterFieldLabel={DEPLOYMENT_ADAPTER_PATH_LABEL}
             onValidationChange={setAdapterValidation}
             placeholder="./output/custom_pipeline"
-            helperText="Optional. Use this when the model folder above is the base model and your fine-tuned weights live in a separate LoRA adapter folder."
+            helperText={describeDeploymentAdapterField()}
           />
         </div>
       )}
 
       {deployOnly && adapterPath.trim() && adapterValidation?.tone === 'warning' && (
         <p className="text-xs text-amber-400">
-          The adapter path does not look like an adapter folder. Deployment may fail unless it is a valid LoRA directory.
+          {describeInvalidDeploymentAdapterPath()}
         </p>
       )}
 
@@ -443,7 +457,7 @@ export function CustomPipelineForm({ onSubmit, isPending }: CustomPipelineFormPr
               onChange={(e) => setUseLora(e.target.checked)}
               className="h-4 w-4 rounded border-input bg-transparent"
             />
-            Train with LoRA adapter
+            {TRAIN_WITH_ADAPTERS_LABEL}
           </label>
           {!isVlmTechnique && technique === 'sft' && (
             <div>

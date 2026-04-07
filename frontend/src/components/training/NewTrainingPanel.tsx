@@ -35,6 +35,13 @@ import {
   supportsAdapterInitialization,
   supportsSequentialTraining,
 } from '@/lib/training-capabilities'
+import {
+  describeContinueFromAdapter,
+  describeCurriculumAdvancedControls,
+  describeInitialAdapterRecipeHint,
+  describeInitialAdapterRequirement,
+  INITIAL_ADAPTER_LABEL,
+} from '@/lib/training-copy'
 import { cn } from '@/lib/utils'
 import { ModelBrowser } from './ModelBrowser'
 import { TrainingDatasetField } from './TrainingDatasetField'
@@ -263,7 +270,7 @@ export function NewTrainingPanel({
       supportsInitAdapter &&
       !initAdapterPath.trim()
     ) {
-      toast.info('This recipe assumes you continue from your best SFT adapter. Set Initial Adapter before running.')
+      toast.info(describeInitialAdapterRecipeHint(INITIAL_ADAPTER_LABEL))
     } else {
       toast.success('Applied the safe preference starting recipe')
     }
@@ -295,7 +302,7 @@ export function NewTrainingPanel({
     const resolvedUseLora = defaultsToLoraTraining(technique)
 
     if (supportsInitAdapter && initAdapterPath.trim() && !resolvedUseLora) {
-      toast.error('Initial adapter path requires LoRA training to stay enabled')
+      toast.error(describeInitialAdapterRequirement())
       return
     }
 
@@ -487,6 +494,10 @@ export function NewTrainingPanel({
           onSubmit()
         },
         onError: (error) => {
+          if (/timed out/i.test(error.message)) {
+            toast.warning('Training start is taking longer than expected. Checking the backend job list now.')
+            return
+          }
           toast.error(`Failed to start training: ${error.message}`)
         },
       },
@@ -619,14 +630,14 @@ export function NewTrainingPanel({
 
         {supportsInitAdapter && (
           <div className="space-y-2">
-            <label className="text-sm font-medium">Initial Adapter</label>
+            <label className="text-sm font-medium">{INITIAL_ADAPTER_LABEL}</label>
             <ModelPathField
               value={initAdapterPath}
               onChange={setInitAdapterPath}
               disabled={isSubmitting}
               validationPurpose="adapter"
               placeholder="./output/best_sft_adapter"
-              helperText="Optional. Continue LoRA training from an existing adapter instead of starting from the base model only."
+              helperText={describeContinueFromAdapter()}
             />
           </div>
         )}
@@ -858,7 +869,7 @@ export function NewTrainingPanel({
               )}
               <p className="col-span-2 text-xs text-muted-foreground">
                 {technique === 'curriculum'
-                  ? 'Curriculum async training currently exposes stage and scoring controls, plus LoRA and quantization.'
+                  ? describeCurriculumAdvancedControls()
                   : technique === 'vlm_sft'
                     ? 'Keep VLM settings close to text SFT defaults unless the backend exposes stronger modality-specific guidance.'
                     : '4-bit loading reduces memory usage during training. Use full precision only if you have enough VRAM/RAM.'}

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToolExecution } from '@/api/hooks/useToolExecution'
 import { FlaskConical, GitCompare } from 'lucide-react'
+import { describeAdapterBackedInference } from '@/lib/deployment-copy'
 
 interface InferenceTestProps {
   modelPath: string
@@ -132,7 +133,7 @@ export function InferenceTest({ modelPath, adapterPath }: InferenceTestProps) {
           </div>
           {adapterPath && (
             <p className="text-xs text-muted-foreground">
-              LoRA job detected. Inference uses the base model plus adapter automatically.
+              {describeAdapterBackedInference()}
             </p>
           )}
           <div className="flex items-center gap-2">

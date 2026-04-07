@@ -1,9 +1,10 @@
-const GATEWAY_URL = '/mcp'
-const GATEWAY_HEALTH_URL = '/gateway-health'
+import { gatewayHealthUrls, gatewayMcpUrls } from '@/lib/gateway'
+
 const DEFAULT_TIMEOUT_MS = 15_000
 
 interface MCPRequestOptions {
   timeoutMs?: number
+  allowFallbackOnTimeout?: boolean
 }
 
 export interface GatewayHealthStatus {
@@ -25,58 +26,74 @@ export class APIError extends Error {
   }
 }
 
-async function mcpFetchJson(body: Record<string, unknown>, options: MCPRequestOptions = {}) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+function normalizeRequestError(error: unknown, timeoutMs: number, url: string) {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return new APIError(`Gateway request timed out after ${Math.round(timeoutMs / 1000)}s`, undefined, { url })
+  }
+  if (error instanceof APIError) {
+    return new APIError(error.message, error.status, { url, cause: error.details })
+  }
+  if (error instanceof Error) {
+    return new APIError(error.message, undefined, { url })
+  }
+  return new APIError('Gateway request failed', undefined, { url })
+}
 
-  try {
-    const response = await fetch(GATEWAY_URL, {
+async function fetchJsonWithFallback(
+  urls: string[],
+  options: RequestInit = {},
+  requestOptions: MCPRequestOptions = {},
+  failureLabel: string,
+) {
+  const timeoutMs = requestOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const allowFallbackOnTimeout = requestOptions.allowFallbackOnTimeout ?? true
+  const attempts: string[] = []
+
+  for (const url of urls) {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new APIError(`Request failed: ${response.statusText}`, response.status)
+      }
+
+      return await response.json()
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === 'AbortError'
+      const normalizedError = normalizeRequestError(error, timeoutMs, url)
+      attempts.push(`${url} -> ${normalizedError.message}`)
+      if (timedOut && !allowFallbackOnTimeout) {
+        break
+      }
+    } finally {
+      window.clearTimeout(timeoutId)
+    }
+  }
+
+  throw new APIError(`${failureLabel}: ${attempts.join(' | ')}`)
+}
+
+async function mcpFetchJson(body: Record<string, unknown>, options: MCPRequestOptions = {}) {
+  return fetchJsonWithFallback(
+    gatewayMcpUrls(),
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new APIError(`MCP call failed: ${response.statusText}`, response.status)
-    }
-
-    return await response.json()
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new APIError(`Gateway request timed out after ${Math.round(timeoutMs / 1000)}s`)
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
+    },
+    options,
+    'Could not reach the MCP gateway',
+  )
 }
 
-async function fetchJson(url: string, options: RequestInit = {}, requestOptions: MCPRequestOptions = {}) {
-  const timeoutMs = requestOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new APIError(`Request failed: ${response.statusText}`, response.status)
-    }
-
-    return await response.json()
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new APIError(`Gateway request timed out after ${Math.round(timeoutMs / 1000)}s`)
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
+async function fetchJson(urls: string[], options: RequestInit = {}, requestOptions: MCPRequestOptions = {}) {
+  return fetchJsonWithFallback(urls, options, requestOptions, 'Could not reach the gateway')
 }
 
 export async function mcpCall<T = Record<string, unknown>>(
@@ -142,5 +159,5 @@ export async function mcpListTools(options: MCPRequestOptions = {}) {
 }
 
 export async function gatewayHealthCheck(options: MCPRequestOptions = {}): Promise<GatewayHealthStatus> {
-  return fetchJson(GATEWAY_HEALTH_URL, { method: 'GET' }, options)
+  return fetchJson(gatewayHealthUrls(), { method: 'GET' }, options)
 }

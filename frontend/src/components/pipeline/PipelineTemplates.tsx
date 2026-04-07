@@ -8,6 +8,13 @@ import { CustomPipelineForm } from './CustomPipelineForm'
 import { DocumentPathInput } from './DocumentPathInput'
 import { DocumentPathListInput } from './DocumentPathListInput'
 import { ModelPathField } from './ModelPathField'
+import { describeDeployAfterTraining } from '@/lib/deployment-copy'
+import {
+  describeContinueFromAdapterForPipeline,
+  describeInitialAdapterRequirement,
+  INITIAL_ADAPTER_LABEL,
+  TRAIN_WITH_ADAPTERS_LABEL,
+} from '@/lib/training-copy'
 import { buildPipelineOutputDir, supportsAdapterInitialization } from '@/lib/training-capabilities'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -106,7 +113,7 @@ export function PipelineTemplates() {
     }
 
     if (supportsInitAdapter && initAdapterPath.trim() && !useLora) {
-      toast.error('Initial adapter path requires LoRA training to stay enabled')
+      toast.error(describeInitialAdapterRequirement())
       return
     }
 
@@ -272,14 +279,14 @@ export function PipelineTemplates() {
                 </div>
                 {supportsInitAdapter && (
                   <div className="sm:col-span-2">
-                    <label className="text-sm font-medium text-foreground mb-1 block">Initial Adapter Path</label>
+                    <label className="text-sm font-medium text-foreground mb-1 block">{INITIAL_ADAPTER_LABEL}</label>
                     <ModelPathField
                       value={initAdapterPath}
                       onChange={setInitAdapterPath}
                       disabled={fullPipeline.isPending}
                       validationPurpose="adapter"
                       placeholder="./output/best_sft_adapter"
-                      helperText="Optional. Continue LoRA training from an existing adapter before running the selected preference/SFT stage."
+                      helperText={describeContinueFromAdapterForPipeline()}
                     />
                   </div>
                 )}
@@ -290,7 +297,7 @@ export function PipelineTemplates() {
                     onChange={(e) => setUseLora(e.target.checked)}
                     className="h-4 w-4 rounded border-input bg-transparent"
                   />
-                  Train with LoRA adapter
+                  {TRAIN_WITH_ADAPTERS_LABEL}
                 </label>
                 {technique === 'sft' && (
                   <div className="sm:col-span-2">
@@ -341,9 +348,7 @@ export function PipelineTemplates() {
                 </label>
                 {deploy && (
                   <p className="text-xs text-muted-foreground sm:col-span-2">
-                    {useLora
-                      ? 'Deployment will load the selected base model plus the trained LoRA adapter.'
-                      : 'Deployment will load the trained model folder directly because LoRA is disabled.'}{' '}
+                    {describeDeployAfterTraining(useLora)}{' '}
                     4-bit quantization significantly reduces memory usage. Use &quot;None&quot; only if you have enough
                     VRAM/RAM.
                   </p>

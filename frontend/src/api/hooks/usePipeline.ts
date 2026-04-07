@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { mcpCall } from '../client'
 
+const ASYNC_WORKFLOW_START_TIMEOUT_MS = 60_000
+const JOB_QUERY_GC_MS = 30 * 60_000
+
 interface WorkflowJobPayload {
   job_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -109,6 +112,8 @@ export function usePipelineJobs(limit: number = 50) {
       const response = await mcpCall<WorkflowJobListResponse>('workflow.list_jobs', { limit })
       return (response.jobs ?? []).map(mapWorkflowJob)
     },
+    gcTime: JOB_QUERY_GC_MS,
+    placeholderData: (previousData) => previousData,
     staleTime: 1_000,
     refetchInterval: (query) => {
       const jobs = query.state.data ?? []
@@ -123,6 +128,8 @@ export function usePipelineJobStatus(jobId: string) {
     queryKey: ['pipeline', 'job', jobId],
     queryFn: async () => fetchPipelineJobStatus(jobId),
     enabled: !!jobId,
+    gcTime: JOB_QUERY_GC_MS,
+    placeholderData: (previousData) => previousData,
     staleTime: 1_000,
     refetchInterval: (query) => {
       const job = query.state.data
@@ -135,8 +142,11 @@ export function usePipelineJobStatus(jobId: string) {
 export function useRunPipeline() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: Record<string, unknown>) => mcpCall('workflow.run_pipeline_async', args),
-    onSuccess: () => {
+    mutationFn: (args: Record<string, unknown>) => mcpCall('workflow.run_pipeline_async', args, {
+      timeoutMs: ASYNC_WORKFLOW_START_TIMEOUT_MS,
+      allowFallbackOnTimeout: false,
+    }),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['pipeline', 'jobs'] })
     },
   })
@@ -145,8 +155,11 @@ export function useRunPipeline() {
 export function useRunFullPipeline() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: Record<string, unknown>) => mcpCall('workflow.full_pipeline_async', args),
-    onSuccess: () => {
+    mutationFn: (args: Record<string, unknown>) => mcpCall('workflow.full_pipeline_async', args, {
+      timeoutMs: ASYNC_WORKFLOW_START_TIMEOUT_MS,
+      allowFallbackOnTimeout: false,
+    }),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['pipeline', 'jobs'] })
     },
   })

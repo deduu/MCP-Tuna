@@ -5,6 +5,12 @@ import { Button } from '@/components/ui/button'
 import { useDeploy } from '@/api/hooks/useDeployments'
 import { toast } from 'sonner'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
+import {
+  DEPLOYMENT_ADAPTER_PATH_LABEL,
+  describeDeploymentAdapterField,
+  describeDeploymentNameDefault,
+  describeDeploymentTarget,
+} from '@/lib/deployment-copy'
 
 export interface DeployDialogInitialValues {
   name?: string
@@ -134,7 +140,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
     <Dialog open={open} onClose={onClose} title={title} className="max-w-2xl">
       <div className="flex flex-col gap-4">
         <div className="rounded-md border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
-          Base-model-only deployment is supported. For LoRA outputs, set the original base model in Model Path and the trained adapter folder in Adapter Path.
+          {describeDeploymentTarget()}
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -148,7 +154,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
             placeholder="Optional display name"
           />
           <p className="text-xs text-muted-foreground">
-            Optional. Defaults to the model name, or a base-model plus adapter label for LoRA deployments.
+            {describeDeploymentNameDefault()}
           </p>
         </div>
 
@@ -199,6 +205,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           <ModelPathField
             value={modelPath}
             onChange={setModelPath}
+            adapterFieldLabel={DEPLOYMENT_ADAPTER_PATH_LABEL}
             placeholder={
               modality === 'vision-language'
                 ? 'Qwen/Qwen2.5-VL-3B-Instruct or C:/models/vlm-base'
@@ -213,12 +220,13 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium">Adapter Path</label>
+          <label className="text-sm font-medium">{DEPLOYMENT_ADAPTER_PATH_LABEL}</label>
           <ModelPathField
             value={adapterPath}
             onChange={setAdapterPath}
-            placeholder="C:/output/my-lora-adapter"
-            helperText="Optional. Leave empty to deploy the base model directly."
+            adapterFieldLabel={DEPLOYMENT_ADAPTER_PATH_LABEL}
+            placeholder="C:/output/my-final-adapter"
+            helperText={describeDeploymentAdapterField()}
             validationPurpose="adapter"
           />
         </div>

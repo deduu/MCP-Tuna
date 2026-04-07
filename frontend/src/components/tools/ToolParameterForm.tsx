@@ -13,6 +13,7 @@ import {
   extractPreferenceStartingRecipePatch,
   resolvePreferenceTechniqueFromTool,
 } from '@/lib/training-capabilities'
+import { describeInitialAdapterRecipeHint } from '@/lib/training-copy'
 import { toast } from 'sonner'
 
 interface ToolParameterFormProps {
@@ -359,7 +360,7 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
       !(typeof values.adapter_path === 'string' && values.adapter_path.trim())
     ) {
       setShowAdvanced(true)
-      toast.info('This recipe assumes you continue from your best SFT adapter. Set adapter_path before running.')
+      toast.info(describeInitialAdapterRecipeHint('adapter_path'))
     } else {
       toast.success('Applied the safe preference starting recipe')
     }

@@ -37,8 +37,8 @@ export function buildDatasetOutputPath(
   extension = 'jsonl',
   outputDir = getDefaultDatasetOutputDir(),
 ): string {
-  const safeStem = compactSourceHint(sourcePath, 24, 'dataset')
-  const safeSuffix = compactDatasetSuffix(suffix, 14)
+  const safeStem = compactSourceHint(sourcePath, 14, 'dataset')
+  const safeSuffix = compactDatasetSuffix(suffix, 8)
   const dir = normalizeSegment(outputDir) || DEFAULT_DATASET_OUTPUT_DIR
   const safeExtension = extension.replace(/^\.+/, '') || 'jsonl'
   return `${dir}/${safeStem}_${safeSuffix}.${safeExtension}`

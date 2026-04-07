@@ -380,6 +380,7 @@ export interface DeploymentBrowseEntry {
   absolute_path: string
   type: 'directory' | 'file'
   selectable: boolean
+  modified_at?: string
 }
 
 export interface DeploymentBrowseResult {

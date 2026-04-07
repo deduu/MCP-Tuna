@@ -11,6 +11,10 @@ function basename(value: string): string {
   return leaf.replace(/\.[^.]+$/, '')
 }
 
+function readTrimmedString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 export function getTrainingOutputPath(job: TrainingJob): string {
   if (isRecord(job.result)) {
     const modelPath = job.result.model_path
@@ -42,6 +46,24 @@ export function trainingUsesAdapter(result: unknown): boolean {
   return true
 }
 
+function resolveDeploymentBaseModel(result: unknown): string | null {
+  if (!isRecord(result)) return null
+
+  const adapterBaseModel = readTrimmedString(result.adapter_base_model)
+  if (adapterBaseModel) return adapterBaseModel
+
+  const stageResults = result.stage_results
+  if (Array.isArray(stageResults) && stageResults.length > 0) {
+    const lastStage = stageResults[stageResults.length - 1]
+    if (isRecord(lastStage) && isRecord(lastStage.training_result)) {
+      const nestedBaseModel = resolveDeploymentBaseModel(lastStage.training_result)
+      if (nestedBaseModel) return nestedBaseModel
+    }
+  }
+
+  return readTrimmedString(result.base_model)
+}
+
 export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialValues | null {
   const outputPath = getTrainingOutputPath(job).trim()
   if (!outputPath) return null
@@ -49,11 +71,12 @@ export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialVal
   const modality = config?.trainer === 'vlm_sft' ? 'vision-language' : 'text'
 
   if (trainingUsesAdapter(job.result)) {
-    const baseName = basename(job.base_model)
+    const resolvedBaseModel = resolveDeploymentBaseModel(job.result) ?? job.base_model.trim()
+    const baseName = basename(resolvedBaseModel)
     const adapterName = basename(outputPath)
     return {
       name: [baseName, adapterName].filter(Boolean).join(' + '),
-      modelPath: job.base_model,
+      modelPath: resolvedBaseModel,
       adapterPath: outputPath,
       modality,
     }

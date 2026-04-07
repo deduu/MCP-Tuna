@@ -5,6 +5,7 @@ import { useDeploymentBrowseDir, useDeploymentBrowseRoots } from '@/api/hooks/us
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { FRONTEND_GATEWAY_START_COMMAND } from '@/lib/gateway'
 import { cn } from '@/lib/utils'
 
 type ValidationTone = 'success' | 'warning' | 'error' | 'info'
@@ -23,6 +24,7 @@ interface ModelPathFieldProps {
   placeholder?: string
   helperText?: string
   validationPurpose?: 'model' | 'adapter'
+  adapterFieldLabel?: string
   onValidationChange?: (validation: ModelPathValidation | null) => void
 }
 
@@ -81,14 +83,18 @@ function isLikelyHubId(value: string): boolean {
   return segments.length === 2 && segments.every(Boolean)
 }
 
-function buildValidation(result: Record<string, unknown>, purpose: 'model' | 'adapter'): ModelPathValidation {
+function buildValidation(
+  result: Record<string, unknown>,
+  purpose: 'model' | 'adapter',
+  adapterFieldLabel: string,
+): ModelPathValidation {
   const isAdapter = result.is_adapter === true
   if (purpose === 'adapter') {
     return {
       tone: isAdapter ? 'success' : 'warning',
       message: isAdapter
         ? 'Valid adapter folder on the backend.'
-        : 'This folder does not look like a LoRA adapter. Use it directly as Model Path if it is a merged model.',
+        : 'This folder does not look like an adapter. Use it directly as Model Path if it is a merged model.',
       isAdapter,
       isLocalPath: true,
     }
@@ -97,7 +103,7 @@ function buildValidation(result: Record<string, unknown>, purpose: 'model' | 'ad
   return {
     tone: isAdapter ? 'warning' : 'success',
     message: isAdapter
-      ? 'This folder looks like a LoRA adapter. Put the base model in Model Path and this folder in Adapter Path.'
+      ? `This folder looks like an adapter. Put the matching base model in Model Path and this folder in ${adapterFieldLabel}.`
       : 'Valid model folder on the backend.',
     isAdapter,
     isLocalPath: true,
@@ -144,6 +150,7 @@ export function ModelPathField({
   placeholder = 'meta-llama/Llama-3-8B',
   helperText,
   validationPurpose = 'model',
+  adapterFieldLabel = 'Adapter Path',
   onValidationChange,
 }: ModelPathFieldProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -160,6 +167,11 @@ export function ModelPathField({
     isLoading: browseLoading,
     error: browseError,
   } = useDeploymentBrowseDir(selectedRootId, browsePath, open)
+  const rootsErrorValue = rootsError as unknown
+  const rootsErrorMessage =
+    rootsErrorValue && typeof rootsErrorValue === 'object' && 'message' in rootsErrorValue && typeof rootsErrorValue.message === 'string'
+      ? rootsErrorValue.message
+      : null
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -228,7 +240,7 @@ export function ModelPathField({
         toolName: 'validate.model_info',
         args: { model_path: target },
       }) as Record<string, unknown>
-      const nextValidation = buildValidation(result, validationPurpose)
+      const nextValidation = buildValidation(result, validationPurpose, adapterFieldLabel)
       setValidation(nextValidation)
       onValidationChange?.(nextValidation)
     } catch (error) {
@@ -270,7 +282,7 @@ export function ModelPathField({
           variant="outline"
           onClick={() => setOpen((current) => !current)}
           disabled={disabled}
-          aria-label="Browse model folders"
+          aria-label="Browse folders"
         >
           <FolderSearch className="h-4 w-4" />
           Browse
@@ -299,10 +311,17 @@ export function ModelPathField({
               <p className="text-sm text-muted-foreground">
                 Could not connect to the MCP gateway. Start it with:
               </p>
-              <code className="block rounded bg-muted px-2 py-1 text-xs">python scripts/run_gateway.py</code>
+              <code className="block rounded bg-muted px-2 py-1 text-xs">{FRONTEND_GATEWAY_START_COMMAND}</code>
               <p className="text-xs text-muted-foreground">
-                Or type a path directly in the field above. For HF cached models, the default location is{' '}
-                <code className="text-foreground">~/.cache/huggingface/hub</code>
+                The plain <code className="text-foreground">python -m scripts.run_gateway</code> command starts stdio
+                mode only, so the browser cannot reach <code className="text-foreground">/mcp</code>. You can still
+                type a path directly in the field above. For HF cached models, the default location is{' '}
+                <code className="text-foreground">~/.cache/huggingface/hub</code>.
+              </p>
+              {rootsErrorMessage ? <p className="text-xs text-red-400">{rootsErrorMessage}</p> : null}
+              <p className="text-xs text-muted-foreground">
+                If the gateway command exits immediately, another process may already be using port{' '}
+                <code className="text-foreground">8002</code>.
               </p>
             </div>
           ) : (
@@ -375,7 +394,7 @@ export function ModelPathField({
                     ? 'Loading folder contents...'
                     : 'Select a root to start browsing.'}
               </div>
-              <div className="max-h-56 overflow-y-auto">
+              <div className="max-h-56 overflow-y-auto overscroll-contain">
                 {browseLoading ? (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />

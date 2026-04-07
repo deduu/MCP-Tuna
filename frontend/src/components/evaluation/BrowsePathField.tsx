@@ -4,7 +4,8 @@ import { useDeploymentBrowseDir, useDeploymentBrowseRoots } from '@/api/hooks/us
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { FRONTEND_GATEWAY_START_COMMAND } from '@/lib/gateway'
+import { cn, formatDateTime, formatTimeAgo } from '@/lib/utils'
 
 type DirectorySelectionMode = 'replace' | 'append-filename'
 
@@ -124,6 +125,7 @@ export function BrowsePathField({
   const [browsePath, setBrowsePath] = useState('.')
   const [locationCustomized, setLocationCustomized] = useState(false)
   const [rootMenuOpen, setRootMenuOpen] = useState(false)
+  const [entryQuery, setEntryQuery] = useState('')
   const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots()
   const autoLocation = resolveValueToBrowseLocation(value, roots)
   const defaultRootId = preferredRootId(roots, preferredRootIds)
@@ -140,6 +142,11 @@ export function BrowsePathField({
     isLoading: browseLoading,
     error: browseError,
   } = useDeploymentBrowseDir(activeRootId, activeBrowsePath, open)
+  const rootsErrorValue = rootsError as unknown
+  const rootsErrorMessage =
+    rootsErrorValue && typeof rootsErrorValue === 'object' && 'message' in rootsErrorValue && typeof rootsErrorValue.message === 'string'
+      ? rootsErrorValue.message
+      : null
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -177,6 +184,17 @@ export function BrowsePathField({
 
   const currentAbsolutePath = browseResult?.current_absolute_path ?? ''
   const hasParent = typeof browseResult?.parent_path === 'string'
+  const normalizedEntryQuery = entryQuery.trim().toLowerCase()
+  const visibleEntries = (browseResult?.entries ?? []).filter((entry) => {
+    if (!normalizedEntryQuery) {
+      return true
+    }
+
+    return (
+      entry.name.toLowerCase().includes(normalizedEntryQuery)
+      || entry.absolute_path.toLowerCase().includes(normalizedEntryQuery)
+    )
+  })
 
   return (
     <div ref={containerRef} className="space-y-2">
@@ -221,9 +239,16 @@ export function BrowsePathField({
               <p className="text-sm text-muted-foreground">
                 Could not connect to the MCP gateway. Start it with:
               </p>
-              <code className="block rounded bg-muted px-2 py-1 text-xs">python scripts/run_gateway.py</code>
+              <code className="block rounded bg-muted px-2 py-1 text-xs">{FRONTEND_GATEWAY_START_COMMAND}</code>
               <p className="text-xs text-muted-foreground">
-                Or type a path directly in the field above.
+                The plain <code className="text-foreground">python -m scripts.run_gateway</code> command starts stdio
+                mode only, so the browser cannot reach <code className="text-foreground">/mcp</code>. You can still
+                type a path directly in the field above.
+              </p>
+              {rootsErrorMessage ? <p className="text-xs text-red-400">{rootsErrorMessage}</p> : null}
+              <p className="text-xs text-muted-foreground">
+                If the gateway command exits immediately, another process may already be using port{' '}
+                <code className="text-foreground">8002</code>.
               </p>
             </div>
           ) : (
@@ -305,7 +330,15 @@ export function BrowsePathField({
                     ? 'Loading folder contents...'
                     : 'Select a root to start browsing.'}
               </div>
-              <div className="max-h-56 overflow-y-auto">
+              <div className="border-b border-border px-3 py-2">
+                <Input
+                  value={entryQuery}
+                  onChange={(event) => setEntryQuery(event.target.value)}
+                  placeholder="Filter names or paths..."
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div className="max-h-56 overflow-y-auto overscroll-contain">
                 {browseLoading ? (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -317,8 +350,14 @@ export function BrowsePathField({
                   </div>
                 ) : (browseResult?.entries ?? []).length === 0 ? (
                   <div className="px-3 py-2 text-sm text-muted-foreground">No entries in this location.</div>
+                ) : visibleEntries.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-muted-foreground">
+                    No entries match <span className="font-mono">{entryQuery.trim()}</span>.
+                  </div>
                 ) : (
-                  (browseResult?.entries ?? []).map((entry) => {
+                  visibleEntries.map((entry) => {
+                    const modifiedLabel = formatTimeAgo(entry.modified_at)
+                    const modifiedTitle = formatDateTime(entry.modified_at)
                     const canSelect =
                       (entry.type === 'directory' && allowDirectories) ||
                       (entry.type === 'file' && allowFiles)
@@ -337,12 +376,22 @@ export function BrowsePathField({
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="text-sm font-medium">{entry.name}</div>
+                            <div className="truncate text-sm font-medium" title={entry.name}>
+                              {entry.name}
+                            </div>
                             <div className="truncate font-mono text-[11px] text-muted-foreground" title={entry.absolute_path}>
                               {entry.absolute_path}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            {modifiedLabel ? (
+                              <span
+                                className="hidden whitespace-nowrap text-[11px] text-muted-foreground md:inline"
+                                title={modifiedTitle ?? undefined}
+                              >
+                                {modifiedLabel}
+                              </span>
+                            ) : null}
                             <Badge variant={entry.type === 'directory' ? 'outline' : 'secondary'}>
                               {entry.type}
                             </Badge>

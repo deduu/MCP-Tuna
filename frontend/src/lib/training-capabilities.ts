@@ -36,7 +36,7 @@ export interface TrainingTechniqueOption {
 function buildTimestampedOutputDir(prefix: string, sourcePath?: string): string {
   const now = new Date()
   const stamp = [
-    now.getFullYear(),
+    String(now.getFullYear()).slice(-2),
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
     '_',
@@ -44,8 +44,8 @@ function buildTimestampedOutputDir(prefix: string, sourcePath?: string): string 
     String(now.getMinutes()).padStart(2, '0'),
     String(now.getSeconds()).padStart(2, '0'),
   ].join('')
-  const compactPrefix = compactTrainingPrefix(prefix, 18)
-  const sourceSuffix = sourcePath ? compactSourceHint(sourcePath, 18, 'src') : ''
+  const compactPrefix = compactTrainingPrefix(prefix, 12)
+  const sourceSuffix = sourcePath ? compactSourceHint(sourcePath, 10, 'src') : ''
 
   return `./output/${compactPrefix}${sourceSuffix ? `_${sourceSuffix}` : ''}_${stamp}`
 }
