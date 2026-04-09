@@ -126,7 +126,7 @@ export function BrowsePathField({
   const [locationCustomized, setLocationCustomized] = useState(false)
   const [rootMenuOpen, setRootMenuOpen] = useState(false)
   const [entryQuery, setEntryQuery] = useState('')
-  const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots()
+  const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots(open)
   const autoLocation = resolveValueToBrowseLocation(value, roots)
   const defaultRootId = preferredRootId(roots, preferredRootIds)
   const activeRootId =

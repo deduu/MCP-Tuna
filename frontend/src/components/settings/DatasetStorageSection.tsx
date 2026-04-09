@@ -9,18 +9,30 @@ import {
   setDefaultDatasetOutputDir,
   resetDefaultDatasetOutputDir,
 } from '@/lib/dataset-output'
+import {
+  resetDatasetLibraryRoots,
+  usesDefaultDatasetLibraryRoots,
+} from '@/lib/dataset-library-roots'
 
 export function DatasetStorageSection() {
   const [outputDir, setOutputDir] = useState(getDefaultDatasetOutputDir)
 
   function handleSave() {
+    const syncLibrary = usesDefaultDatasetLibraryRoots()
     const savedDir = setDefaultDatasetOutputDir(outputDir)
+    if (syncLibrary) {
+      resetDatasetLibraryRoots()
+    }
     setOutputDir(savedDir)
     toast.success(`Default dataset output directory set to ${savedDir}`)
   }
 
   function handleReset() {
+    const syncLibrary = usesDefaultDatasetLibraryRoots()
     const resetDir = resetDefaultDatasetOutputDir()
+    if (syncLibrary) {
+      resetDatasetLibraryRoots()
+    }
     setOutputDir(resetDir)
     toast.success(`Default dataset output directory reset to ${resetDir}`)
   }
@@ -33,7 +45,7 @@ export function DatasetStorageSection() {
           Dataset Storage
         </CardTitle>
         <CardDescription>
-          Default save directory used by auto-saved dataset outputs in the UI
+          Managed dataset directory used by auto-saved dataset outputs in the UI
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -56,6 +68,7 @@ export function DatasetStorageSection() {
           <p className="text-xs text-muted-foreground">
             Stored in this browser. It currently applies to Generate from Document,
             clean/normalize outputs, quality-filtered datasets, HF blends, and split/merge defaults.
+            Dataset Library scans this managed root by default unless you add custom library paths.
           </p>
         </div>
       </CardContent>

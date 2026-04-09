@@ -1,4 +1,4 @@
-import type { TrainingJob } from '@/api/types'
+import type { ThinkingMode, TrainingJob } from '@/api/types'
 import type { DeployDialogInitialValues } from '@/components/deployments/DeployDialog'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -13,6 +13,12 @@ function basename(value: string): string {
 
 function readTrimmedString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readThinkingMode(value: unknown): ThinkingMode | undefined {
+  return value === 'default' || value === 'on' || value === 'off'
+    ? value
+    : undefined
 }
 
 export function getTrainingOutputPath(job: TrainingJob): string {
@@ -64,11 +70,30 @@ function resolveDeploymentBaseModel(result: unknown): string | null {
   return readTrimmedString(result.base_model)
 }
 
+function resolveDeploymentThinkingMode(result: unknown): ThinkingMode | undefined {
+  if (!isRecord(result)) return undefined
+
+  const config = isRecord(result.config) ? result.config : null
+  const directThinkingMode = readThinkingMode(config?.thinking_mode)
+  if (directThinkingMode) return directThinkingMode
+
+  const stageResults = result.stage_results
+  if (Array.isArray(stageResults) && stageResults.length > 0) {
+    const lastStage = stageResults[stageResults.length - 1]
+    if (isRecord(lastStage) && isRecord(lastStage.training_result)) {
+      return resolveDeploymentThinkingMode(lastStage.training_result)
+    }
+  }
+
+  return undefined
+}
+
 export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialValues | null {
   const outputPath = getTrainingOutputPath(job).trim()
   if (!outputPath) return null
   const config = isRecord(job.result) && isRecord(job.result.config) ? job.result.config : null
   const modality = config?.trainer === 'vlm_sft' ? 'vision-language' : 'text'
+  const thinkingMode = modality === 'text' ? resolveDeploymentThinkingMode(job.result) : undefined
 
   if (trainingUsesAdapter(job.result)) {
     const resolvedBaseModel = resolveDeploymentBaseModel(job.result) ?? job.base_model.trim()
@@ -79,6 +104,7 @@ export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialVal
       modelPath: resolvedBaseModel,
       adapterPath: outputPath,
       modality,
+      thinkingMode,
     }
   }
 
@@ -86,5 +112,6 @@ export function getDeployInitialValues(job: TrainingJob): DeployDialogInitialVal
     name: basename(outputPath),
     modelPath: outputPath,
     modality,
+    thinkingMode,
   }
 }

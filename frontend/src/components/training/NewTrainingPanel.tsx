@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AutoPrescribeCandidate, TrainingTechnique } from '@/api/types'
+import type { AutoPrescribeCandidate, ThinkingMode, TrainingTechnique } from '@/api/types'
 import {
   useAutoSuggestModel,
   useLocalModelCandidates,
@@ -42,6 +42,7 @@ import {
   describeInitialAdapterRequirement,
   INITIAL_ADAPTER_LABEL,
 } from '@/lib/training-copy'
+import { THINKING_MODE_OPTIONS } from '@/lib/thinking-mode'
 import { cn } from '@/lib/utils'
 import { ModelBrowser } from './ModelBrowser'
 import { TrainingDatasetField } from './TrainingDatasetField'
@@ -109,6 +110,7 @@ export function NewTrainingPanel({
   const [scoreColumn, setScoreColumn] = useState('weighted_score')
   const [difficultyOrder, setDifficultyOrder] = useState<'easy_first' | 'hard_first'>('easy_first')
   const [trainingRecipe, setTrainingRecipe] = useState<(typeof TRAINING_RECIPE_OPTIONS)[number]['value']>('none')
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('default')
 
   const [schemaValid, setSchemaValid] = useState<'pass' | 'warn' | null>(null)
   const [qualityValid, setQualityValid] = useState<'pass' | 'warn' | null>(null)
@@ -142,8 +144,15 @@ export function NewTrainingPanel({
   const datasetPlaceholder = getDatasetPlaceholder(technique)
   const datasetHelpText = getDatasetHelpText(technique)
   const vlmSupportMissing = modelModality === 'vision-language' && !trainingCapabilities?.supports_vlm_sft
-  const autoSuggestDisabled = !datasetPath || autoSuggest.isPending || technique === 'vlm_sft'
+  const hasDatasetPath = Boolean(datasetPath.trim())
+  const autoSuggestDisabled = !hasDatasetPath || autoSuggest.isPending || technique === 'vlm_sft'
+  const autoSuggestHint = !hasDatasetPath
+    ? 'Select a train dataset first. Model suggestions use dataset size and text stats to rank what fits your hardware.'
+    : technique === 'vlm_sft'
+      ? 'Model suggestions are currently unavailable for VLM SFT.'
+      : null
   const showEvalDatasetField = technique === 'sft' && !sequential
+  const showThinkingModeControl = technique === 'sft'
   const supportsBenchmarkWorkflow = showEvalDatasetField
   const preferenceTechnique = isPreferenceTechnique(technique) ? technique : null
   const showPreferenceDatasetAnalysis =
@@ -331,6 +340,7 @@ export function NewTrainingPanel({
         gradient_accumulation_steps: parsedGradAccum,
         max_seq_length: parsedMaxSeqLength,
         ...(showEvalDatasetField && evalDatasetPath.trim() ? { eval_file_path: evalDatasetPath.trim() } : {}),
+        ...(technique === 'sft' ? { thinking_mode: thinkingMode } : {}),
       }
     } else if (technique === 'curriculum') {
       args = {
@@ -388,6 +398,7 @@ export function NewTrainingPanel({
               weight_decay: parsedWeightDecay,
               gradient_accumulation_steps: parsedGradAccum,
               max_seq_length: parsedMaxSeqLength,
+              thinking_mode: thinkingMode,
             }
           : {}),
         ...((technique === 'dpo' || technique === 'kto')
@@ -536,6 +547,29 @@ export function NewTrainingPanel({
           </p>
         </div>
 
+        {showThinkingModeControl && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Thinking Mode</label>
+            <select
+              value={thinkingMode}
+              onChange={(event) => setThinkingMode(event.target.value as ThinkingMode)}
+              disabled={benchmarkAfterTraining}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {THINKING_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {benchmarkAfterTraining
+                ? 'Benchmark-after-training currently uses the backend workflow defaults, so this SFT thinking override is disabled here.'
+                : 'Default follows the selected recipe and model template. Force On preserves reasoning tags, while Force Off strips <think> blocks from assistant targets before SFT.'}
+            </p>
+          </div>
+        )}
+
         <label className="flex items-center gap-2 text-sm cursor-pointer">
           <input
             type="checkbox"
@@ -601,6 +635,9 @@ export function NewTrainingPanel({
             </Button>
           </div>
           <ModelBrowser value={modelPath} onChange={onModelPathChange} />
+          {autoSuggestHint && (
+            <p className="text-xs text-muted-foreground">{autoSuggestHint}</p>
+          )}
           {modelPath && (
             <p className="text-xs text-muted-foreground">
               {modelModality === 'vision-language'

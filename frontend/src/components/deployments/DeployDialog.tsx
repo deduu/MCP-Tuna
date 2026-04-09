@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Dialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { useDeploy } from '@/api/hooks/useDeployments'
+import { useDeploy, type DeployResult } from '@/api/hooks/useDeployments'
+import type { ThinkingMode } from '@/api/types'
 import { toast } from 'sonner'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
 import {
@@ -11,10 +12,12 @@ import {
   describeDeploymentNameDefault,
   describeDeploymentTarget,
 } from '@/lib/deployment-copy'
+import { THINKING_MODE_OPTIONS } from '@/lib/thinking-mode'
 
 export interface DeployDialogInitialValues {
   name?: string
   systemPrompt?: string | null
+  thinkingMode?: ThinkingMode
   modelPath?: string
   adapterPath?: string
   port?: number
@@ -22,11 +25,25 @@ export interface DeployDialogInitialValues {
   modality?: 'text' | 'vision-language'
 }
 
+export interface DeployDialogSubmission {
+  requestId: string
+  name: string
+  modelPath: string
+  adapterPath?: string
+  port: number
+  type: 'mcp' | 'api'
+  modality: 'text' | 'vision-language'
+  thinkingMode?: ThinkingMode
+}
+
 interface DeployDialogProps {
   open: boolean
   onClose: () => void
   type: 'mcp' | 'api'
   initialValues?: DeployDialogInitialValues | null
+  onDeployStart?: (submission: DeployDialogSubmission) => void
+  onDeploySuccess?: (requestId: string, result: DeployResult) => void
+  onDeployError?: (requestId: string) => void
 }
 
 function basename(value: string): string {
@@ -47,13 +64,26 @@ function inferDeploymentName(modelPath: string, adapterPath: string): string {
   return modelName
 }
 
-export function DeployDialog({ open, onClose, type, initialValues }: DeployDialogProps) {
+function createDeployRequestId() {
+  return globalThis.crypto?.randomUUID?.() ?? `deploy-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+export function DeployDialog({
+  open,
+  onClose,
+  type,
+  initialValues,
+  onDeployStart,
+  onDeploySuccess,
+  onDeployError,
+}: DeployDialogProps) {
   const [name, setName] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('default')
   const [modelPath, setModelPath] = useState('')
   const [adapterPath, setAdapterPath] = useState('')
   const [port, setPort] = useState('8001')
-  const [quantization, setQuantization] = useState('4bit')
+  const [quantization, setQuantization] = useState<'4bit' | '8bit' | 'none'>('4bit')
   const [modality, setModality] = useState<'text' | 'vision-language'>('text')
   const [nameCustomized, setNameCustomized] = useState(false)
 
@@ -68,6 +98,7 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
 
     setName(nextName)
     setSystemPrompt(initialValues?.systemPrompt ?? '')
+    setThinkingMode(initialValues?.thinkingMode ?? 'default')
     setModelPath(initialValues?.modelPath ?? '')
     setAdapterPath(initialValues?.adapterPath ?? '')
     setPort(String(initialValues?.port ?? 8001))
@@ -81,14 +112,26 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
     setName(inferDeploymentName(modelPath, adapterPath))
   }, [modelPath, adapterPath, nameCustomized])
 
-  const handleDeploy = () => {
-    if (!modelPath.trim()) {
+  const handleDeploy = async () => {
+    const resolvedModelPath = modelPath.trim()
+    const resolvedAdapterPath = adapterPath.trim()
+    const resolvedPort = Number.parseInt(port, 10)
+
+    if (!resolvedModelPath) {
       toast.error('Model path is required')
       return
     }
 
+    if (!Number.isInteger(resolvedPort) || resolvedPort <= 0) {
+      toast.error('Port must be a valid positive integer')
+      return
+    }
+
+    const resolvedName =
+      name.trim() || inferDeploymentName(resolvedModelPath, resolvedAdapterPath) || basename(resolvedModelPath)
+    const requestId = createDeployRequestId()
     const args: Record<string, unknown> = {
-      model_path: modelPath.trim(),
+      model_path: resolvedModelPath,
     }
 
     if (name.trim()) {
@@ -98,40 +141,47 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
       args.system_prompt = systemPrompt.trim()
     }
 
-    if (adapterPath.trim()) {
-      args.adapter_path = adapterPath.trim()
+    if (resolvedAdapterPath) {
+      args.adapter_path = resolvedAdapterPath
     }
 
-    args.port = parseInt(port, 10)
+    args.port = resolvedPort
 
-    if (modality === 'text' && quantization !== "none") {
-      args.quantization = quantization
+    if (modality === 'text') {
+      args.thinking_mode = thinkingMode
+      if (quantization !== 'none') {
+        args.quantization = quantization
+      }
     }
 
-    deployMutation.mutate(
-      { type, modality, args },
-      {
-        onSuccess: () => {
-          toast.success(`${modality === 'vision-language' ? 'Vision-language' : 'Text'} model deployed as ${type === 'mcp' ? 'MCP server' : 'API endpoint'}`)
-          resetForm()
-          onClose()
-        },
-        onError: (err) => {
-          toast.error(`Deployment failed: ${err.message}`)
-        },
-      },
+    onDeployStart?.({
+      requestId,
+      name: resolvedName,
+      modelPath: resolvedModelPath,
+      adapterPath: resolvedAdapterPath || undefined,
+      port: resolvedPort,
+      type,
+      modality,
+      thinkingMode: modality === 'text' ? thinkingMode : undefined,
+    })
+    onClose()
+
+    const toastId = toast.loading(
+      `Starting ${modality === 'vision-language' ? 'vision-language' : 'text'} ${type === 'mcp' ? 'MCP' : 'API'} deployment`,
     )
-  }
 
-  const resetForm = () => {
-    setName('')
-    setSystemPrompt('')
-    setModelPath('')
-    setAdapterPath('')
-    setPort('8001')
-    setQuantization('4bit')
-    setModality('text')
-    setNameCustomized(false)
+    try {
+      const result = await deployMutation.mutateAsync({ type, modality, args })
+      toast.success(
+        `${modality === 'vision-language' ? 'Vision-language' : 'Text'} model deployed as ${type === 'mcp' ? 'MCP server' : 'API endpoint'}`,
+        { id: toastId },
+      )
+      onDeploySuccess?.(requestId, result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown deployment error'
+      toast.error(`Deployment failed: ${message}`, { id: toastId })
+      onDeployError?.(requestId)
+    }
   }
 
   const title = type === 'mcp' ? 'Deploy as MCP Server' : 'Deploy as API Endpoint'
@@ -245,7 +295,15 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
           <label className="text-sm font-medium">Quantization</label>
           <select
             value={quantization}
-            onChange={(e) => setQuantization(e.target.value)}
+            onChange={(e) =>
+              setQuantization(
+                e.target.value === '8bit'
+                  ? '8bit'
+                  : e.target.value === 'none'
+                    ? 'none'
+                    : '4bit',
+              )
+            }
             disabled={modality === 'vision-language'}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
@@ -259,6 +317,26 @@ export function DeployDialog({ open, onClose, type, initialValues }: DeployDialo
               : '4-bit quantization significantly reduces memory usage. Use "None" only if you have enough VRAM/RAM.'}
           </p>
         </div>
+
+        {modality === 'text' && (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Thinking Mode</label>
+            <select
+              value={thinkingMode}
+              onChange={(e) => setThinkingMode(e.target.value as ThinkingMode)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {THINKING_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Default keeps the model or recipe chat-template behavior. Force Off is useful when you want deployed text chat to avoid emitting reasoning tags such as <code>{'<think>'}</code>.
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium">Runtime Details</label>

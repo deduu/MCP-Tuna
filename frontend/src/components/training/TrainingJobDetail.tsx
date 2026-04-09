@@ -22,11 +22,22 @@ export function TrainingJobDetail({ job }: TrainingJobDetailProps) {
   const usesAdapter = trainingUsesAdapter(job.result)
 
   const chartData = buildLossChartData(p)
+  const waitingForFirstLoggedMetrics =
+    (p?.current_step ?? 0) > 0 &&
+    chartData.length === 0 &&
+    p?.current_stage === 'train'
 
   return (
     <div className="space-y-4 pt-3 border-t border-border">
       {/* Loss chart */}
-      <LossChart data={chartData} />
+      <div className="space-y-2">
+        <LossChart data={chartData} />
+        {waitingForFirstLoggedMetrics && (
+          <p className="text-xs text-muted-foreground">
+            Waiting for the first logged loss sample. Training metrics are emitted every 10 steps by default.
+          </p>
+        )}
+      </div>
 
       {/* Stats grid */}
       {p && (

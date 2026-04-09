@@ -8,6 +8,7 @@ import { Layers2, RefreshCw, Search, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   formatDatasetLibraryRootsInput,
+  getDefaultDatasetLibraryRoots,
   parseDatasetLibraryRootsInput,
   resetDatasetLibraryRoots,
   setDatasetLibraryRoots,
@@ -34,6 +35,7 @@ export function DatasetLibrary({
   onScanRootsChange,
   onSwitchToImport,
 }: DatasetLibraryProps) {
+  const defaultRootsPlaceholder = formatDatasetLibraryRootsInput(getDefaultDatasetLibraryRoots())
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('name')
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -116,7 +118,8 @@ export function DatasetLibrary({
           <div className="space-y-1">
             <h3 className="text-sm font-semibold">Library Paths</h3>
             <p className="text-xs text-muted-foreground">
-              One file or directory path per line. Relative paths resolve from the workspace root.
+              By default, the library scans only the managed dataset root. Add extra paths here only for
+              external dataset collections. Relative paths resolve from the workspace root.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={onRefresh}>
@@ -129,7 +132,7 @@ export function DatasetLibrary({
           value={rootsDraft}
           onChange={(e) => setRootsDraft(e.target.value)}
           className="min-h-28 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder={'data\noutput\nuploads\nnotebooks'}
+          placeholder={defaultRootsPlaceholder}
         />
 
         <div className="flex flex-wrap items-center gap-2">

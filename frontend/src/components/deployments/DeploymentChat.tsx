@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { History, ImagePlus, MessageSquare, Pencil, Send, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  History,
+  ImagePlus,
+  MessageSquare,
+  Pencil,
+  Send,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from 'lucide-react'
 import {
   useDeleteConversation,
   useDeploymentConversation,
   useDeploymentConversations,
   useRenameConversation,
 } from '@/api/hooks/useDeployments'
-import type { ConversationMessage, Deployment } from '@/api/types'
+import type { ConversationMessage, Deployment, ThinkingMode } from '@/api/types'
 import { mcpCall } from '@/api/client'
 import { streamDeploymentTextChat } from '@/api/deployment-chat-stream'
 import type { ChatContentBlock, ChatImageBlock } from '@/lib/chat-content'
@@ -16,8 +27,14 @@ import {
   extractTextFromChatContent,
   sanitizeChatContentForRequest,
 } from '@/lib/chat-content'
+import {
+  DEFAULT_DEPLOYMENT_CHAT_SETTINGS,
+  getDeploymentChatDraftSettings,
+  setDeploymentChatDraftSettings,
+  type DeploymentChatDraftSettings,
+} from '@/lib/deployment-chat-settings'
+import { THINKING_MODE_OPTIONS } from '@/lib/thinking-mode'
 import { uploadAsset } from '@/lib/uploads'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -46,19 +63,36 @@ interface DeploymentChatProps {
   deployment: Deployment
 }
 
+function resolveDeploymentChatDraftSettings(deployment: Deployment): DeploymentChatDraftSettings {
+  const persisted = getDeploymentChatDraftSettings(deployment.deployment_id)
+  return {
+    ...DEFAULT_DEPLOYMENT_CHAT_SETTINGS,
+    ...persisted,
+    systemPrompt: persisted?.systemPrompt ?? deployment.system_prompt ?? '',
+    thinkingMode:
+      deployment.modality === 'text'
+        ? persisted?.thinkingMode ?? deployment.thinking_mode ?? 'default'
+        : 'default',
+  }
+}
+
 export function DeploymentChat({ deployment }: DeploymentChatProps) {
+  const initialSettings = resolveDeploymentChatDraftSettings(deployment)
   const [messages, setMessages] = useState<DeploymentChatMessage[]>([])
   const [input, setInput] = useState('')
-  const [systemPrompt, setSystemPrompt] = useState(deployment.system_prompt ?? '')
+  const [systemPrompt, setSystemPrompt] = useState(initialSettings.systemPrompt)
   const [imageBlocks, setImageBlocks] = useState<ChatImageBlock[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [selectedHistoryConversationId, setSelectedHistoryConversationId] = useState<string | null>(null)
   const [isTextStreaming, setIsTextStreaming] = useState(false)
-  const [temperature, setTemperature] = useState('0.7')
-  const [topP, setTopP] = useState('0.95')
-  const [topK, setTopK] = useState('50')
-  const [maxNewTokens, setMaxNewTokens] = useState('512')
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(initialSettings.thinkingMode)
+  const [temperature, setTemperature] = useState(initialSettings.temperature)
+  const [topP, setTopP] = useState(initialSettings.topP)
+  const [topK, setTopK] = useState(initialSettings.topK)
+  const [maxNewTokens, setMaxNewTokens] = useState(initialSettings.maxNewTokens)
+  const [showHistory, setShowHistory] = useState(true)
+  const [showSettings, setShowSettings] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const textAbortControllerRef = useRef<AbortController | null>(null)
@@ -114,13 +148,21 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   }, [messages, isPending])
 
   useEffect(() => {
+    const restored = resolveDeploymentChatDraftSettings(deployment)
     textAbortControllerRef.current?.abort()
     setMessages([])
     setInput('')
-    setSystemPrompt(deployment.system_prompt ?? '')
+    setSystemPrompt(restored.systemPrompt)
+    setThinkingMode(restored.thinkingMode)
+    setTemperature(restored.temperature)
+    setTopP(restored.topP)
+    setTopK(restored.topK)
+    setMaxNewTokens(restored.maxNewTokens)
     setConversationId(null)
     setSelectedHistoryConversationId(null)
     setIsTextStreaming(false)
+    setShowHistory(true)
+    setShowSettings(false)
     clearImageBlocks()
     vlmChatMutation.reset()
   }, [deployment.deployment_id])
@@ -132,8 +174,9 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
 
     setConversationId(selectedConversation.conversation_id)
     setSystemPrompt(selectedConversation.system_prompt ?? deployment.system_prompt ?? '')
+    setThinkingMode(selectedConversation.thinking_mode ?? deployment.thinking_mode ?? 'default')
     setMessages(selectedConversation.messages.map(toDeploymentChatMessage))
-  }, [deployment.system_prompt, selectedConversation])
+  }, [deployment.system_prompt, deployment.thinking_mode, selectedConversation])
 
   const handleSubmit = () => {
     const trimmed = input.trim()
@@ -217,6 +260,18 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
     ? `${formatTimeAgo(activeConversationUpdatedAt) ?? 'recently'}`
     : null
 
+  function persistDraftSettings(patch: Partial<DeploymentChatDraftSettings>) {
+    setDeploymentChatDraftSettings(deployment.deployment_id, {
+      systemPrompt,
+      thinkingMode: deployment.modality === 'text' ? thinkingMode : 'default',
+      temperature,
+      topP,
+      topK,
+      maxNewTokens,
+      ...patch,
+    })
+  }
+
   async function streamTextDeploymentMessage(message: string) {
     const assistantId = crypto.randomUUID()
     const abortController = new AbortController()
@@ -237,6 +292,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
           top_p: resolveTopP(topP),
           top_k: resolveTopK(topK),
           max_new_tokens: resolveMaxNewTokens(maxNewTokens),
+          thinking_mode: thinkingMode,
           prefer_runtime_metrics: deployment.type === 'api',
           ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
           signal: abortController.signal,
@@ -343,8 +399,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
   }
 
   return (
-    <Card className="border-border/90 shadow-[0_20px_48px_rgba(0,0,0,0.24)]">
-      <CardHeader className="gap-4 border-b pb-4">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-4 rounded-2xl border border-border/80 bg-muted/30 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -365,9 +421,9 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               </Badge>
             </div>
 
-            <div>
-              <CardTitle className="text-lg">Deployment Chat</CardTitle>
-              <CardDescription>{subtitle}</CardDescription>
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold tracking-tight">Deployment Chat</h3>
+              <p className="text-sm text-muted-foreground">{subtitle}</p>
             </div>
           </div>
 
@@ -380,16 +436,38 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
             {activeConversationLabel && (
               <span className="text-[11px] text-muted-foreground">Updated {activeConversationLabel}</span>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowHistory((current) => !current)}
+              disabled={isPending}
+              className="gap-1.5 rounded-full"
+            >
+              <History className="h-4 w-4" />
+              History
+              {showHistory ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSettings((current) => !current)}
+              disabled={isPending}
+              className="gap-1.5 rounded-full"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Settings
+              {showSettings ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </Button>
             <Button variant="ghost" size="sm" onClick={handleClear} disabled={isPending} className="gap-1.5">
               <Trash2 className="h-4 w-4" />
               Clear
             </Button>
           </div>
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-4 pt-4">
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className={cn('grid gap-4', showHistory ? 'lg:grid-cols-[280px_minmax(0,1fr)]' : 'grid-cols-1')}>
+        {showHistory && (
           <div className="rounded-xl border border-border/90 bg-muted p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -489,18 +567,19 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               )}
             </div>
           </div>
+        )}
 
-          <div className="space-y-4">
+        <div className="space-y-4">
             <div
               ref={scrollRef}
-              className="min-h-[320px] max-h-[480px] overflow-y-auto rounded-xl border border-border/90 bg-muted p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+              className="min-h-[360px] max-h-[56vh] overflow-y-auto rounded-[28px] border border-border/80 bg-muted/30 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             >
               {isLoadingConversation ? (
                 <p className="text-sm text-muted-foreground">Loading saved conversation...</p>
               ) : messages.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-center">
                   <div className="max-w-md space-y-2">
-                    <p className="text-sm font-medium">Send a prompt to verify the runtime.</p>
+                    <p className="text-2xl font-semibold tracking-tight">Talk to this deployment directly</p>
                     <p className="text-sm text-muted-foreground">
                       Use this panel to validate direct responses from the deployed model without
                       the agent layer in between.
@@ -508,7 +587,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="mx-auto max-w-3xl space-y-4">
                   {messages.map((message) => (
                     <div key={message.id} className="space-y-1.5">
                       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -537,7 +616,8 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
               )}
             </div>
 
-            <div className="rounded-xl border border-border/90 bg-secondary p-4 shadow-sm shadow-black/20">
+            {showSettings && (
+              <div className="rounded-xl border border-border/90 bg-secondary p-4 shadow-sm shadow-black/20">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Temperature</label>
@@ -546,7 +626,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     step="0.1"
                     min="0"
                     value={temperature}
-                    onChange={(event) => setTemperature(event.target.value)}
+                    onChange={(event) => {
+                      setTemperature(event.target.value)
+                      persistDraftSettings({ temperature: event.target.value })
+                    }}
                     disabled={isPending}
                   />
                 </div>
@@ -558,7 +641,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     min="0"
                     max="1"
                     value={topP}
-                    onChange={(event) => setTopP(event.target.value)}
+                    onChange={(event) => {
+                      setTopP(event.target.value)
+                      persistDraftSettings({ topP: event.target.value })
+                    }}
                     disabled={isPending}
                   />
                 </div>
@@ -569,7 +655,10 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     step="1"
                     min="1"
                     value={topK}
-                    onChange={(event) => setTopK(event.target.value)}
+                    onChange={(event) => {
+                      setTopK(event.target.value)
+                      persistDraftSettings({ topK: event.target.value })
+                    }}
                     disabled={isPending}
                   />
                 </div>
@@ -580,17 +669,48 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     step="1"
                     min="1"
                     value={maxNewTokens}
-                    onChange={(event) => setMaxNewTokens(event.target.value)}
+                    onChange={(event) => {
+                      setMaxNewTokens(event.target.value)
+                      persistDraftSettings({ maxNewTokens: event.target.value })
+                    }}
                     disabled={isPending}
                   />
                 </div>
               </div>
 
+              {deployment.modality === 'text' && (
+                <div className="mt-4 space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Thinking Mode</label>
+                  <select
+                    value={thinkingMode}
+                    onChange={(event) => {
+                      const nextThinkingMode = event.target.value as ThinkingMode
+                      setThinkingMode(nextThinkingMode)
+                      persistDraftSettings({ thinkingMode: nextThinkingMode })
+                    }}
+                    disabled={isPending}
+                    className="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {THINKING_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Default follows the deployment default and, for saved threads, the conversation setting already persisted by the backend. Clear the conversation to guarantee a clean reset.
+                  </p>
+                </div>
+              )}
+
               <div className="mt-4 space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">System Prompt</label>
                 <textarea
                   value={systemPrompt}
-                  onChange={(event) => setSystemPrompt(event.target.value)}
+                  onChange={(event) => {
+                    setSystemPrompt(event.target.value)
+                    persistDraftSettings({ systemPrompt: event.target.value })
+                  }}
                   rows={4}
                   disabled={isPending}
                   placeholder="Optional. Use this to mirror notebook-style system instructions."
@@ -600,11 +720,12 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   Applied to new or cleared conversations. If you change it mid-thread, clear the conversation to guarantee a fresh system prompt.
                 </p>
               </div>
-            </div>
+              </div>
+            )}
 
-            <div className="rounded-xl border border-border/90 bg-muted p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className="rounded-[28px] border border-border/80 bg-card/90 p-3 shadow-[0_14px_40px_rgba(0,0,0,0.22)]">
               {deployment.modality === 'vision-language' && imageBlocks.length > 0 && (
-                <div className="mb-3 flex flex-wrap gap-2">
+                <div className="mb-3 flex flex-wrap gap-2 px-1">
                   {imageBlocks.map((block, index) => (
                     <div key={`${block.image_path}-${index}`} className="relative overflow-hidden rounded-lg border border-border/90 bg-secondary">
                       {block.preview_url ? (
@@ -640,7 +761,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                         : 'Ask the deployed model a question...'
                       : 'Start or redeploy the model to continue this conversation.'
                   }
-                  className="flex min-h-[104px] w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex min-h-[104px] w-full resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 />
 
                 <div className="flex shrink-0 items-end gap-2">
@@ -670,7 +791,7 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                   <Button
                     onClick={handleSubmit}
                     disabled={(!input.trim() && imageBlocks.length === 0) || isPending || isUploadingImage || deployment.status !== 'running'}
-                    className="gap-2"
+                    className="gap-2 rounded-full"
                   >
                     <Send className="h-4 w-4" />
                     {isPending ? 'Sending...' : 'Send'}
@@ -685,15 +806,18 @@ export function DeploymentChat({ deployment }: DeploymentChatProps) {
                     : 'Enter to send, Shift+Enter for a new line.'}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>Max New Tokens caps the response length.</span>
+                  <span>
+                    {showSettings
+                      ? `Max ${resolveMaxNewTokens(maxNewTokens)} tokens`
+                      : 'Open Settings for temperature and system prompt'}
+                  </span>
                   {deployment.status !== 'running' && <Badge variant="warning">View-only while stopped</Badge>}
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+    </div>
   )
 }
 

@@ -39,7 +39,7 @@ export function DatasetsPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">HF blends run as jobs</Badge>
-          <Badge variant="outline">Outputs save to disk automatically</Badge>
+          <Badge variant="outline">Outputs save to the managed dataset root automatically</Badge>
           <Badge variant="outline">Library refreshes when jobs finish</Badge>
         </div>
       </div>

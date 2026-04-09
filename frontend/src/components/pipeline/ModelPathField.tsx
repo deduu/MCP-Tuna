@@ -161,7 +161,7 @@ export function ModelPathField({
   const [didAutoSyncOnOpen, setDidAutoSyncOnOpen] = useState(false)
   const { mutateAsync: executeTool, isPending: isValidating } = useToolExecution()
   const [rootMenuOpen, setRootMenuOpen] = useState(false)
-  const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots()
+  const { data: roots = [], isLoading: rootsLoading, isError: rootsError } = useDeploymentBrowseRoots(open)
   const {
     data: browseResult,
     isLoading: browseLoading,
