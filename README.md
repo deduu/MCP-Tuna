@@ -10,8 +10,11 @@
   <strong>MCP-native platform for dataset generation, evaluation, fine-tuning, deployment, orchestration, and operator-facing tooling.</strong>
 </p>
 
+## Demo
+
+https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90
+
 <p align="center">
-  <a href="#demo">Demo</a> |
   <a href="#quick-start">Quick Start</a> |
   <a href="#platform-surfaces">Platform Surfaces</a> |
   <a href="#gateway-namespaces">Gateway Namespaces</a> |
@@ -166,18 +169,6 @@ Key UI traits:
 - path fields can browse backend-visible directories
 - training options are gated by available backend capabilities
 - multimodal chat and judge paths activate automatically when image blocks are present
-
-## Demo
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90">
-    Watch the MCP Tuna demo video
-  </a>
-</p>
-
-<p align="center">
-  Guided walkthrough of the local control plane covering tools, datasets, training, evaluation, and deployment flows.
-</p>
 
 ## UI Preview
 
