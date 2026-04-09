@@ -10,10 +10,6 @@
   <strong>MCP-native platform for dataset generation, evaluation, fine-tuning, deployment, orchestration, and operator-facing tooling.</strong>
 </p>
 
-## Demo
-
-https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90
-
 <p align="center">
   <a href="#quick-start">Quick Start</a> |
   <a href="#platform-surfaces">Platform Surfaces</a> |
@@ -29,6 +25,10 @@ https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90
   <img alt="Training" src="https://img.shields.io/badge/training-SFT%20%7C%20DPO%20%7C%20GRPO%20%7C%20KTO%20%7C%20VLM-1D4ED8?style=flat-square">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-0F766E?style=flat-square">
 </p>
+
+## Demo
+
+https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90
 
 MCP Tuna is an end-to-end post-training platform for text and vision-language models. It combines MCP servers, a unified gateway, a React control plane, an OpenAI-compatible chat backend, dataset persistence, optional object storage, fine-tuning pipelines, evaluation workflows, and deployment tooling in one repository.
 
