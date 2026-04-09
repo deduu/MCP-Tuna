@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="#demo">Demo</a> |
   <a href="#quick-start">Quick Start</a> |
   <a href="#platform-surfaces">Platform Surfaces</a> |
   <a href="#gateway-namespaces">Gateway Namespaces</a> |
@@ -166,14 +167,28 @@ Key UI traits:
 - training options are gated by available backend capabilities
 - multimodal chat and judge paths activate automatically when image blocks are present
 
-## UI Preview
+## Demo
 
 <p align="center">
-  <img src="docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
+  <a href="https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90">
+    Watch the MCP Tuna demo video
+  </a>
 </p>
 
 <p align="center">
-  Tools, Training, Evaluation, and Deployments from the local control plane.
+  Guided walkthrough of the local control plane covering tools, datasets, training, evaluation, and deployment flows.
+</p>
+
+## UI Preview
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/a7e58816-f370-4e7c-96fa-ced2feeeed90">
+    <img src="docs/assets/screenshots/platform-gallery.svg" alt="MCP Tuna UI preview gallery" width="1080">
+  </a>
+</p>
+
+<p align="center">
+  Tools, Training, Evaluation, and Deployments from the local control plane. Click the gallery to open the demo video.
 </p>
 
 ## Quick Start
