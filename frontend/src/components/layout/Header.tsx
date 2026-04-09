@@ -4,7 +4,7 @@ import { useAppStore } from '@/stores/app'
 import { Button } from '@/components/ui/button'
 
 const ROUTE_TITLES: Record<string, string> = {
-  '/': 'Dashboard',
+  '/dashboard': 'Dashboard',
   '/chat': 'Agent Chat',
   '/tools': 'Tool Explorer',
   '/pipeline': 'Pipeline Builder',
@@ -22,7 +22,7 @@ export function Header() {
 
   const basePath = '/' + (location.pathname.split('/')[1] ?? '')
   const title = ROUTE_TITLES[basePath] ?? 'MCP Tuna'
-  const canGoBack = basePath !== '/'
+  const canGoBack = basePath !== '/dashboard'
 
   const handleBack = () => {
     const historyIndex = typeof window !== 'undefined'
@@ -34,7 +34,7 @@ export function Header() {
       return
     }
 
-    navigate('/')
+    navigate('/dashboard')
   }
 
   return (

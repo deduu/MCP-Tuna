@@ -84,7 +84,7 @@ export function CommandPalette() {
 
           <Command.Group heading="Navigation">
             {[
-              { label: 'Dashboard', path: '/' },
+              { label: 'Dashboard', path: '/dashboard' },
               { label: 'Chat', path: '/chat' },
               { label: 'Pipeline Builder', path: '/pipeline' },
               { label: 'Datasets', path: '/datasets' },

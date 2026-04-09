@@ -41,14 +41,19 @@
   --color-ns-evaluate-model: #84cc16;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   background-color: var(--color-background);
   background-image:
     radial-gradient(circle at top, rgba(59, 130, 246, 0.08), transparent 34%),
+    radial-gradient(circle at 20% 20%, rgba(16, 185, 129, 0.06), transparent 26%),
     linear-gradient(180deg, #0d1016 0%, var(--color-background) 100%);
   color: var(--color-foreground);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
 }
 

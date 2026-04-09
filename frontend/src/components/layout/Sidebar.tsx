@@ -17,7 +17,7 @@ import {
 import { Button } from '@/components/ui/button'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/tools', label: 'Tools', icon: Wrench },
   { to: '/pipeline', label: 'Pipeline', icon: GitBranch },
@@ -82,7 +82,7 @@ export function Sidebar() {
           <NavLink
             key={to}
             to={to}
-            end={to === '/'}
+            end={to === '/dashboard'}
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-3 px-4 py-2 text-sm transition-colors hover:bg-accent',

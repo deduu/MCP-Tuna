@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { queryClient } from '@/api/query-client'
 import { AppShell } from '@/components/layout/AppShell'
+import { LandingPage } from '@/components/landing/LandingPage'
 import { DashboardPage } from '@/components/dashboard/DashboardPage'
 import { ToolExplorerPage } from '@/components/tools/ToolExplorerPage'
 import { NamespaceDetailPage } from '@/components/tools/NamespaceDetailPage'
@@ -20,8 +21,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
+            <Route path="dashboard" element={<DashboardPage />} />
             <Route path="tools" element={<ToolExplorerPage />} />
             <Route path="tools/:namespace" element={<NamespaceDetailPage />} />
             <Route path="tools/:namespace/:tool" element={<ToolExecutionPage />} />
