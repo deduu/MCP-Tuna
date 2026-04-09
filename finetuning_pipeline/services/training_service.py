@@ -6,6 +6,7 @@ run without torch/transformers installed.
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import time
 import inspect
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from shared.async_utils import run_sync
-from shared.config import FinetuningConfig
+from shared.config import FinetuningConfig, ThinkingMode
 from shared.exceptions import OOMError
 from shared.model_load_errors import format_model_load_error
 from shared.multimodal_models import is_vlm_sample
@@ -50,6 +51,17 @@ from .vlm_utils import (
     resolve_dataset_base_dir,
 )
 from .training_recipe_service import TrainingRecipeService
+
+
+_THINKING_SPECIAL_TOKENS = ["<think>", "</think>"]
+_THINKING_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.IGNORECASE | re.DOTALL)
+_DEFAULT_THINKING_SYSTEM_PROMPT = (
+    "When reasoning is useful, write your thoughts inside <think>...</think> "
+    "before the final answer."
+)
+_DEFAULT_NON_THINKING_SYSTEM_PROMPT = (
+    "Be helpful and concise. Do not reveal chain-of-thought. Provide only the final answer."
+)
 
 
 class TrainingService:
@@ -621,6 +633,20 @@ class TrainingService:
         return None
 
     @staticmethod
+    def _strip_thinking_tags(text: Optional[str]) -> str:
+        cleaned = _THINKING_BLOCK_RE.sub("", str(text or ""))
+        cleaned = cleaned.replace("<think>", "").replace("</think>", "")
+        return cleaned.strip()
+
+    @staticmethod
+    def _thinking_template_flag(thinking_mode: ThinkingMode) -> Optional[bool]:
+        if thinking_mode == "on":
+            return True
+        if thinking_mode == "off":
+            return False
+        return None
+
+    @staticmethod
     def _resolve_sft_schema(
         dataset: Any,
         prompt_column: str,
@@ -653,6 +679,7 @@ class TrainingService:
         user_column: Optional[str] = None,
         assistant_column: Optional[str] = None,
         text_only: bool = False,
+        thinking_mode: ThinkingMode = "default",
     ) -> Any:
         """Normalize SFT rows to prompt/completion/text for TRL compatibility."""
 
@@ -669,6 +696,9 @@ class TrainingService:
                 completion = str(example.get(response_column) or "").strip()
                 effective_system_prompt = system_prompt
 
+            if thinking_mode == "off":
+                completion = TrainingService._strip_thinking_tags(completion)
+
             messages = []
             if effective_system_prompt:
                 messages.append({"role": "system", "content": effective_system_prompt})
@@ -677,7 +707,11 @@ class TrainingService:
                 {"role": "assistant", "content": completion},
             ])
             if hasattr(tokenizer, "apply_chat_template"):
-                text = tokenizer.apply_chat_template(messages, tokenize=False)
+                template_kwargs: Dict[str, Any] = {"tokenize": False}
+                enable_thinking = TrainingService._thinking_template_flag(thinking_mode)
+                if enable_thinking is not None:
+                    template_kwargs["enable_thinking"] = enable_thinking
+                text = tokenizer.apply_chat_template(messages, **template_kwargs)
             else:
                 prefix = f"System: {effective_system_prompt}\n" if effective_system_prompt else ""
                 text = f"{prefix}User: {prompt}\nAssistant: {completion}"
@@ -1032,6 +1066,8 @@ class TrainingService:
         push_to_hub: Optional[str] = None,
         recipe: Optional[str] = None,
         special_tokens: Optional[List[str]] = None,
+        system_prompt: Optional[str] = None,
+        thinking_mode: ThinkingMode = "default",
         extra_callbacks: Optional[List] = None,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -1175,18 +1211,28 @@ class TrainingService:
             cuda_available, bf16_supported = self._detect_precision()
             recipe_config = TrainingRecipeService.get_recipe(recipe)
             effective_special_tokens = list(special_tokens or [])
-            if recipe_config:
+            if recipe_config and thinking_mode == "default":
                 effective_special_tokens.extend(recipe_config.get("special_tokens", []))
+            if thinking_mode == "on":
+                effective_special_tokens.extend(_THINKING_SPECIAL_TOKENS)
+            elif thinking_mode == "off":
+                effective_special_tokens = [
+                    token
+                    for token in effective_special_tokens
+                    if token not in _THINKING_SPECIAL_TOKENS
+                ]
             applied_special_tokens = self._register_special_tokens(
                 model,
                 tokenizer,
                 effective_special_tokens,
             )
-            system_prompt = (
-                recipe_config.get("system_prompt")
-                if isinstance(recipe_config, dict)
-                else None
-            )
+            if system_prompt is None:
+                if thinking_mode == "on":
+                    system_prompt = _DEFAULT_THINKING_SYSTEM_PROMPT
+                elif thinking_mode == "off":
+                    system_prompt = _DEFAULT_NON_THINKING_SYSTEM_PROMPT
+                elif isinstance(recipe_config, dict):
+                    system_prompt = recipe_config.get("system_prompt")
             use_notebook_text_only_dataset = (
                 dataset_schema["kind"] == "chat_triplet" and not completion_only_loss
             )
@@ -1201,6 +1247,7 @@ class TrainingService:
                 user_column=dataset_schema.get("user_column"),
                 assistant_column=dataset_schema.get("assistant_column"),
                 text_only=use_notebook_text_only_dataset,
+                thinking_mode=thinking_mode,
             )
 
             # Format eval dataset the same way
@@ -1243,6 +1290,7 @@ class TrainingService:
                         evaluation_schema["kind"] == "chat_triplet"
                         and not completion_only_loss
                     ),
+                    thinking_mode=thinking_mode,
                 )
 
             peft_config = None
@@ -1416,6 +1464,8 @@ class TrainingService:
                     "resumed_from": checkpoint,
                     "recipe": recipe,
                     "special_tokens": applied_special_tokens,
+                    "system_prompt": system_prompt,
+                    "thinking_mode": thinking_mode,
                 },
                 "metrics": metrics,
                 "evaluation_results": eval_results,
@@ -1464,6 +1514,8 @@ class TrainingService:
                     push_to_hub=push_to_hub,
                     recipe=recipe,
                     special_tokens=special_tokens,
+                    system_prompt=system_prompt,
+                    thinking_mode=thinking_mode,
                     extra_callbacks=extra_callbacks,
                     **original_kwargs,
                 )

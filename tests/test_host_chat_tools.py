@@ -52,7 +52,15 @@ class _FakeChatSession:
     def get_info(self):
         return {"turns": self._turns, "modality": self.last_config.modality}
 
-    def update_generation_config(self, *, max_new_tokens=None, temperature=None, top_p=None, top_k=None):
+    def update_generation_config(
+        self,
+        *,
+        max_new_tokens=None,
+        temperature=None,
+        top_p=None,
+        top_k=None,
+        thinking_mode=None,
+    ):
         if max_new_tokens is not None:
             self.last_config.max_new_tokens = max_new_tokens
         if temperature is not None:
@@ -61,6 +69,8 @@ class _FakeChatSession:
             self.last_config.top_p = top_p
         if top_k is not None:
             self.last_config.top_k = top_k
+        if thinking_mode is not None:
+            self.last_config.thinking_mode = thinking_mode
 
 
 class _FakeStructuredChatSession(_FakeChatSession):
@@ -250,6 +260,7 @@ async def test_host_chat_applies_generation_overrides():
                 max_new_tokens=1024,
                 top_p=0.8,
                 top_k=20,
+                thinking_mode="off",
             )
         )
 
@@ -258,6 +269,7 @@ async def test_host_chat_applies_generation_overrides():
     assert _FakeChatSession.last_config.max_new_tokens == 1024
     assert _FakeChatSession.last_config.top_p == 0.8
     assert _FakeChatSession.last_config.top_k == 20
+    assert _FakeChatSession.last_config.thinking_mode == "off"
 
 
 @pytest.mark.asyncio
@@ -490,6 +502,32 @@ async def test_host_chat_uses_deployment_quantization_for_runtime_session():
 
 
 @pytest.mark.asyncio
+async def test_host_chat_uses_deployment_default_thinking_mode():
+    with patch("mcp_gateway.load_dotenv"):
+        from mcp_gateway import TunaGateway
+
+    gateway = TunaGateway()
+    gateway.hoster._deployments["dep-api-thinking"] = {
+        "id": "dep-api-thinking",
+        "type": "api",
+        "model_path": "base/model",
+        "adapter_path": "./adapter",
+        "thinking_mode": "on",
+        "transport": "http",
+        "host": "127.0.0.1",
+        "port": 8021,
+    }
+
+    host_chat = gateway.mcp._tools["host.chat"]["func"]
+
+    with patch("hosting_pipeline.services.chat_service.ChatSession", _FakeChatSession):
+        result = json.loads(await host_chat(message="hello", deployment_id="dep-api-thinking"))
+
+    assert result["success"] is True
+    assert _FakeChatSession.last_config.thinking_mode == "on"
+
+
+@pytest.mark.asyncio
 async def test_gateway_stream_route_streams_text_chat():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -521,6 +559,7 @@ async def test_gateway_stream_route_streams_text_chat():
                     "top_p": 0.85,
                     "top_k": 15,
                     "max_new_tokens": 768,
+                    "thinking_mode": "on",
                 },
             )
 
@@ -532,6 +571,7 @@ async def test_gateway_stream_route_streams_text_chat():
     assert _FakeStreamingChatSession.last_config.max_new_tokens == 768
     assert _FakeStreamingChatSession.last_config.top_p == 0.85
     assert _FakeStreamingChatSession.last_config.top_k == 15
+    assert _FakeStreamingChatSession.last_config.thinking_mode == "on"
 
 
 @pytest.mark.asyncio

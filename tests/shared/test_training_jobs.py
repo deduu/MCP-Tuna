@@ -361,6 +361,55 @@ class TestTrainingJobManager:
         assert updated.status == JobStatus.CANCELLED
 
     @pytest.mark.asyncio
+    async def test_aget_job_marks_persisted_orphan_running_job_failed(self):
+        mgr = TrainingJobManager()
+        payload = TrainingJob(
+            job_id="job-orphaned",
+            status=JobStatus.RUNNING,
+            trainer_type="sft",
+            base_model="model",
+            output_dir="/out",
+            created_at="2026-04-09T09:12:56+00:00",
+            started_at="2026-04-09T09:12:57+00:00",
+        ).model_dump(mode="json")
+
+        mgr._persistence.get_job = AsyncMock(return_value=payload)  # type: ignore[method-assign]
+        mgr._persistence.upsert_job = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        job = await mgr.aget_job("job-orphaned")
+
+        assert job is not None
+        assert job.status == JobStatus.FAILED
+        assert job.completed_at is not None
+        assert job.progress.current_stage == "failed"
+        assert "backend restarted" in (job.error or "").lower()
+        mgr._persistence.upsert_job.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_alist_jobs_excludes_orphaned_running_job_from_active_filter(self):
+        mgr = TrainingJobManager()
+        payload = TrainingJob(
+            job_id="job-orphaned",
+            status=JobStatus.RUNNING,
+            trainer_type="sft",
+            base_model="model",
+            output_dir="/out",
+            created_at="2026-04-09T09:12:56+00:00",
+            started_at="2026-04-09T09:12:57+00:00",
+        ).model_dump(mode="json")
+
+        mgr._persistence.list_jobs = AsyncMock(return_value=[payload])  # type: ignore[method-assign]
+        mgr._persistence.upsert_job = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        running = await mgr.alist_jobs(status=JobStatus.RUNNING)
+        all_jobs = await mgr.alist_jobs()
+
+        assert running == []
+        assert len(all_jobs) == 1
+        assert all_jobs[0].status == JobStatus.FAILED
+        mgr._persistence.upsert_job.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_adelete_job_rejects_persisted_record_for_other_owner(self):
         mgr = TrainingJobManager()
         payload = TrainingJob(

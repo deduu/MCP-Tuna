@@ -1,3 +1,5 @@
+import type { ThinkingMode } from '@/api/types'
+
 export interface DeploymentStreamMetrics {
   prompt_tokens?: number | null
   completion_tokens?: number | null
@@ -45,6 +47,7 @@ interface StreamDeploymentChatRequest {
   top_p?: number
   top_k?: number
   system_prompt?: string | null
+  thinking_mode?: ThinkingMode
   prefer_runtime_metrics?: boolean
   signal?: AbortSignal
 }

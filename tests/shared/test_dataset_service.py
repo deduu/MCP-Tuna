@@ -304,6 +304,21 @@ async def test_info_returns_metadata(svc: DatasetService, sft_data: list, tmp_pa
     assert meta["size_bytes"] > 0
 
 
+async def test_info_json_object_returns_error_for_non_dataset_file(svc: DatasetService, tmp_path: Path):
+    out = tmp_path / "summary.json"
+    out.write_text(json.dumps({"rows": 10, "status": "ok"}), encoding="utf-8")
+
+    result = await svc.info(str(out))
+
+    assert result["success"] is False
+    assert "list of rows" in result["error"].lower()
+
+
+def test_is_probably_dataset_path_rejects_training_progress_snapshots():
+    assert DatasetService.is_probably_dataset_path(Path(".training_progress.jsonl")) is False
+    assert DatasetService.is_probably_dataset_path(Path("training_progress.jsonl")) is False
+
+
 async def test_info_preserves_owned_dataset_metadata(
     svc: DatasetService,
     sft_data: list,

@@ -104,11 +104,11 @@ class TestCancelJobIntegration:
         assert mgr.cancel_job(job.job_id) is True
         assert mgr._cancel_events[job.job_id].is_set()
 
-    def test_cancel_nonrunning_fails(self):
+    def test_cancel_pending_job_succeeds(self):
         mgr = TrainingJobManager()
         job = mgr.create_job("sft", "model", "/out", {})
-        # Still PENDING
-        assert mgr.cancel_job(job.job_id) is False
+        assert mgr.cancel_job(job.job_id) is True
+        assert job.status == JobStatus.CANCELLED
 
 
 class TestJobSerializationForMCP:

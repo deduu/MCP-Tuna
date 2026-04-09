@@ -7,6 +7,10 @@ interface TrainingLogEntryLike {
 
 interface TrainingProgressLike {
   max_steps?: number | null
+  current_step?: number | null
+  loss?: number | null
+  eval_loss?: number | null
+  learning_rate?: number | null
   log_history?: TrainingLogEntryLike[] | null
 }
 
@@ -45,7 +49,7 @@ export function isTrainingStageActive(
 }
 
 export function buildLossChartData(progress?: TrainingProgressLike | null): LossChartPoint[] {
-  return (
+  const history =
     progress?.log_history?.flatMap((entry) => {
       const step = asFiniteNumber(entry.step)
       if (step == null) {
@@ -65,5 +69,28 @@ export function buildLossChartData(progress?: TrainingProgressLike | null): Loss
         learning_rate: asFiniteNumber(entry.learning_rate),
       }]
     }) ?? []
-  )
+
+  const liveStep = asFiniteNumber(progress?.current_step)
+  const liveLoss = asFiniteNumber(progress?.loss)
+  const liveEvalLoss = asFiniteNumber(progress?.eval_loss)
+  const liveLearningRate = asFiniteNumber(progress?.learning_rate)
+
+  if (liveStep == null || (liveLoss == null && liveEvalLoss == null)) {
+    return history
+  }
+
+  const lastStep = history[history.length - 1]?.step
+  if (lastStep === liveStep) {
+    return history
+  }
+
+  return [
+    ...history,
+    {
+      step: liveStep,
+      loss: liveLoss,
+      evalLoss: liveEvalLoss,
+      learning_rate: liveLearningRate,
+    },
+  ]
 }

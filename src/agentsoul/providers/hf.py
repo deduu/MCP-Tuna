@@ -346,8 +346,8 @@ class HuggingFaceProvider(BaseLLM):
         }
         if tools:
             template_kwargs["tools"] = tools
-        if enable_thinking:
-            template_kwargs["enable_thinking"] = True
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = bool(enable_thinking)
 
         prompt = self.tokenizer.apply_chat_template(chat_messages, **template_kwargs)
 
@@ -462,8 +462,8 @@ class HuggingFaceProvider(BaseLLM):
         }
         if tools:
             template_kwargs["tools"] = tools
-        if enable_thinking:
-            template_kwargs["enable_thinking"] = True
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = bool(enable_thinking)
 
         prompt = self.tokenizer.apply_chat_template(chat_messages, **template_kwargs)
 

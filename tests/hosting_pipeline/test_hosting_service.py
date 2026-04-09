@@ -221,6 +221,32 @@ class TestHostingServiceVRAMLeak:
 
         assert result["deployments"][0]["endpoint"] == "http://127.0.0.1:8001"
 
+    async def test_list_deployments_includes_non_default_thinking_mode(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        svc._persistence = _FakePersistence()
+        dep_id = "test-thinking-001"
+        thread = MagicMock()
+        thread.is_alive.return_value = True
+        svc._deployments[dep_id] = {
+            "id": dep_id,
+            "type": "api",
+            "modality": "text",
+            "model_path": "test/model",
+            "adapter_path": None,
+            "thinking_mode": "off",
+            "transport": "http",
+            "host": "127.0.0.1",
+            "port": 8082,
+            "thread": thread,
+            "task": MagicMock(),
+        }
+
+        result = await svc.list_deployments()
+
+        assert result["deployments"][0]["thinking_mode"] == "off"
+
     async def test_health_check_normalizes_wildcard_host_for_probe(self):
         from hosting_pipeline.services.hosting_service import HostingService
 
@@ -261,6 +287,31 @@ class TestHostingServiceVRAMLeak:
         assert result["endpoint"] == "http://127.0.0.1:8001"
         assert result["modality"] == "vision-language"
         assert result["health_response"] == {"status": "ok"}
+
+    async def test_health_check_returns_persisted_thinking_mode(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+
+        svc = HostingService()
+        svc._persistence = _FakePersistence()
+        await svc._persistence.upsert_deployment(
+            {
+                "deployment_id": "stopped-thinking-001",
+                "status": "stopped",
+                "type": "api",
+                "modality": "text",
+                "transport": "http",
+                "host": "127.0.0.1",
+                "port": 8099,
+                "endpoint": "http://127.0.0.1:8099",
+                "model_path": "test/model",
+                "adapter_path": None,
+                "metadata": {"thinking_mode": "on"},
+            }
+        )
+
+        result = await svc.health_check("stopped-thinking-001")
+
+        assert result["thinking_mode"] == "on"
 
     async def test_list_deployments_includes_vlm_metadata(self):
         from hosting_pipeline.services.hosting_service import HostingService

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
+from shared.config import ThinkingMode
 from shared.gpu_lock import GPULock
 from .gpu_service import GPUService
 from .vlm_utils import build_vlm_prompt_and_images, get_processor_tokenizer
@@ -38,6 +39,14 @@ class InferenceService:
             return model_path
 
         return str(max(snapshot_dirs, key=lambda entry: entry.stat().st_mtime))
+
+    @staticmethod
+    def _thinking_flag(thinking_mode: ThinkingMode) -> Optional[bool]:
+        if thinking_mode == "on":
+            return True
+        if thinking_mode == "off":
+            return False
+        return None
 
     @staticmethod
     def _load_vlm_model_and_processor(model_path: str):
@@ -164,13 +173,17 @@ class InferenceService:
         model_path: str,
         adapter_path: Optional[str],
         quantization: Optional[str],
+        thinking_mode: ThinkingMode,
     ) -> Dict[str, Any]:
         start_time = time.time()
-        input_text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        template_kwargs: Dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        enable_thinking = InferenceService._thinking_flag(thinking_mode)
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
+        input_text = tokenizer.apply_chat_template(messages, **template_kwargs)
         model_inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -207,6 +220,7 @@ class InferenceService:
             "model_path": model_path,
             "adapter_path": adapter_path,
             "quantization": quantization,
+            "thinking_mode": thinking_mode,
         }
 
     async def run_text_messages_inference(
@@ -220,6 +234,7 @@ class InferenceService:
         top_k: int = 50,
         do_sample: bool = True,
         quantization: Optional[str] = "4bit",
+        thinking_mode: ThinkingMode = "default",
     ) -> Dict[str, Any]:
         """Run a single text generation request from structured chat messages."""
         model = None
@@ -244,6 +259,7 @@ class InferenceService:
                 model_path=model_path,
                 adapter_path=adapter_path,
                 quantization=quantization,
+                thinking_mode=thinking_mode,
             )
         except Exception as e:
             return {"success": False, "error": str(e), "model_path": model_path}
@@ -264,6 +280,7 @@ class InferenceService:
         do_sample: bool = True,
         system_prompt: Optional[str] = None,
         quantization: Optional[str] = "4bit",
+        thinking_mode: ThinkingMode = "default",
     ) -> Dict[str, Any]:
         """Run inference on a list of prompts."""
         results = []
@@ -295,6 +312,7 @@ class InferenceService:
                     model_path=model_path,
                     adapter_path=adapter_path,
                     quantization=quantization,
+                    thinking_mode=thinking_mode,
                 )
                 if not result.get("success"):
                     return result

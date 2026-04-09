@@ -1,7 +1,7 @@
 import { compactDatasetSuffix, compactSourceHint } from '@/lib/output-naming'
 
 const DATASET_OUTPUT_DIR_STORAGE_KEY = 'agentsoul.datasetOutputDir'
-const DEFAULT_DATASET_OUTPUT_DIR = 'data'
+export const DEFAULT_DATASET_OUTPUT_DIR = 'data'
 
 function normalizeSegment(value: string): string {
   return value

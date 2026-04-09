@@ -1,7 +1,10 @@
 """Pydantic configuration schemas for all MCP Tuna pipelines."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel
+
+
+ThinkingMode = Literal["default", "on", "off"]
 
 
 class PipelineConfig(BaseModel):
@@ -84,6 +87,7 @@ class HostingConfig(BaseModel):
     adapter_path: Optional[str] = None
     name: Optional[str] = None
     system_prompt: Optional[str] = None
+    thinking_mode: ThinkingMode = "default"
     host: str = "0.0.0.0"
     port: int = 8001
     transport: str = "http"  # http | stdio
@@ -100,6 +104,7 @@ class ChatConfig(BaseModel):
     top_p: float = 0.95
     top_k: int = 50
     system_prompt: Optional[str] = None
+    thinking_mode: ThinkingMode = "default"
     quantization: Optional[str] = None
     streaming: bool = True
     modality: str = "text"  # text | vision-language

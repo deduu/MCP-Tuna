@@ -58,6 +58,45 @@ def test_load_text_model_and_tokenizer_sets_eval_and_fp16():
     assert mock_from_pretrained.call_args.kwargs["torch_dtype"] == torch.float16
 
 
+def test_run_loaded_text_messages_inference_passes_explicit_thinking_flag():
+    model = MagicMock()
+    model.device = "cpu"
+    tokenizer = MagicMock()
+    tokenizer.apply_chat_template.return_value = "prompt"
+    model_inputs = MagicMock()
+    model_inputs.input_ids = torch.tensor([[1, 2, 3]])
+    model_inputs.to.return_value = model_inputs
+    tokenizer.return_value = model_inputs
+    model.generate.return_value = torch.tensor([[1, 2, 3, 4]])
+    tokenizer.decode.return_value = "final answer"
+    tokenizer.pad_token_id = 0
+    tokenizer.eos_token_id = 1
+
+    result = InferenceService._run_loaded_text_messages_inference(
+        model=model,
+        tokenizer=tokenizer,
+        messages=[{"role": "user", "content": "Hi"}],
+        max_new_tokens=32,
+        temperature=0.0,
+        top_p=0.9,
+        top_k=50,
+        do_sample=False,
+        model_path="test/model",
+        adapter_path=None,
+        quantization="4bit",
+        thinking_mode="off",
+    )
+
+    tokenizer.apply_chat_template.assert_called_once_with(
+        [{"role": "user", "content": "Hi"}],
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    assert result["success"] is True
+    assert result["thinking_mode"] == "off"
+
+
 @pytest.mark.asyncio
 async def test_run_inference_reuses_loaded_model_for_all_prompts():
     svc = InferenceService()
@@ -99,6 +138,7 @@ async def test_run_inference_reuses_loaded_model_for_all_prompts():
             model_path="test/model",
             adapter_path="test/adapter",
             max_new_tokens=64,
+            thinking_mode="on",
         )
 
     assert result["success"] is True
@@ -109,4 +149,5 @@ async def test_run_inference_reuses_loaded_model_for_all_prompts():
         quantization="4bit",
     )
     assert mock_run.call_count == 2
+    assert all(call.kwargs["thinking_mode"] == "on" for call in mock_run.call_args_list)
     mock_clear.assert_called_once_with()

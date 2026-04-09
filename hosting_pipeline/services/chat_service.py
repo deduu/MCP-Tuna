@@ -190,15 +190,18 @@ class ChatSession:
         """POST to the deployed /generate endpoint."""
         prompt = self._format_history_as_prompt()
         start_time = time.perf_counter()
+        params = {
+            "prompt": prompt,
+            "max_new_tokens": self._config.max_new_tokens,
+            "temperature": self._config.temperature,
+            "top_p": self._config.top_p,
+            "top_k": self._config.top_k,
+        }
+        if self._config.thinking_mode != "default":
+            params["thinking_mode"] = self._config.thinking_mode
         resp = await self._http_client.post(
             f"{self._config.endpoint}{self._config.api_path or '/generate'}",
-            params={
-                "prompt": prompt,
-                "max_new_tokens": self._config.max_new_tokens,
-                "temperature": self._config.temperature,
-                "top_p": self._config.top_p,
-                "top_k": self._config.top_k,
-            },
+            params=params,
         )
         data = resp.json()
         latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
@@ -226,6 +229,13 @@ class ChatSession:
             top_p=self._config.top_p,
             top_k=self._config.top_k,
             do_sample=self._config.temperature > 0,
+            enable_thinking=(
+                True
+                if self._config.thinking_mode == "on"
+                else False
+                if self._config.thinking_mode == "off"
+                else None
+            ),
         )
         provider_metrics = getattr(self._provider, "last_metrics", None) or {}
         usage = self._normalize_usage(resp.usage, provider_metrics)
@@ -248,6 +258,7 @@ class ChatSession:
             top_k=self._config.top_k,
             do_sample=self._config.temperature > 0,
             quantization=self._config.quantization or "4bit",
+            thinking_mode=self._config.thinking_mode,
         )
         if not result.get("success"):
             raise RuntimeError(result.get("error", "Text generation failed"))
@@ -338,16 +349,19 @@ class ChatSession:
         stream_path = self._stream_api_path()
 
         try:
+            payload = {
+                "prompt": prompt,
+                "max_new_tokens": self._config.max_new_tokens,
+                "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+                "top_k": self._config.top_k,
+            }
+            if self._config.thinking_mode != "default":
+                payload["thinking_mode"] = self._config.thinking_mode
             async with self._http_client.stream(
                 "POST",
                 f"{self._config.endpoint}{stream_path}",
-                json={
-                    "prompt": prompt,
-                    "max_new_tokens": self._config.max_new_tokens,
-                    "temperature": self._config.temperature,
-                    "top_p": self._config.top_p,
-                    "top_k": self._config.top_k,
-                },
+                json=payload,
             ) as response:
                 content_type = response.headers.get("content-type", "").lower()
                 if response.status_code != 200 or "text/event-stream" not in content_type:
@@ -420,6 +434,13 @@ class ChatSession:
             top_p=self._config.top_p,
             top_k=self._config.top_k,
             do_sample=self._config.temperature > 0,
+            enable_thinking=(
+                True
+                if self._config.thinking_mode == "on"
+                else False
+                if self._config.thinking_mode == "off"
+                else None
+            ),
         ):
             content = chunk if isinstance(chunk, str) else getattr(chunk, "content", None)
             if isinstance(content, str) and content:
@@ -533,6 +554,7 @@ class ChatSession:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
+        thinking_mode: Optional[str] = None,
     ) -> None:
         """Apply per-request generation overrides without resetting history."""
         if max_new_tokens is not None:
@@ -543,6 +565,8 @@ class ChatSession:
             self._config.top_p = top_p
         if top_k is not None:
             self._config.top_k = top_k
+        if thinking_mode is not None:
+            self._config.thinking_mode = thinking_mode
 
     def restore_history(self, messages: List[Dict[str, Any]]) -> None:
         """Restore a previously persisted conversation history."""
@@ -575,6 +599,7 @@ class ChatSession:
             "top_k": self._config.top_k,
             "streaming": self._config.streaming,
             "modality": self._config.modality,
+            "thinking_mode": self._config.thinking_mode,
         }
         if self._mode == "api":
             info["endpoint"] = self._config.endpoint

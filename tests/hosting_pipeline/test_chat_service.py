@@ -39,6 +39,7 @@ class TestChatConfig:
         assert cfg.top_p == 0.95
         assert cfg.top_k == 50
         assert cfg.system_prompt is None
+        assert cfg.thinking_mode == "default"
         assert cfg.streaming is True
         assert cfg.modality == "text"
         assert cfg.api_path is None
@@ -59,6 +60,7 @@ class TestChatConfig:
             top_p=0.8,
             top_k=25,
             system_prompt="You are a helpful assistant.",
+            thinking_mode="on",
             streaming=False,
         )
         assert cfg.max_new_tokens == 256
@@ -66,6 +68,7 @@ class TestChatConfig:
         assert cfg.top_p == 0.8
         assert cfg.top_k == 25
         assert cfg.system_prompt == "You are a helpful assistant."
+        assert cfg.thinking_mode == "on"
         assert cfg.streaming is False
 
 
@@ -122,6 +125,7 @@ class TestChatSessionAPIMode:
         assert mock_client.post.await_args.kwargs["params"]["temperature"] == 0.7
         assert mock_client.post.await_args.kwargs["params"]["top_p"] == 0.95
         assert mock_client.post.await_args.kwargs["params"]["top_k"] == 50
+        assert "thinking_mode" not in mock_client.post.await_args.kwargs["params"]
 
     @pytest.mark.asyncio
     async def test_send_message_result_api_mode_returns_metrics(self):
@@ -148,6 +152,25 @@ class TestChatSessionAPIMode:
         assert result["usage"]["total_tokens"] == 15
         assert result["model_id"] == "api-model"
         assert result["metrics"]["latency_ms"] is not None
+
+    @pytest.mark.asyncio
+    async def test_send_message_api_mode_forwards_non_default_thinking_mode(self):
+        cfg = ChatConfig(endpoint="http://localhost:8001", thinking_mode="on")
+        session = ChatSession(cfg)
+        session._mode = "api"
+        session._initialized = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"response": "Thinking enabled"}
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        session._http_client = mock_client
+
+        await session.send_message("Hello")
+
+        assert mock_client.post.await_args.kwargs["params"]["thinking_mode"] == "on"
 
     @pytest.mark.asyncio
     async def test_conversation_history_maintained(self):
@@ -316,10 +339,29 @@ class TestChatSessionDirectMode:
         assert mock_provider.chat.await_args.kwargs["do_sample"] is False
 
     @pytest.mark.asyncio
+    async def test_send_message_direct_mode_forwards_thinking_mode(self):
+        cfg = ChatConfig(model_path="test/model", thinking_mode="off")
+        session = ChatSession(cfg)
+        session._mode = "direct"
+        session._initialized = True
+
+        mock_resp = MagicMock()
+        mock_resp.content = "Direct response"
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=mock_resp)
+        session._provider = mock_provider
+
+        await session.send_message("Hi")
+
+        assert mock_provider.chat.await_args.kwargs["enable_thinking"] is False
+
+    @pytest.mark.asyncio
     async def test_send_message_direct_mode_uses_tokenizer_template_runtime(self):
         cfg = ChatConfig(
             model_path="test/model",
             system_prompt="Be concise.",
+            thinking_mode="off",
             temperature=0.0,
             quantization="4bit",
             use_tokenizer_chat_template=True,
@@ -348,6 +390,7 @@ class TestChatSessionDirectMode:
             {"role": "user", "content": "Hi"},
         ]
         assert call["quantization"] == "4bit"
+        assert call["thinking_mode"] == "off"
         assert call["do_sample"] is False
         assert session._history[-1]["content"] == "Notebook-style answer"
 
@@ -391,6 +434,7 @@ class TestChatSessionDirectMode:
         cfg = ChatConfig(
             model_path="test/model",
             use_tokenizer_chat_template=True,
+            thinking_mode="on",
             quantization="8bit",
         )
         inference_service = AsyncMock()
@@ -414,6 +458,7 @@ class TestChatSessionDirectMode:
         assert tokens == ["Single chunk reply"]
         call = inference_service.run_text_messages_inference.await_args.kwargs
         assert call["quantization"] == "8bit"
+        assert call["thinking_mode"] == "on"
         assert session._history[-1]["content"] == "Single chunk reply"
 
     @pytest.mark.asyncio
@@ -531,6 +576,7 @@ class TestChatSessionCommands:
 
         assert info["use_tokenizer_chat_template"] is True
         assert info["quantization"] == "4bit"
+        assert info["thinking_mode"] == "default"
 
     @pytest.mark.asyncio
     async def test_shutdown_api_mode_closes_client(self):

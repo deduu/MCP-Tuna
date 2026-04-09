@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
 
-from shared.config import HostingConfig
+from shared.config import HostingConfig, ThinkingMode
 from shared.gpu_lock import GPULock
 from shared.persistence import get_persistence_service
 
@@ -71,6 +71,46 @@ def _deployment_system_prompt(deployment: Dict[str, Any]) -> str | None:
     return None
 
 
+def _deployment_thinking_mode(deployment: Dict[str, Any]) -> ThinkingMode:
+    thinking_mode = deployment.get("thinking_mode")
+    if isinstance(thinking_mode, str) and thinking_mode in {"default", "on", "off"}:
+        return thinking_mode
+
+    metadata = deployment.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_mode = metadata.get("thinking_mode")
+        if isinstance(metadata_mode, str) and metadata_mode in {"default", "on", "off"}:
+            return metadata_mode
+    return "default"
+
+
+def _thinking_flag(thinking_mode: ThinkingMode) -> bool | None:
+    if thinking_mode == "on":
+        return True
+    if thinking_mode == "off":
+        return False
+    return None
+
+
+def _resolve_request_thinking_mode(
+    requested_mode: ThinkingMode,
+    deployment_mode: ThinkingMode,
+) -> ThinkingMode:
+    return deployment_mode if requested_mode == "default" else requested_mode
+
+
+def _text_prompt_messages(prompt: str, system_prompt: str | None) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    if (
+        isinstance(system_prompt, str)
+        and system_prompt.strip()
+        and not prompt.lstrip().startswith("System:")
+    ):
+        messages.append({"role": "system", "content": system_prompt.strip()})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
 class HostingService:
     """Manages model deployments as MCP servers or FastAPI endpoints."""
 
@@ -86,6 +126,9 @@ class HostingService:
         system_prompt = _deployment_system_prompt(deployment)
         if system_prompt:
             metadata["system_prompt"] = system_prompt
+        thinking_mode = _deployment_thinking_mode(deployment)
+        if thinking_mode != "default":
+            metadata["thinking_mode"] = thinking_mode
         quantization = deployment.get("quantization")
         if isinstance(quantization, str) and quantization.strip():
             metadata["quantization"] = quantization.strip()
@@ -200,14 +243,20 @@ class HostingService:
                 temperature: float = 0.7,
                 top_p: float = 0.95,
                 top_k: int = 50,
+                thinking_mode: ThinkingMode = "default",
             ) -> str:
+                resolved_thinking_mode = _resolve_request_thinking_mode(
+                    thinking_mode,
+                    config.thinking_mode,
+                )
                 resp = await provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=_text_prompt_messages(prompt, config.system_prompt),
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
                     do_sample=temperature > 0,
+                    enable_thinking=_thinking_flag(resolved_thinking_mode),
                 )
                 return resp.content or ""
 
@@ -244,6 +293,7 @@ class HostingService:
                 "id": deployment_id,
                 "name": config.name,
                 "system_prompt": config.system_prompt,
+                "thinking_mode": config.thinking_mode,
                 "quantization": config.quantization,
                 "type": "mcp",
                 "modality": config.modality,
@@ -275,6 +325,7 @@ class HostingService:
                     if config.transport == "http"
                     else "stdio"
                 ),
+                "thinking_mode": config.thinking_mode,
                 **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
@@ -371,14 +422,20 @@ class HostingService:
                 temperature: float = 0.7,
                 top_p: float = 0.95,
                 top_k: int = 50,
+                thinking_mode: ThinkingMode = "default",
             ):
+                resolved_thinking_mode = _resolve_request_thinking_mode(
+                    thinking_mode,
+                    config.thinking_mode,
+                )
                 resp = await provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=_text_prompt_messages(prompt, config.system_prompt),
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
                     do_sample=temperature > 0,
+                    enable_thinking=_thinking_flag(resolved_thinking_mode),
                 )
                 provider_metrics = getattr(provider, "last_metrics", None) or {}
                 usage = _normalize_usage(resp.usage, provider_metrics)
@@ -396,18 +453,26 @@ class HostingService:
                 temperature = float(payload.get("temperature", 0.7))
                 top_p = float(payload.get("top_p", 0.95))
                 top_k = int(payload.get("top_k", 50))
+                requested_thinking_mode = payload.get("thinking_mode")
+                if requested_thinking_mode not in {"default", "on", "off"}:
+                    requested_thinking_mode = "default"
+                resolved_thinking_mode = _resolve_request_thinking_mode(
+                    requested_thinking_mode,
+                    config.thinking_mode,
+                )
 
                 async def event_generator():
                     full_response = ""
                     streamed_usage: Dict[str, Any] | None = None
                     try:
                         async for chunk in provider.stream(
-                            messages=[{"role": "user", "content": prompt}],
+                            messages=_text_prompt_messages(prompt, config.system_prompt),
                             max_new_tokens=max_new_tokens,
                             temperature=temperature,
                             top_p=top_p,
                             top_k=top_k,
                             do_sample=temperature > 0,
+                            enable_thinking=_thinking_flag(resolved_thinking_mode),
                         ):
                             chunk_content = getattr(chunk, "content", None)
                             if isinstance(chunk_content, str) and chunk_content:
@@ -478,6 +543,7 @@ class HostingService:
                 "id": deployment_id,
                 "name": config.name,
                 "system_prompt": config.system_prompt,
+                "thinking_mode": config.thinking_mode,
                 "quantization": config.quantization,
                 "type": "api",
                 "modality": config.modality,
@@ -505,6 +571,7 @@ class HostingService:
                 "modality": config.modality,
                 "endpoint": f"http://{_client_endpoint_host(config.host)}:{config.port}",
                 "routes": ["/generate", "/generate_stream", "/health"],
+                "thinking_mode": config.thinking_mode,
                 **({"name": config.name} if config.name else {}),
             }
         except Exception as e:
@@ -765,6 +832,8 @@ class HostingService:
                 deployment["name"] = _deployment_name(dep)
             if _deployment_system_prompt(dep):
                 deployment["system_prompt"] = _deployment_system_prompt(dep)
+            if _deployment_thinking_mode(dep) != "default":
+                deployment["thinking_mode"] = _deployment_thinking_mode(dep)
             routes = dep.get("routes")
             if routes:
                 deployment["routes"] = routes
@@ -791,6 +860,11 @@ class HostingService:
                     **(
                         {"system_prompt": _deployment_system_prompt(dep)}
                         if _deployment_system_prompt(dep)
+                        else {}
+                    ),
+                    **(
+                        {"thinking_mode": _deployment_thinking_mode(dep)}
+                        if _deployment_thinking_mode(dep) != "default"
                         else {}
                     ),
                     **({"name": _deployment_name(dep)} if _deployment_name(dep) else {}),
@@ -875,6 +949,11 @@ class HostingService:
                 "adapter_path": persisted.get("adapter_path"),
                 "endpoint": persisted.get("endpoint"),
                 "system_prompt": _deployment_system_prompt(persisted),
+                **(
+                    {"thinking_mode": _deployment_thinking_mode(persisted)}
+                    if _deployment_thinking_mode(persisted) != "default"
+                    else {}
+                ),
                 "created_at": persisted.get("created_at"),
                 "updated_at": persisted.get("updated_at"),
                 "stopped_at": persisted.get("stopped_at"),
@@ -913,6 +992,8 @@ class HostingService:
             result["name"] = _deployment_name(dep)
         if _deployment_system_prompt(dep):
             result["system_prompt"] = _deployment_system_prompt(dep)
+        if _deployment_thinking_mode(dep) != "default":
+            result["thinking_mode"] = _deployment_thinking_mode(dep)
         if dep.get("routes"):
             result["routes"] = dep["routes"]
 

@@ -571,6 +571,33 @@ class TestTrainModelSFTConfig:
 
         assert prepared.column_names == ["text"]
 
+    def test_prepare_sft_dataset_strips_thinking_blocks_when_disabled(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(
+            [{"prompt": "Apa manfaatnya?", "response": "<think>cek konteks</think>Jawaban singkat."}]
+        )
+        _mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_messages: list = []
+
+        def capture_template(messages, tokenize=False, **kwargs):
+            captured_messages.append(messages)
+            return "templated"
+
+        mock_tokenizer.apply_chat_template = MagicMock(side_effect=capture_template)
+
+        svc._prepare_sft_text_dataset(
+            dataset=dataset,
+            tokenizer=mock_tokenizer,
+            prompt_column="prompt",
+            response_column="response",
+            thinking_mode="off",
+        )
+
+        assert captured_messages
+        assert captured_messages[0][-1]["role"] == "assistant"
+        assert captured_messages[0][-1]["content"] == "Jawaban singkat."
+
     @pytest.mark.asyncio
     async def test_train_model_accepts_chat_triplet_dataset(self, tmp_path):
         svc = TrainingService()
@@ -621,6 +648,42 @@ class TestTrainModelSFTConfig:
         train_dataset = captured_trainer_kwargs["train_dataset"]
         assert set(train_dataset.column_names) == {"text"}
         assert result["config"]["dataset_format"] == "text_only"
+
+    @pytest.mark.asyncio
+    async def test_train_model_thinking_mode_on_registers_thinking_tokens(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_sft_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        mock_tokenizer.add_special_tokens.return_value = 2
+        mock_tokenizer.__len__.return_value = 321
+        captured_messages: list = []
+
+        def capture_template(messages, tokenize=False, **kwargs):
+            captured_messages.append(messages)
+            return "templated"
+
+        mock_tokenizer.apply_chat_template = MagicMock(side_effect=capture_template)
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer()
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_thinking_on"),
+                thinking_mode="on",
+            )
+
+        assert result["config"]["thinking_mode"] == "on"
+        assert result["config"]["special_tokens"] == ["<think>", "</think>"]
+        assert captured_messages
+        assert captured_messages[0][0]["role"] == "system"
+        assert "<think>" in captured_messages[0][0]["content"]
 
     @pytest.mark.asyncio
     async def test_train_model_prefers_explicit_lora_wrapping(self, tmp_path):

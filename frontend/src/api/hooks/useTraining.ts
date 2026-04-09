@@ -19,6 +19,15 @@ import { inferModelModality, resolveTrainingToolName } from '@/lib/training-capa
 
 const ASYNC_TRAINING_START_TIMEOUT_MS = 60_000
 const JOB_QUERY_GC_MS = 30 * 60_000
+const DEPLOYMENT_BROWSER_TIMEOUT_MS = 4_000
+const DEPLOYMENT_BROWSER_ROOTS_STALE_MS = 5 * 60_000
+const DEPLOYMENT_BROWSER_DIR_STALE_MS = 10_000
+
+function deploymentBrowserRequestOptions() {
+  return {
+    timeoutMs: DEPLOYMENT_BROWSER_TIMEOUT_MS,
+  }
+}
 
 function normalizeTrainingJob(job: TrainingJob & Record<string, unknown>): TrainingJob {
   const trainerType = typeof job.trainer_type === 'string' ? job.trainer_type : undefined
@@ -199,14 +208,20 @@ export function usePreferenceDatasetAnalysis(
   })
 }
 
-export function useDeploymentBrowseRoots() {
+export function useDeploymentBrowseRoots(enabled: boolean = true) {
   return useQuery<DeploymentBrowseRoot[]>({
     queryKey: ['file', 'deployment-browse', 'roots'],
     queryFn: async () => {
-      const result = await mcpCall<{ roots: DeploymentBrowseRoot[] }>('file.list_deployment_roots')
+      const result = await mcpCall<{ roots: DeploymentBrowseRoot[] }>(
+        'file.list_deployment_roots',
+        {},
+        deploymentBrowserRequestOptions(),
+      )
       return result.roots ?? []
     },
-    staleTime: 60_000,
+    enabled,
+    staleTime: DEPLOYMENT_BROWSER_ROOTS_STALE_MS,
+    retry: 0,
   })
 }
 
@@ -214,7 +229,11 @@ export function useDeploymentBrowseDir(rootId: string, path: string, enabled: bo
   return useQuery<DeploymentBrowseResult>({
     queryKey: ['file', 'deployment-browse', rootId, path],
     queryFn: async () => {
-      const result = await mcpCall<DeploymentBrowseResult>('file.browse_deployment_dir', { root_id: rootId, path })
+      const result = await mcpCall<DeploymentBrowseResult>(
+        'file.browse_deployment_dir',
+        { root_id: rootId, path },
+        deploymentBrowserRequestOptions(),
+      )
       const entries = [...(result.entries ?? [])].sort((a, b) => {
         if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
         const timeA = Date.parse(a.modified_at ?? '')
@@ -231,7 +250,8 @@ export function useDeploymentBrowseDir(rootId: string, path: string, enabled: bo
       }
     },
     enabled: enabled && !!rootId,
-    staleTime: 10_000,
+    staleTime: DEPLOYMENT_BROWSER_DIR_STALE_MS,
+    retry: 0,
   })
 }
 

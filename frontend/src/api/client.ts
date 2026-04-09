@@ -1,10 +1,12 @@
 import { gatewayHealthUrls, gatewayMcpUrls } from '@/lib/gateway'
 
 const DEFAULT_TIMEOUT_MS = 15_000
+const GATEWAY_URL_CACHE_PREFIX = 'agentsoul.gatewayUrl.'
 
 interface MCPRequestOptions {
   timeoutMs?: number
   allowFallbackOnTimeout?: boolean
+  cacheKey?: string
 }
 
 export interface GatewayHealthStatus {
@@ -24,6 +26,58 @@ export class APIError extends Error {
     this.status = status
     this.details = details
   }
+}
+
+function readGatewayUrlPreference(cacheKey?: string) {
+  if (!cacheKey) return null
+
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.sessionStorage.getItem(`${GATEWAY_URL_CACHE_PREFIX}${cacheKey}`)
+  } catch {
+    return null
+  }
+}
+
+function writeGatewayUrlPreference(cacheKey: string | undefined, url: string) {
+  if (!cacheKey || typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage.setItem(`${GATEWAY_URL_CACHE_PREFIX}${cacheKey}`, url)
+  } catch {
+    // Ignore storage failures and keep the network path stateless.
+  }
+}
+
+function clearGatewayUrlPreference(cacheKey?: string, url?: string) {
+  if (!cacheKey || typeof window === 'undefined') {
+    return
+  }
+
+  const current = readGatewayUrlPreference(cacheKey)
+  if (url && current && current !== url) {
+    return
+  }
+
+  try {
+    window.sessionStorage.removeItem(`${GATEWAY_URL_CACHE_PREFIX}${cacheKey}`)
+  } catch {
+    // Ignore storage failures and fall back to the static URL order.
+  }
+}
+
+function rankGatewayUrls(urls: string[], cacheKey?: string) {
+  const preferredUrl = readGatewayUrlPreference(cacheKey)
+  if (!preferredUrl || !urls.includes(preferredUrl)) {
+    return urls
+  }
+
+  return [preferredUrl, ...urls.filter((url) => url !== preferredUrl)]
 }
 
 function normalizeRequestError(error: unknown, timeoutMs: number, url: string) {
@@ -48,8 +102,9 @@ async function fetchJsonWithFallback(
   const timeoutMs = requestOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const allowFallbackOnTimeout = requestOptions.allowFallbackOnTimeout ?? true
   const attempts: string[] = []
+  const rankedUrls = rankGatewayUrls(urls, requestOptions.cacheKey)
 
-  for (const url of urls) {
+  for (const url of rankedUrls) {
     const controller = new AbortController()
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
 
@@ -63,10 +118,12 @@ async function fetchJsonWithFallback(
         throw new APIError(`Request failed: ${response.statusText}`, response.status)
       }
 
+      writeGatewayUrlPreference(requestOptions.cacheKey, url)
       return await response.json()
     } catch (error) {
       const timedOut = error instanceof DOMException && error.name === 'AbortError'
       const normalizedError = normalizeRequestError(error, timeoutMs, url)
+      clearGatewayUrlPreference(requestOptions.cacheKey, url)
       attempts.push(`${url} -> ${normalizedError.message}`)
       if (timedOut && !allowFallbackOnTimeout) {
         break
@@ -87,7 +144,7 @@ async function mcpFetchJson(body: Record<string, unknown>, options: MCPRequestOp
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     },
-    options,
+    { ...options, cacheKey: options.cacheKey ?? 'mcp' },
     'Could not reach the MCP gateway',
   )
 }
@@ -159,5 +216,5 @@ export async function mcpListTools(options: MCPRequestOptions = {}) {
 }
 
 export async function gatewayHealthCheck(options: MCPRequestOptions = {}): Promise<GatewayHealthStatus> {
-  return fetchJson(gatewayHealthUrls(), { method: 'GET' }, options)
+  return fetchJson(gatewayHealthUrls(), { method: 'GET' }, { ...options, cacheKey: options.cacheKey ?? 'health' })
 }

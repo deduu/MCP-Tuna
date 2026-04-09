@@ -5,7 +5,7 @@ from typing import Optional
 
 from agentsoul.server import MCPServer
 from ..services.hosting_service import HostingService
-from shared.config import HostingConfig
+from shared.config import HostingConfig, ThinkingMode
 
 
 class HostingMCPServer:
@@ -27,6 +27,7 @@ class HostingMCPServer:
             name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
@@ -35,6 +36,7 @@ class HostingMCPServer:
                 host=host,
                 port=port,
                 transport="http",
+                thinking_mode=thinking_mode,
             )
             result = await svc.deploy_as_mcp(config)
             return json.dumps(result, indent=2)
@@ -68,6 +70,7 @@ class HostingMCPServer:
             name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path,
@@ -76,6 +79,7 @@ class HostingMCPServer:
                 host=host,
                 port=port,
                 transport="http",
+                thinking_mode=thinking_mode,
             )
             result = await svc.deploy_as_api(config)
             return json.dumps(result, indent=2)

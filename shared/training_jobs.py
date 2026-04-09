@@ -413,6 +413,46 @@ class TrainingJobManager:
             job.progress.last_updated = _now_iso()
         self._schedule_persist(job)
 
+    async def _reconcile_persisted_job(self, job: TrainingJob) -> TrainingJob:
+        if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+            return job
+
+        task = self._tasks.get(job.job_id)
+        if task is not None and not task.done():
+            return job
+
+        now = _now_iso()
+        if job.started_at:
+            status_message = "Worker exited before job completion"
+            error = (
+                "The background worker for this job is no longer running. "
+                "This usually means the backend restarted while the job was active, "
+                "and in-flight jobs do not resume automatically."
+            )
+        else:
+            status_message = "Worker exited before job start"
+            error = (
+                "The background worker for this queued job is no longer running. "
+                "This usually means the backend restarted before execution began, "
+                "and queued jobs do not resume automatically."
+            )
+
+        job.status = JobStatus.FAILED
+        job.completed_at = job.completed_at or now
+        job.progress.current_stage = "failed"
+        job.progress.status_message = status_message
+        job.progress.last_updated = now
+        job.error = job.error or error
+
+        with self._lock:
+            self._jobs[job.job_id] = job
+
+        await self._persistence.upsert_job(
+            self._namespace,
+            job.model_dump(mode="json"),
+        )
+        return job
+
     async def aget_job(self, job_id: str, ownership: Any = None) -> Optional[TrainingJob]:
         job = self.get_job_for_owner(job_id, ownership)
         if job is not None:
@@ -428,7 +468,7 @@ class TrainingJobManager:
         job = TrainingJob.model_validate(persisted)
         if not self._job_visible_to_owner(job, ownership):
             return None
-        return job
+        return await self._reconcile_persisted_job(job)
 
     async def alist_jobs(
         self,
@@ -464,6 +504,10 @@ class TrainingJobManager:
             job = TrainingJob.model_validate(item)
             if not self._job_visible_to_owner(job, ownership):
                 continue
+            if job.job_id not in merged:
+                job = await self._reconcile_persisted_job(job)
+                if status is not None and job.status != status:
+                    continue
             merged.setdefault(job.job_id, job)
 
         return sorted(

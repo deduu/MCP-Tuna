@@ -25,6 +25,7 @@ export interface MCPToolResult {
 }
 
 export type ModelModality = 'text' | 'vision-language' | 'unknown'
+export type ThinkingMode = 'default' | 'on' | 'off'
 
 export type TrainingTechnique =
   | 'sft'
@@ -160,6 +161,7 @@ export interface Deployment {
   deployment_id: string
   name?: string
   system_prompt?: string | null
+  thinking_mode?: ThinkingMode
   model_path: string
   adapter_path?: string
   endpoint: string
@@ -197,6 +199,7 @@ export interface DeploymentConversationSummary {
   title?: string | null
   deployment_id?: string | null
   modality: ModelModality
+  thinking_mode?: ThinkingMode
   endpoint?: string | null
   model_path?: string | null
   adapter_path?: string | null

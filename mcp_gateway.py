@@ -38,6 +38,7 @@ from shared.config import (
     HostingConfig,
     OrchestrationConfig,
     ModelEvaluationConfig,
+    ThinkingMode,
 )
 from shared.persistence import get_persistence_service
 from shared.owned_paths import resolve_owned_output_path
@@ -137,6 +138,19 @@ class TunaGateway:
         return None
 
     @staticmethod
+    def _deployment_thinking_mode(deployment: Dict[str, Any]) -> ThinkingMode:
+        thinking_mode = deployment.get("thinking_mode")
+        if isinstance(thinking_mode, str) and thinking_mode in {"default", "on", "off"}:
+            return thinking_mode
+
+        metadata = deployment.get("metadata")
+        if isinstance(metadata, dict):
+            metadata_mode = metadata.get("thinking_mode")
+            if isinstance(metadata_mode, str) and metadata_mode in {"default", "on", "off"}:
+                return metadata_mode
+        return "default"
+
+    @staticmethod
     def _conversation_title(content: Any) -> Optional[str]:
         if isinstance(content, str):
             text = content.strip()
@@ -169,7 +183,11 @@ class TunaGateway:
         model_path: Optional[str],
         adapter_path: Optional[str],
         system_prompt: Optional[str],
+        thinking_mode: ThinkingMode = "default",
     ) -> None:
+        metadata: Dict[str, Any] = {}
+        if thinking_mode != "default":
+            metadata["thinking_mode"] = thinking_mode
         await self._persistence.upsert_conversation(
             {
                 "conversation_id": conversation_id,
@@ -179,6 +197,7 @@ class TunaGateway:
                 "model_path": model_path,
                 "adapter_path": adapter_path,
                 "system_prompt": system_prompt,
+                "metadata": metadata,
             }
         )
 
@@ -250,6 +269,7 @@ class TunaGateway:
         top_p: float = 0.95,
         top_k: int = 50,
         system_prompt: Optional[str] = None,
+        thinking_mode: ThinkingMode = "default",
         quantization: Optional[str] = None,
         prefer_runtime_metrics: bool = False,
     ) -> Dict[str, Any]:
@@ -270,6 +290,7 @@ class TunaGateway:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    thinking_mode=None if thinking_mode == "default" else thinking_mode,
                 )
             return {
                 "success": True,
@@ -298,6 +319,11 @@ class TunaGateway:
                     resolved_adapter_path or persisted_conversation.get("adapter_path")
                 )
                 system_prompt = system_prompt or persisted_conversation.get("system_prompt")
+                persisted_metadata = persisted_conversation.get("metadata") or {}
+                if thinking_mode == "default":
+                    persisted_mode = persisted_metadata.get("thinking_mode")
+                    if persisted_mode in {"default", "on", "off"}:
+                        thinking_mode = persisted_mode
                 modality = persisted_conversation.get("modality") or modality
 
         if deployment_id:
@@ -310,6 +336,8 @@ class TunaGateway:
                         "error": f"Deployment {deployment_id} not found",
                     }
             system_prompt = system_prompt or self._deployment_system_prompt(deployment)
+            if thinking_mode == "default":
+                thinking_mode = self._deployment_thinking_mode(deployment)
 
             deployment_endpoint = self._deployment_endpoint(deployment)
             modality = deployment.get("modality", "text")
@@ -343,6 +371,7 @@ class TunaGateway:
             top_p=top_p,
             top_k=top_k,
             system_prompt=system_prompt,
+            thinking_mode=thinking_mode,
             quantization=quantization,
             modality=modality,
             api_path=resolved_api_path,
@@ -365,6 +394,7 @@ class TunaGateway:
             model_path=resolved_model_path,
             adapter_path=resolved_adapter_path,
             system_prompt=system_prompt,
+            thinking_mode=thinking_mode,
         )
         return {
             "success": True,
@@ -396,6 +426,7 @@ class TunaGateway:
                 top_p=float(payload.get("top_p", 0.95)),
                 top_k=int(payload.get("top_k", 50)),
                 system_prompt=payload.get("system_prompt"),
+                thinking_mode=payload.get("thinking_mode", "default"),
                 quantization=payload.get("quantization"),
                 prefer_runtime_metrics=bool(payload.get("prefer_runtime_metrics", False)),
             )
@@ -1296,6 +1327,7 @@ class TunaGateway:
                 gradient_checkpointing=params.get("gradient_checkpointing", False),
                 optim=params.get("optim", "adamw_torch"),
                 load_in_4bit=params.get("load_in_4bit", True),
+                thinking_mode=params.get("thinking_mode", "default"),
                 extra_callbacks=extra_callbacks,
                 **self._training_artifact_context(
                     run_source=tool_name,
@@ -2843,6 +2875,7 @@ class TunaGateway:
             load_in_4bit: bool = True,
             recipe: Optional[str] = None,
             special_tokens: Optional[List[str]] = None,
+            thinking_mode: ThinkingMode = "default",
             deploy: bool = False,
             deploy_port: int = 8001,
         ) -> str:
@@ -2883,6 +2916,7 @@ class TunaGateway:
                 load_in_4bit=load_in_4bit,
                 recipe=recipe,
                 special_tokens=special_tokens,
+                thinking_mode=thinking_mode,
                 **self._training_artifact_context(
                     run_source="finetune.train",
                     dataset_path=dataset_path,
@@ -3381,6 +3415,7 @@ class TunaGateway:
             load_in_4bit: bool = True,
             recipe: Optional[str] = None,
             special_tokens: Optional[List[str]] = None,
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             load_result = await self.finetuner.load_dataset_from_file(dataset_path, "jsonl")
             if not load_result["success"]:
@@ -3438,6 +3473,7 @@ class TunaGateway:
                      load_in_4bit=load_in_4bit,
                      recipe=recipe,
                      special_tokens=special_tokens,
+                     thinking_mode=thinking_mode,
                      extra_callbacks=extra_callbacks,
                      **self._training_artifact_context(
                          run_source="finetune.train_async",
@@ -4060,6 +4096,7 @@ class TunaGateway:
             temperature: float = 0.7,
             top_p: float = 0.9,
             top_k: int = 50,
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             result = await self.finetuner.run_inference(
                 prompts=prompts, model_path=model_path,
@@ -4069,6 +4106,7 @@ class TunaGateway:
                 top_p=top_p,
                 top_k=top_k,
                 do_sample=temperature > 0,
+                thinking_mode=thinking_mode,
             )
             return json.dumps(result, indent=2)
 
@@ -4262,11 +4300,15 @@ class TunaGateway:
             port: int = 8001,
             quantization: Optional[str] = None,
             system_prompt: Optional[str] = None,
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
                 name=name,
-                port=port, quantization=quantization, system_prompt=system_prompt,
+                port=port,
+                quantization=quantization,
+                system_prompt=system_prompt,
+                thinking_mode=thinking_mode,
             )
             return json.dumps(await self.hoster.deploy_as_mcp(config), indent=2)
 
@@ -4308,11 +4350,15 @@ class TunaGateway:
             port: int = 8001,
             quantization: Optional[str] = None,
             system_prompt: Optional[str] = None,
+            thinking_mode: ThinkingMode = "default",
         ) -> str:
             config = HostingConfig(
                 model_path=model_path, adapter_path=adapter_path,
                 name=name,
-                port=port, quantization=quantization, system_prompt=system_prompt,
+                port=port,
+                quantization=quantization,
+                system_prompt=system_prompt,
+                thinking_mode=thinking_mode,
             )
             return json.dumps(await self.hoster.deploy_as_api(config), indent=2)
 
@@ -4388,6 +4434,7 @@ class TunaGateway:
             top_p: float = 0.95,
             top_k: int = 50,
             system_prompt: Optional[str] = None,
+            thinking_mode: ThinkingMode = "default",
             quantization: Optional[str] = None,
             prefer_runtime_metrics: bool = False,
         ) -> str:
@@ -4402,6 +4449,7 @@ class TunaGateway:
                 top_p=top_p,
                 top_k=top_k,
                 system_prompt=system_prompt,
+                thinking_mode=thinking_mode,
                 quantization=quantization,
                 prefer_runtime_metrics=prefer_runtime_metrics,
             )
@@ -5746,7 +5794,7 @@ class TunaGateway:
             from pathlib import Path as _Path
 
             requested_roots: list[str] = []
-            for candidate in scan_roots or [data_dir, "output", "uploads", "notebooks"]:
+            for candidate in scan_roots or [data_dir]:
                 if isinstance(candidate, str):
                     normalized = candidate.strip()
                     if normalized and normalized not in requested_roots:
@@ -5762,6 +5810,17 @@ class TunaGateway:
                 if resolved not in candidate_roots:
                     candidate_roots.append(resolved)
 
+            def _is_within_candidate_roots(path: _Path) -> bool:
+                for root in candidate_roots:
+                    if path == root:
+                        return True
+                    try:
+                        path.relative_to(root)
+                        return True
+                    except ValueError:
+                        continue
+                return False
+
             persisted = await self._persistence.list_datasets()
             datasets_by_path: dict[str, dict[str, Any]] = {}
             pruned_stale_records = 0
@@ -5769,14 +5828,21 @@ class TunaGateway:
                 file_path = str(item.get("file_path") or "").strip()
                 if not file_path:
                     continue
-                resolved_path = str(_Path(file_path).expanduser().resolve())
-                if _Path(resolved_path).is_file():
+                resolved_path_obj = _Path(file_path).expanduser().resolve()
+                if not resolved_path_obj.is_file():
+                    if await self._persistence.mark_dataset_deleted(str(resolved_path_obj)):
+                        pruned_stale_records += 1
+                    continue
+                if not self.dataset_service.is_probably_dataset_path(resolved_path_obj):
+                    continue
+                if not _is_within_candidate_roots(resolved_path_obj):
+                    continue
+
+                resolved_path = str(resolved_path_obj)
+                if resolved_path_obj.is_file():
                     normalized_item = dict(item)
                     normalized_item["file_path"] = resolved_path
                     datasets_by_path[resolved_path] = normalized_item
-                    continue
-                if await self._persistence.mark_dataset_deleted(resolved_path):
-                    pruned_stale_records += 1
 
             datasets = list(datasets_by_path.values())
             existing_candidate_roots = [root for root in candidate_roots if root.exists()]
@@ -5796,17 +5862,21 @@ class TunaGateway:
             for root in existing_candidate_roots:
                 scan_files = [root] if root.is_file() else sorted(root.rglob("*"))
                 for f in scan_files:
-                    if f.is_file() and f.suffix.lower() in supported:
-                        file_path = str(f.resolve())
-                        if file_path in datasets_by_path:
-                            continue
-                        try:
-                            meta = await self.dataset_service.info(file_path)
-                        except Exception:
-                            continue
-                        if meta.get("success"):
-                            datasets.append(meta["metadata"])
-                            datasets_by_path[file_path] = meta["metadata"]
+                    if not f.is_file() or f.suffix.lower() not in supported:
+                        continue
+                    if not self.dataset_service.is_probably_dataset_path(f):
+                        continue
+
+                    file_path = str(f.resolve())
+                    if file_path in datasets_by_path:
+                        continue
+                    try:
+                        meta = await self.dataset_service.info(file_path)
+                    except Exception:
+                        continue
+                    if meta.get("success"):
+                        datasets.append(meta["metadata"])
+                        datasets_by_path[file_path] = meta["metadata"]
 
             return json.dumps({
                 "success": True,

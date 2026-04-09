@@ -5,7 +5,28 @@ import type {
   DeploymentConversation,
   DeploymentConversationSummary,
   ModelModality,
+  ThinkingMode,
 } from '../types'
+
+function normalizeThinkingMode(value: unknown): ThinkingMode | undefined {
+  return value === 'default' || value === 'on' || value === 'off'
+    ? value
+    : undefined
+}
+
+function readThinkingMode(raw: Record<string, unknown>): ThinkingMode | undefined {
+  const directMode = normalizeThinkingMode(raw.thinking_mode)
+  if (directMode) {
+    return directMode
+  }
+
+  const metadata = raw.metadata
+  if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return normalizeThinkingMode((metadata as Record<string, unknown>).thinking_mode)
+  }
+
+  return undefined
+}
 
 function normalizeDeployment(raw: Record<string, unknown>): Deployment {
   const deploymentId =
@@ -28,6 +49,7 @@ function normalizeDeployment(raw: Record<string, unknown>): Deployment {
     deployment_id: deploymentId,
     name: typeof raw.name === 'string' ? raw.name : undefined,
     system_prompt: typeof raw.system_prompt === 'string' ? raw.system_prompt : null,
+    thinking_mode: readThinkingMode(raw),
     model_path: typeof raw.model_path === 'string' ? raw.model_path : '',
     adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : undefined,
     endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
@@ -56,6 +78,7 @@ function normalizeConversationSummary(raw: Record<string, unknown>): DeploymentC
       raw.modality === 'vision-language' || raw.modality === 'unknown'
         ? raw.modality
         : 'text',
+    thinking_mode: readThinkingMode(raw),
     endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : null,
     model_path: typeof raw.model_path === 'string' ? raw.model_path : null,
     adapter_path: typeof raw.adapter_path === 'string' ? raw.adapter_path : null,
@@ -191,6 +214,20 @@ type DeployParams = {
   args: Record<string, unknown>
 }
 
+export interface DeployResult {
+  success: true
+  deployment_id: string
+  type: 'mcp' | 'api'
+  status: 'running' | 'stopped'
+  model_path: string
+  modality?: ModelModality
+  endpoint?: string
+  routes?: string[]
+  transport?: string
+  name?: string
+  thinking_mode?: ThinkingMode
+}
+
 const DEPLOY_TIMEOUT_MS = 120_000
 
 export function useDeploy() {
@@ -206,7 +243,7 @@ export function useDeploy() {
           : resolvedModality === 'vision-language'
             ? 'host.deploy_vlm_api'
             : 'host.deploy_api'
-      return mcpCall(toolName, args, { timeoutMs: DEPLOY_TIMEOUT_MS })
+      return mcpCall<DeployResult>(toolName, args, { timeoutMs: DEPLOY_TIMEOUT_MS })
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deployments'] })
@@ -240,6 +277,7 @@ export function getRedeployInitialValues(deployment: Deployment) {
   return {
     name: deployment.name,
     systemPrompt: deployment.system_prompt,
+    thinkingMode: deployment.thinking_mode,
     modelPath: deployment.model_path,
     adapterPath: deployment.adapter_path,
     modality: deployment.modality === 'vision-language' ? 'vision-language' : 'text',

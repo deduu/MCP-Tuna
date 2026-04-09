@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import math
 import random
@@ -31,6 +32,21 @@ class DatasetService:
 
     _SUPPORTED_SAVE_FORMATS = {"jsonl", "json", "parquet"}
     _SUPPORTED_LOAD_EXTENSIONS = {".jsonl", ".json", ".parquet", ".csv"}
+    _NON_DATASET_FILENAMES = {
+        ".training_progress.jsonl",
+        "training_progress.jsonl",
+        "adapter_config.json",
+        "added_tokens.json",
+        "config.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "trainer_state.json",
+        "vocab.json",
+    }
 
     def __init__(self, config: Optional[DatasetConfig] = None) -> None:
         self.config = config or DatasetConfig()
@@ -57,6 +73,16 @@ class DatasetService:
             if f.is_file() and f.suffix.lower() in supported:
                 return f
         return None
+
+    @classmethod
+    def is_probably_dataset_path(cls, path: Path) -> bool:
+        """Cheap pre-filter for workspace scans before deeper inspection."""
+        if path.name.lower() in cls._NON_DATASET_FILENAMES:
+            return False
+        ext = path.suffix.lower()
+        if ext not in cls._SUPPORTED_LOAD_EXTENSIONS:
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # save
@@ -138,6 +164,11 @@ class DatasetService:
         if ext == ".jsonl":
             data_points = await asyncio.to_thread(self._read_jsonl, path)
         elif ext == ".json":
+            if not await asyncio.to_thread(self._json_starts_with_array, path):
+                return {
+                    "success": False,
+                    "error": f"Dataset file must contain a list of rows: {path.resolve()}",
+                }
             data_points = await asyncio.to_thread(self._read_json, path)
         elif ext == ".parquet":
             data_points = await asyncio.to_thread(self._read_parquet, path)
@@ -212,6 +243,20 @@ class DatasetService:
         # Determine row count and columns efficiently
         if ext == ".jsonl":
             row_count, columns, sample_row = await asyncio.to_thread(self._inspect_jsonl, path)
+        elif ext == ".json":
+            if not await asyncio.to_thread(self._json_starts_with_array, path):
+                return {
+                    "success": False,
+                    "error": f"Dataset file must contain a list of rows: {path.resolve()}",
+                }
+            full = await self.load(file_path, ownership=ownership)
+            if not full["success"]:
+                return full
+            row_count = full["row_count"]
+            columns = full["columns"]
+            sample_row = full["data_points"][0] if full["data_points"] else None
+        elif ext == ".csv":
+            row_count, columns, sample_row = await asyncio.to_thread(self._inspect_csv, path)
         else:
             full = await self.load(file_path, ownership=ownership)
             if not full["success"]:
@@ -648,6 +693,30 @@ class DatasetService:
                 if count == 1:
                     sample_row = json.loads(line)
                     columns = list(sample_row.keys())
+        return count, columns, sample_row
+
+    @staticmethod
+    def _json_starts_with_array(path: Path) -> bool:
+        with open(path, "r", encoding="utf-8") as f:
+            while True:
+                ch = f.read(1)
+                if ch == "":
+                    return False
+                if not ch.isspace():
+                    return ch == "["
+
+    @staticmethod
+    def _inspect_csv(path: Path) -> tuple[int, List[str], Optional[Dict[str, Any]]]:
+        columns: List[str] = []
+        count = 0
+        sample_row: Optional[Dict[str, Any]] = None
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            columns = list(reader.fieldnames or [])
+            for row in reader:
+                count += 1
+                if sample_row is None:
+                    sample_row = dict(row)
         return count, columns, sample_row
 
     async def sample_text_stats(

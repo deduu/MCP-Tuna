@@ -174,6 +174,8 @@ def test_finetune_train_schema_includes_optional_defaults():
     assert props["gradient_accumulation_steps"]["default"] == 4
     assert props["deploy"]["default"] is False
     assert props["special_tokens"]["type"] == "array"
+    assert props["thinking_mode"]["default"] == "default"
+    assert props["thinking_mode"]["enum"] == ["default", "on", "off"]
     assert "default" not in props["base_model"]
     assert "default" not in props["push_to_hub"]
 
@@ -245,6 +247,8 @@ def test_test_inference_schema_includes_temperature_and_adapter():
     assert props["top_p"]["default"] == 0.9
     assert props["top_k"]["default"] == 50
     assert "adapter_path" in props
+    assert props["thinking_mode"]["default"] == "default"
+    assert props["thinking_mode"]["enum"] == ["default", "on", "off"]
 
 
 def test_host_deploy_schema_accepts_system_prompt():
@@ -254,6 +258,8 @@ def test_host_deploy_schema_accepts_system_prompt():
 
     assert "system_prompt" in props
     assert props["system_prompt"]["type"] == "string"
+    assert props["thinking_mode"]["default"] == "default"
+    assert props["thinking_mode"]["enum"] == ["default", "on", "off"]
 
 
 def test_curriculum_schema_accepts_staged_inputs():
@@ -396,10 +402,10 @@ async def test_validate_preference_dataset_returns_dpo_warnings(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dataset_list_discovers_workspace_notebooks_dataset_even_when_cwd_differs(tmp_path, monkeypatch):
+async def test_dataset_list_discovers_workspace_data_dataset_even_when_cwd_differs(tmp_path, monkeypatch):
     gateway = _make_gateway()
     dataset_list = gateway.mcp._tools["dataset.list"]["func"]
-    dataset_path = tmp_path / "notebooks" / "wa_sales" / "whatsapp_sales_agent_train_expanded.jsonl"
+    dataset_path = tmp_path / "data" / "wa_sales" / "whatsapp_sales_agent_train_expanded.jsonl"
     dataset_path.parent.mkdir(parents=True, exist_ok=True)
     dataset_path.write_text(
         json.dumps(
@@ -421,6 +427,7 @@ async def test_dataset_list_discovers_workspace_notebooks_dataset_even_when_cwd_
     result = json.loads(await dataset_list())
 
     assert result["success"] is True
+    assert result["scan_roots"] == [str((tmp_path / "data").resolve())]
     assert any(item["file_path"] == str(dataset_path.resolve()) for item in result["datasets"])
 
 
@@ -434,10 +441,27 @@ async def test_dataset_list_skips_non_dataset_json_artifacts(tmp_path, monkeypat
         json.dumps({"instruction": "q", "input": "", "output": "a"}) + "\n",
         encoding="utf-8",
     )
-    artifact_path = tmp_path / "output" / "run" / "adapter_config.json"
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text(
+    artifact_paths = [
+        tmp_path / "output" / "run" / "adapter_config.json",
+        tmp_path / "output" / "run" / "tokenizer.json",
+        tmp_path / "output" / "run" / "trainer_state.json",
+        tmp_path / "output" / "run" / "summary.json",
+    ]
+    artifact_paths[0].parent.mkdir(parents=True, exist_ok=True)
+    artifact_paths[0].write_text(
         json.dumps({"base_model_name_or_path": "demo-model"}),
+        encoding="utf-8",
+    )
+    artifact_paths[1].write_text(
+        json.dumps({"model": {"vocab": []}}),
+        encoding="utf-8",
+    )
+    artifact_paths[2].write_text(
+        json.dumps({"best_metric": 0.9}),
+        encoding="utf-8",
+    )
+    artifact_paths[3].write_text(
+        json.dumps({"summary": "not a dataset"}),
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -449,7 +473,80 @@ async def test_dataset_list_skips_non_dataset_json_artifacts(tmp_path, monkeypat
     assert result["success"] is True
     paths = {item["file_path"] for item in result["datasets"]}
     assert str(dataset_path.resolve()) in paths
-    assert str(artifact_path.resolve()) not in paths
+    assert all(str(path.resolve()) not in paths for path in artifact_paths)
+
+
+@pytest.mark.asyncio
+async def test_dataset_list_skips_training_progress_snapshots_in_scan_root(tmp_path, monkeypatch):
+    gateway = _make_gateway()
+    dataset_list = gateway.mcp._tools["dataset.list"]["func"]
+    dataset_path = tmp_path / "data" / "train.jsonl"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_text(
+        json.dumps({"instruction": "q", "input": "", "output": "a"}) + "\n",
+        encoding="utf-8",
+    )
+    progress_path = tmp_path / "data" / ".training_progress.jsonl"
+    progress_path.write_text(
+        json.dumps({"job_id": "job-1", "current_step": 1, "timestamp": "2026-04-09T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    import mcp_gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "__file__", str(tmp_path / "mcp_gateway.py"))
+
+    result = json.loads(await dataset_list())
+
+    assert result["success"] is True
+    paths = {item["file_path"] for item in result["datasets"]}
+    assert str(dataset_path.resolve()) in paths
+    assert str(progress_path.resolve()) not in paths
+
+
+@pytest.mark.asyncio
+async def test_dataset_list_excludes_persisted_records_outside_scan_roots(tmp_path, monkeypatch):
+    gateway = _make_gateway()
+    dataset_list = gateway.mcp._tools["dataset.list"]["func"]
+    dataset_path = tmp_path / "data" / "train.jsonl"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_text(
+        json.dumps({"instruction": "q", "input": "", "output": "a"}) + "\n",
+        encoding="utf-8",
+    )
+    progress_path = tmp_path / "output" / "run" / ".training_progress.jsonl"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(
+        json.dumps({"job_id": "job-1", "current_step": 1, "timestamp": "2026-04-09T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    gateway._persistence.list_datasets = AsyncMock(return_value=[
+        {
+            "dataset_id": "train",
+            "file_path": str(dataset_path.resolve()),
+            "format": "jsonl",
+            "row_count": 1,
+            "columns": ["instruction", "input", "output"],
+            "size_bytes": dataset_path.stat().st_size,
+        },
+        {
+            "dataset_id": ".training_progress",
+            "file_path": str(progress_path.resolve()),
+            "format": "jsonl",
+            "row_count": 1,
+            "columns": ["job_id", "current_step", "timestamp"],
+            "size_bytes": progress_path.stat().st_size,
+        },
+    ])
+    monkeypatch.chdir(tmp_path)
+    import mcp_gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "__file__", str(tmp_path / "mcp_gateway.py"))
+
+    result = json.loads(await dataset_list())
+
+    assert result["success"] is True
+    paths = {item["file_path"] for item in result["datasets"]}
+    assert str(dataset_path.resolve()) in paths
+    assert str(progress_path.resolve()) not in paths
 
 
 @pytest.mark.asyncio
