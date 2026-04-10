@@ -43,6 +43,7 @@ class TestChatConfig:
         assert cfg.streaming is True
         assert cfg.modality == "text"
         assert cfg.api_path is None
+        assert cfg.inference_placement is None
 
     def test_api_mode_config(self):
         cfg = ChatConfig(endpoint="http://localhost:8001")
@@ -266,6 +267,33 @@ class TestChatSessionDirectMode:
         assert info["adapter_path"] == "./lora"
 
     @pytest.mark.asyncio
+    async def test_initialize_direct_mode_forwards_inference_placement(self):
+        cfg = ChatConfig(
+            model_path="test/model",
+            inference_placement={
+                "device_map": "auto",
+                "max_memory": {"0": "18GiB", "1": "18GiB", "cpu": "30GiB"},
+                "offload_folder": "./offload",
+            },
+        )
+        session = ChatSession(cfg)
+        mock_provider = MagicMock()
+
+        with patch(
+            "agentsoul.providers.hf.HuggingFaceProvider",
+            return_value=mock_provider,
+        ) as mock_cls:
+            await session.initialize()
+
+        mock_cls.assert_called_once_with(
+            model_path="test/model",
+            lora_adapter_path=None,
+            device_map="auto",
+            max_memory={0: "18GiB", 1: "18GiB", "cpu": "30GiB"},
+            offload_folder="./offload",
+        )
+
+    @pytest.mark.asyncio
     async def test_initialize_direct_mode_reuses_existing_provider(self):
         cfg = ChatConfig(model_path="test/model", adapter_path="./lora")
         shared_provider = MagicMock()
@@ -393,6 +421,39 @@ class TestChatSessionDirectMode:
         assert call["thinking_mode"] == "off"
         assert call["do_sample"] is False
         assert session._history[-1]["content"] == "Notebook-style answer"
+
+    @pytest.mark.asyncio
+    async def test_send_message_direct_mode_forwards_inference_placement_to_runtime(self):
+        cfg = ChatConfig(
+            model_path="test/model",
+            quantization="4bit",
+            use_tokenizer_chat_template=True,
+            inference_placement={
+                "device_map": "auto",
+                "max_memory": {"0": "16GiB", "1": "16GiB", "cpu": "30GiB"},
+                "offload_folder": "./offload",
+            },
+        )
+        inference_service = AsyncMock()
+        inference_service.run_text_messages_inference = AsyncMock(
+            return_value={
+                "success": True,
+                "response": "Placement-aware answer",
+                "generation_time_seconds": 0.5,
+                "tokens_per_second": 11.0,
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+            }
+        )
+        session = ChatSession(cfg, inference_service=inference_service)
+        session._mode = "direct"
+        session._initialized = True
+
+        await session.send_message_result("Hi")
+
+        call = inference_service.run_text_messages_inference.await_args.kwargs
+        assert call["device_map"] == "auto"
+        assert call["max_memory"] == {0: "16GiB", 1: "16GiB", "cpu": "30GiB"}
+        assert call["offload_folder"] == "./offload"
 
     @pytest.mark.asyncio
     async def test_update_generation_config_overrides_session_defaults(self):
@@ -567,6 +628,10 @@ class TestChatSessionCommands:
             adapter_path="./lora",
             quantization="4bit",
             use_tokenizer_chat_template=True,
+            inference_placement={
+                "device_map": "auto",
+                "max_memory": {"0": "16GiB", "cpu": "30GiB"},
+            },
         )
         session = ChatSession(cfg)
         session._mode = "direct"
@@ -577,6 +642,10 @@ class TestChatSessionCommands:
         assert info["use_tokenizer_chat_template"] is True
         assert info["quantization"] == "4bit"
         assert info["thinking_mode"] == "default"
+        assert info["inference_placement"] == {
+            "device_map": "auto",
+            "max_memory": {0: "16GiB", "cpu": "30GiB"},
+        }
 
     @pytest.mark.asyncio
     async def test_shutdown_api_mode_closes_client(self):
@@ -628,7 +697,14 @@ class TestChatSessionVLM:
 
     @pytest.mark.asyncio
     async def test_send_messages_direct_mode_uses_inference_service(self):
-        cfg = ChatConfig(model_path="test/vlm", modality="vision-language")
+        cfg = ChatConfig(
+            model_path="test/vlm",
+            modality="vision-language",
+            inference_placement={
+                "device_map": "auto",
+                "max_memory": {"0": "20GiB", "1": "20GiB", "cpu": "30GiB"},
+            },
+        )
         inference_service = AsyncMock()
         inference_service.run_vlm_inference = AsyncMock(
             return_value={"success": True, "response": "Detected a crack"}
@@ -651,6 +727,9 @@ class TestChatSessionVLM:
 
         assert result == "Detected a crack"
         inference_service.run_vlm_inference.assert_awaited_once()
+        call = inference_service.run_vlm_inference.await_args.kwargs
+        assert call["device_map"] == "auto"
+        assert call["max_memory"] == {0: "20GiB", 1: "20GiB", "cpu": "30GiB"}
         assert session._history[-1]["content"][0]["text"] == "Detected a crack"
 
     @pytest.mark.asyncio

@@ -1,11 +1,41 @@
 """MCP server for model hosting tools."""
 
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from agentsoul.server import MCPServer
 from ..services.hosting_service import HostingService
 from shared.config import HostingConfig, ThinkingMode
+
+
+def _parse_json_option(raw: Optional[str], field_name: str) -> Any:
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {field_name}: {exc}") from exc
+
+
+def _build_inference_placement(
+    *,
+    device_map: Optional[str],
+    device_map_json: Optional[str],
+    max_memory_json: Optional[str],
+    offload_folder: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    placement = {
+        key: value
+        for key, value in {
+            "device_map": _parse_json_option(device_map_json, "device_map_json")
+            if device_map_json
+            else device_map,
+            "max_memory": _parse_json_option(max_memory_json, "max_memory_json"),
+            "offload_folder": offload_folder,
+        }.items()
+        if value is not None
+    }
+    return placement or None
 
 
 class HostingMCPServer:
@@ -28,7 +58,21 @@ class HostingMCPServer:
             port: int = 8001,
             host: str = "0.0.0.0",
             thinking_mode: ThinkingMode = "default",
+            device_map: Optional[str] = None,
+            device_map_json: Optional[str] = None,
+            max_memory_json: Optional[str] = None,
+            offload_folder: Optional[str] = None,
         ) -> str:
+            try:
+                placement = _build_inference_placement(
+                    device_map=device_map,
+                    device_map_json=device_map_json,
+                    max_memory_json=max_memory_json,
+                    offload_folder=offload_folder,
+                )
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
@@ -37,6 +81,7 @@ class HostingMCPServer:
                 port=port,
                 transport="http",
                 thinking_mode=thinking_mode,
+                inference_placement=placement or None,
             )
             result = await svc.deploy_as_mcp(config)
             return json.dumps(result, indent=2)
@@ -49,7 +94,21 @@ class HostingMCPServer:
             name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
+            device_map: Optional[str] = None,
+            device_map_json: Optional[str] = None,
+            max_memory_json: Optional[str] = None,
+            offload_folder: Optional[str] = None,
         ) -> str:
+            try:
+                placement = _build_inference_placement(
+                    device_map=device_map,
+                    device_map_json=device_map_json,
+                    max_memory_json=max_memory_json,
+                    offload_folder=offload_folder,
+                )
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
@@ -58,6 +117,7 @@ class HostingMCPServer:
                 port=port,
                 transport="http",
                 modality="vision-language",
+                inference_placement=placement or None,
             )
             result = await svc.deploy_vlm_as_mcp(config)
             return json.dumps(result, indent=2)
@@ -71,7 +131,21 @@ class HostingMCPServer:
             port: int = 8001,
             host: str = "0.0.0.0",
             thinking_mode: ThinkingMode = "default",
+            device_map: Optional[str] = None,
+            device_map_json: Optional[str] = None,
+            max_memory_json: Optional[str] = None,
+            offload_folder: Optional[str] = None,
         ) -> str:
+            try:
+                placement = _build_inference_placement(
+                    device_map=device_map,
+                    device_map_json=device_map_json,
+                    max_memory_json=max_memory_json,
+                    offload_folder=offload_folder,
+                )
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
@@ -80,6 +154,7 @@ class HostingMCPServer:
                 port=port,
                 transport="http",
                 thinking_mode=thinking_mode,
+                inference_placement=placement or None,
             )
             result = await svc.deploy_as_api(config)
             return json.dumps(result, indent=2)
@@ -92,7 +167,21 @@ class HostingMCPServer:
             name: Optional[str] = None,
             port: int = 8001,
             host: str = "0.0.0.0",
+            device_map: Optional[str] = None,
+            device_map_json: Optional[str] = None,
+            max_memory_json: Optional[str] = None,
+            offload_folder: Optional[str] = None,
         ) -> str:
+            try:
+                placement = _build_inference_placement(
+                    device_map=device_map,
+                    device_map_json=device_map_json,
+                    max_memory_json=max_memory_json,
+                    offload_folder=offload_folder,
+                )
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
             config = HostingConfig(
                 model_path=model_path,
                 adapter_path=adapter_path,
@@ -101,6 +190,7 @@ class HostingMCPServer:
                 port=port,
                 transport="http",
                 modality="vision-language",
+                inference_placement=placement or None,
             )
             result = await svc.deploy_vlm_as_api(config)
             return json.dumps(result, indent=2)

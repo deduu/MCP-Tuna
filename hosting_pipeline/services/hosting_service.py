@@ -23,6 +23,20 @@ def _quantization_to_provider_arg(quantization: str | None) -> Dict[str, Any]:
     return {}
 
 
+def _inference_placement_args(config: HostingConfig) -> Dict[str, Any]:
+    placement = config.inference_placement
+    if placement is None:
+        return {}
+    return placement.to_model_load_kwargs()
+
+
+def _provider_load_args(config: HostingConfig) -> Dict[str, Any]:
+    return {
+        **_quantization_to_provider_arg(config.quantization),
+        **_inference_placement_args(config),
+    }
+
+
 def _resolve_hf_cache_path(model_path: str) -> str:
     """If model_path points to an HF cache wrapper dir (blobs/refs/snapshots),
     resolve to the latest snapshot so that from_pretrained can find the files."""
@@ -220,7 +234,7 @@ class HostingService:
             from agentsoul.providers.hf import HuggingFaceProvider
 
             resolved_model_path = _resolve_hf_cache_path(config.model_path)
-            quant_arg = _quantization_to_provider_arg(config.quantization)
+            provider_args = _provider_load_args(config)
 
             gpu_lock = GPULock.get()
             await gpu_lock.acquire("deploy_mcp")
@@ -228,7 +242,7 @@ class HostingService:
                 provider = HuggingFaceProvider(
                     model_path=resolved_model_path,
                     lora_adapter_path=config.adapter_path,
-                    **quant_arg,
+                    **provider_args,
                 )
             finally:
                 gpu_lock.release()
@@ -340,7 +354,7 @@ class HostingService:
             from agentsoul.providers.hf import HuggingFaceProvider
 
             resolved_model_path = _resolve_hf_cache_path(config.model_path)
-            quant_arg = _quantization_to_provider_arg(config.quantization)
+            provider_args = _provider_load_args(config)
 
             gpu_lock = GPULock.get()
             await gpu_lock.acquire("deploy_api")
@@ -348,7 +362,7 @@ class HostingService:
                 provider = HuggingFaceProvider(
                     model_path=resolved_model_path,
                     lora_adapter_path=config.adapter_path,
-                    **quant_arg,
+                    **provider_args,
                 )
             finally:
                 gpu_lock.release()
@@ -607,6 +621,7 @@ class HostingService:
                     top_p=top_p,
                     top_k=top_k,
                     do_sample=temperature > 0,
+                    **_inference_placement_args(config),
                 )
                 if not result.get("success"):
                     raise RuntimeError(result.get("error", "VLM generation failed"))
@@ -708,6 +723,7 @@ class HostingService:
                     top_p=float(payload.get("top_p", 0.95)),
                     top_k=int(payload.get("top_k", 50)),
                     do_sample=float(payload.get("temperature", 0.7)) > 0,
+                    **_inference_placement_args(config),
                 )
                 if not result.get("success"):
                     raise HTTPException(

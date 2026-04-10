@@ -1,10 +1,56 @@
 """Pydantic configuration schemas for all MCP Tuna pipelines."""
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel
 
 
 ThinkingMode = Literal["default", "on", "off"]
+
+
+class InferencePlacementConfig(BaseModel):
+    """Optional runtime placement controls for local inference loads."""
+
+    device_map: Optional[Union[str, Dict[str, Any]]] = None
+    max_memory: Optional[Dict[Union[int, str], str]] = None
+    offload_folder: Optional[str] = None
+
+    def normalized_max_memory(self) -> Optional[Dict[Union[int, str], str]]:
+        if not self.max_memory:
+            return None
+
+        normalized: Dict[Union[int, str], str] = {}
+        for key, value in self.max_memory.items():
+            normalized_key: Union[int, str] = key
+            if isinstance(key, str):
+                stripped = key.strip()
+                if not stripped:
+                    continue
+                normalized_key = int(stripped) if stripped.isdigit() else stripped
+
+            normalized_value = str(value).strip()
+            if normalized_value:
+                normalized[normalized_key] = normalized_value
+
+        return normalized or None
+
+    def to_model_load_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
+        if isinstance(self.device_map, str):
+            device_map = self.device_map.strip()
+            if device_map:
+                kwargs["device_map"] = device_map
+        elif isinstance(self.device_map, dict) and self.device_map:
+            kwargs["device_map"] = self.device_map
+
+        normalized_max_memory = self.normalized_max_memory()
+        if normalized_max_memory:
+            kwargs["max_memory"] = normalized_max_memory
+
+        offload_folder = str(self.offload_folder or "").strip()
+        if offload_folder:
+            kwargs["offload_folder"] = offload_folder
+
+        return kwargs
 
 
 class PipelineConfig(BaseModel):
@@ -93,6 +139,7 @@ class HostingConfig(BaseModel):
     transport: str = "http"  # http | stdio
     quantization: Optional[str] = None  # None | "4bit" | "8bit"
     modality: str = "text"  # text | vision-language
+    inference_placement: Optional[InferencePlacementConfig] = None
 
 
 class ChatConfig(BaseModel):
@@ -110,3 +157,4 @@ class ChatConfig(BaseModel):
     modality: str = "text"  # text | vision-language
     api_path: Optional[str] = None
     use_tokenizer_chat_template: bool = False
+    inference_placement: Optional[InferencePlacementConfig] = None

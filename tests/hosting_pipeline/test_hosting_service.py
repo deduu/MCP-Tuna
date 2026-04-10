@@ -1,7 +1,7 @@
 """Tests for hosting service VRAM leak fix and GPU lock integration."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -365,3 +365,47 @@ class TestHostingServiceVRAMLeak:
         result = await svc.list_deployments()
 
         assert result["deployments"][0]["name"] == "llama-1b + ksmi-demo"
+
+    async def test_deploy_as_mcp_forwards_inference_placement_to_provider(self):
+        from hosting_pipeline.services.hosting_service import HostingService
+        from shared.config import HostingConfig
+
+        svc = HostingService()
+        svc._persistence = _FakePersistence()
+        provider = _make_mock_provider()
+        runtime_thread = MagicMock()
+        runtime_thread.is_alive.return_value = True
+
+        config = HostingConfig(
+            model_path="test/model",
+            adapter_path="./adapter",
+            quantization="4bit",
+            inference_placement={
+                "device_map": "auto",
+                "max_memory": {"0": "18GiB", "1": "18GiB", "cpu": "30GiB"},
+                "offload_folder": "./offload",
+            },
+        )
+
+        with (
+            patch("agentsoul.providers.hf.HuggingFaceProvider", return_value=provider) as mock_provider_cls,
+            patch("agentsoul.server.MCPServer", return_value=MagicMock()),
+            patch("agentsoul.server.HTTPTransport", return_value=MagicMock()),
+            patch.object(
+                svc,
+                "_start_background_runtime",
+                return_value={"task": MagicMock(), "loop": MagicMock(), "thread": runtime_thread},
+            ),
+            patch.object(svc, "_wait_for_port", AsyncMock(return_value=True)),
+        ):
+            result = await svc.deploy_as_mcp(config)
+
+        assert result["success"] is True
+        mock_provider_cls.assert_called_once_with(
+            model_path="test/model",
+            lora_adapter_path="./adapter",
+            quantization="bitsandbytes",
+            device_map="auto",
+            max_memory={0: "18GiB", 1: "18GiB", "cpu": "30GiB"},
+            offload_folder="./offload",
+        )

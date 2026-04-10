@@ -50,6 +50,12 @@ class ChatSession:
         if config.system_prompt:
             self._history.append({"role": "system", "content": config.system_prompt})
 
+    def _model_load_kwargs(self) -> Dict[str, Any]:
+        placement = self._config.inference_placement
+        if placement is None:
+            return {}
+        return placement.to_model_load_kwargs()
+
     async def initialize(self) -> Dict[str, Any]:
         """Load model or validate endpoint. Returns session info."""
         if self._config.endpoint:
@@ -93,6 +99,7 @@ class ChatSession:
             self._provider = HuggingFaceProvider(
                 model_path=resolved_model_path or self._config.model_path,
                 lora_adapter_path=self._config.adapter_path,
+                **self._model_load_kwargs(),
             )
 
         self._initialized = True
@@ -259,6 +266,7 @@ class ChatSession:
             do_sample=self._config.temperature > 0,
             quantization=self._config.quantization or "4bit",
             thinking_mode=self._config.thinking_mode,
+            **self._model_load_kwargs(),
         )
         if not result.get("success"):
             raise RuntimeError(result.get("error", "Text generation failed"))
@@ -322,6 +330,7 @@ class ChatSession:
             top_p=self._config.top_p,
             top_k=self._config.top_k,
             do_sample=self._config.temperature > 0,
+            **self._model_load_kwargs(),
         )
         if not result.get("success"):
             raise RuntimeError(result.get("error", "VLM generation failed"))
@@ -610,6 +619,8 @@ class ChatSession:
             info["use_tokenizer_chat_template"] = self._config.use_tokenizer_chat_template
             if self._config.quantization:
                 info["quantization"] = self._config.quantization
+            if self._config.inference_placement:
+                info["inference_placement"] = self._config.inference_placement.to_model_load_kwargs()
         if self._config.system_prompt:
             info["system_prompt"] = self._config.system_prompt
         if self._last_result:
