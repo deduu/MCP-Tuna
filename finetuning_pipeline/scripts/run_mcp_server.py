@@ -7,12 +7,21 @@ Exposes fine-tuning pipeline as MCP tools for AI agents.
 
 import sys
 import json
-from typing import Optional
+from typing import Any, Optional
 # Import MCP server framework
 from agentsoul.server import MCPServer, StdioTransport, HTTPTransport
 
 # Import fine-tuning service
 from ..services.pipeline_service import FineTuningService
+
+
+def _parse_json_option(raw: Optional[str], field_name: str) -> Any:
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {field_name}: {exc}") from exc
 
 
 class FineTuningMCP:
@@ -384,7 +393,11 @@ class FineTuningMCP:
             model_path: str,
             adapter_path: Optional[str] = None,
             max_new_tokens: int = 512,
-            temperature: float = 0.7
+            temperature: float = 0.7,
+            device_map: Optional[str] = None,
+            device_map_json: Optional[str] = None,
+            max_memory_json: Optional[str] = None,
+            offload_folder: Optional[str] = None,
         ) -> str:
             """Run inference."""
 
@@ -399,12 +412,25 @@ class FineTuningMCP:
                     "error": "prompts must be a string or list of strings"
                 }, indent=2)
 
+            try:
+                effective_device_map = (
+                    _parse_json_option(device_map_json, "device_map_json")
+                    if device_map_json
+                    else device_map
+                )
+                max_memory = _parse_json_option(max_memory_json, "max_memory_json")
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
             result = await self.service.run_inference(
                 prompts=prompts_list,
                 model_path=model_path,
                 adapter_path=adapter_path,
                 max_new_tokens=max_new_tokens,
-                temperature=temperature
+                temperature=temperature,
+                device_map=effective_device_map or "auto",
+                max_memory=max_memory,
+                offload_folder=offload_folder,
             )
 
             return json.dumps(result, indent=2)

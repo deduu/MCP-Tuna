@@ -23,9 +23,13 @@ class GPUService:
     def _detect_max_memory() -> Dict:
         """Set GPU memory limit to 85% of total VRAM (15% headroom)."""
         if torch.cuda.is_available():
-            total = torch.cuda.get_device_properties(0).total_memory
-            usable_gib = (total * 0.85) / (1024 ** 3)
-            return {0: f"{usable_gib:.1f}GiB", "cpu": "30GiB"}
+            max_memory = {}
+            for device_index in range(int(torch.cuda.device_count())):
+                total = torch.cuda.get_device_properties(device_index).total_memory
+                usable_gib = (total * 0.85) / (1024 ** 3)
+                max_memory[device_index] = f"{usable_gib:.1f}GiB"
+            max_memory["cpu"] = "30GiB"
+            return max_memory
         return {"cpu": "30GiB"}
 
     def clear_gpu_memory(self) -> Dict[str, Any]:

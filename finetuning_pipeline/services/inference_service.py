@@ -48,12 +48,20 @@ class InferenceService:
             return False
         return None
 
-    @staticmethod
-    def _load_vlm_model_and_processor(model_path: str):
+    def _load_vlm_model_and_processor(
+        self,
+        model_path: str,
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
+    ):
         from transformers import AutoProcessor
 
         resolved_model_path = InferenceService._resolve_model_path(model_path)
         processor = AutoProcessor.from_pretrained(resolved_model_path)
+        effective_max_memory = max_memory
+        if effective_max_memory is None and device_map == "auto":
+            effective_max_memory = self.gpu.max_memory
 
         errors: List[str] = []
         model = None
@@ -61,11 +69,18 @@ class InferenceService:
             try:
                 transformers_mod = __import__("transformers", fromlist=[loader_name])
                 loader = getattr(transformers_mod, loader_name)
+                load_kwargs: Dict[str, Any] = {
+                    "device_map": device_map,
+                    "torch_dtype": torch.bfloat16,
+                    "low_cpu_mem_usage": True,
+                }
+                if effective_max_memory is not None:
+                    load_kwargs["max_memory"] = effective_max_memory
+                if offload_folder:
+                    load_kwargs["offload_folder"] = offload_folder
                 model = loader.from_pretrained(
                     resolved_model_path,
-                    device_map="auto",
-                    torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,
+                    **load_kwargs,
                 )
                 break
             except Exception as exc:
@@ -141,17 +156,31 @@ class InferenceService:
         model_path: str,
         adapter_path: Optional[str] = None,
         quantization: Optional[str] = "4bit",
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
     ) -> tuple[Any, Any]:
         resolved_model_path = self._resolve_model_path(model_path)
         tokenizer = self._load_text_tokenizer(resolved_model_path)
 
         quantization_config = self._build_text_quantization_config(quantization)
+        effective_max_memory = max_memory
+        if effective_max_memory is None and device_map == "auto":
+            effective_max_memory = self.gpu.max_memory
+
+        load_kwargs: Dict[str, Any] = {
+            "device_map": device_map,
+            "quantization_config": quantization_config,
+            "torch_dtype": self._text_inference_dtype(),
+        }
+        if effective_max_memory is not None:
+            load_kwargs["max_memory"] = effective_max_memory
+        if offload_folder:
+            load_kwargs["offload_folder"] = offload_folder
+
         model = AutoModelForCausalLM.from_pretrained(
             resolved_model_path,
-            device_map="auto",
-            quantization_config=quantization_config,
-            max_memory=self.gpu.max_memory,
-            torch_dtype=self._text_inference_dtype(),
+            **load_kwargs,
         )
         if adapter_path:
             model = PeftModel.from_pretrained(model, adapter_path)
@@ -235,6 +264,9 @@ class InferenceService:
         do_sample: bool = True,
         quantization: Optional[str] = "4bit",
         thinking_mode: ThinkingMode = "default",
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run a single text generation request from structured chat messages."""
         model = None
@@ -246,6 +278,9 @@ class InferenceService:
                 model_path=model_path,
                 adapter_path=adapter_path,
                 quantization=quantization,
+                device_map=device_map,
+                max_memory=max_memory,
+                offload_folder=offload_folder,
             )
             return self._run_loaded_text_messages_inference(
                 model=model,
@@ -281,6 +316,9 @@ class InferenceService:
         system_prompt: Optional[str] = None,
         quantization: Optional[str] = "4bit",
         thinking_mode: ThinkingMode = "default",
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run inference on a list of prompts."""
         results = []
@@ -293,6 +331,9 @@ class InferenceService:
                 model_path=model_path,
                 adapter_path=adapter_path,
                 quantization=quantization,
+                device_map=device_map,
+                max_memory=max_memory,
+                offload_folder=offload_folder,
             )
 
             for prompt_text in prompts:
@@ -346,6 +387,9 @@ class InferenceService:
         base_model_path: str,
         finetuned_adapter_path: str,
         max_new_tokens: int = 512,
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Compare base model vs fine-tuned model on the same prompts."""
         try:
@@ -354,6 +398,9 @@ class InferenceService:
                 model_path=base_model_path,
                 adapter_path=None,
                 max_new_tokens=max_new_tokens,
+                device_map=device_map,
+                max_memory=max_memory,
+                offload_folder=offload_folder,
             )
             if not base_results["success"]:
                 return base_results
@@ -363,6 +410,9 @@ class InferenceService:
                 model_path=base_model_path,
                 adapter_path=finetuned_adapter_path,
                 max_new_tokens=max_new_tokens,
+                device_map=device_map,
+                max_memory=max_memory,
+                offload_folder=offload_folder,
             )
             if not finetuned_results["success"]:
                 return finetuned_results
@@ -399,6 +449,9 @@ class InferenceService:
         top_p: float = 0.9,
         top_k: int = 50,
         do_sample: bool = True,
+        device_map: Any = "auto",
+        max_memory: Optional[Dict[Any, str]] = None,
+        offload_folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run multimodal inference on a structured chat message payload."""
         model = None
@@ -407,7 +460,12 @@ class InferenceService:
         await gpu_lock.acquire("vlm_inference")
         try:
             resolved_model_path = self._resolve_model_path(model_path)
-            model, processor = self._load_vlm_model_and_processor(resolved_model_path)
+            model, processor = self._load_vlm_model_and_processor(
+                resolved_model_path,
+                device_map=device_map,
+                max_memory=max_memory,
+                offload_folder=offload_folder,
+            )
 
             if adapter_path:
                 model = PeftModel.from_pretrained(model, adapter_path)

@@ -35,6 +35,7 @@ def test_build_text_quantization_config_matches_notebook_fp16():
 
 def test_load_text_model_and_tokenizer_sets_eval_and_fp16():
     svc = InferenceService()
+    svc.gpu.max_memory = {0: "12GiB", 1: "12GiB", "cpu": "30GiB"}
     tokenizer = MagicMock()
     model = MagicMock()
     model.eval = MagicMock()
@@ -56,6 +57,43 @@ def test_load_text_model_and_tokenizer_sets_eval_and_fp16():
     assert loaded_tokenizer is tokenizer
     model.eval.assert_called_once_with()
     assert mock_from_pretrained.call_args.kwargs["torch_dtype"] == torch.float16
+    assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+    assert mock_from_pretrained.call_args.kwargs["max_memory"] == {
+        0: "12GiB",
+        1: "12GiB",
+        "cpu": "30GiB",
+    }
+
+
+def test_load_text_model_and_tokenizer_forwards_explicit_placement_overrides():
+    svc = InferenceService()
+    tokenizer = MagicMock()
+    model = MagicMock()
+    model.eval = MagicMock()
+
+    with (
+        patch.object(svc, "_load_text_tokenizer", return_value=tokenizer),
+        patch(
+            "finetuning_pipeline.services.inference_service.AutoModelForCausalLM.from_pretrained",
+            return_value=model,
+        ) as mock_from_pretrained,
+    ):
+        svc._load_text_model_and_tokenizer(
+            model_path="test/model",
+            adapter_path=None,
+            quantization="4bit",
+            device_map="balanced",
+            max_memory={0: "10GiB", 1: "10GiB", "cpu": "24GiB"},
+            offload_folder="./offload",
+        )
+
+    assert mock_from_pretrained.call_args.kwargs["device_map"] == "balanced"
+    assert mock_from_pretrained.call_args.kwargs["max_memory"] == {
+        0: "10GiB",
+        1: "10GiB",
+        "cpu": "24GiB",
+    }
+    assert mock_from_pretrained.call_args.kwargs["offload_folder"] == "./offload"
 
 
 def test_run_loaded_text_messages_inference_passes_explicit_thinking_flag():
@@ -147,6 +185,9 @@ async def test_run_inference_reuses_loaded_model_for_all_prompts():
         model_path="test/model",
         adapter_path="test/adapter",
         quantization="4bit",
+        device_map="auto",
+        max_memory=None,
+        offload_folder=None,
     )
     assert mock_run.call_count == 2
     assert all(call.kwargs["thinking_mode"] == "on" for call in mock_run.call_args_list)
