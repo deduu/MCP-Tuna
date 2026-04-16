@@ -1,0 +1,124 @@
+<svg width="1600" height="1040" viewBox="0 0 1600 1040" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">MCP Tuna UI gallery</title>
+  <desc id="desc">Stylized gallery preview of the Tools, Training, Evaluation, and Deployments pages.</desc>
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1520" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="0.55" stop-color="#111827"/>
+      <stop offset="1" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="card" x1="140" y1="120" x2="1480" y2="940" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111827"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="accentA" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="accentB" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20" y="-20" width="1640" height="1080" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1040" rx="36" fill="url(#bg)"/>
+  <g opacity="0.18">
+    <circle cx="1450" cy="150" r="180" fill="#22D3EE"/>
+    <circle cx="180" cy="920" r="220" fill="#1D4ED8"/>
+    <circle cx="1240" cy="860" r="140" fill="#38BDF8"/>
+  </g>
+
+  <text x="110" y="92" fill="#E2E8F0" font-family="Segoe UI, Arial, sans-serif" font-size="40" font-weight="800">MCP Tuna Control Plane</text>
+  <text x="110" y="128" fill="#7DD3FC" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" letter-spacing="2.4">TOOLS  |  TRAINING  |  EVALUATION  |  DEPLOYMENTS</text>
+
+  <g filter="url(#shadow)">
+    <rect x="86" y="166" width="676" height="344" rx="28" fill="url(#card)" stroke="#1E293B"/>
+    <rect x="838" y="166" width="676" height="344" rx="28" fill="url(#card)" stroke="#1E293B"/>
+    <rect x="86" y="548" width="676" height="344" rx="28" fill="url(#card)" stroke="#1E293B"/>
+    <rect x="838" y="548" width="676" height="344" rx="28" fill="url(#card)" stroke="#1E293B"/>
+  </g>
+
+  <!-- Tools -->
+  <g transform="translate(110 190)">
+    <rect width="628" height="296" rx="22" fill="#0B1120" stroke="#1E293B"/>
+    <rect x="20" y="18" width="150" height="260" rx="16" fill="#08101D"/>
+    <rect x="32" y="34" width="92" height="16" rx="8" fill="url(#accentA)"/>
+    <rect x="32" y="82" width="106" height="14" rx="7" fill="#20324B"/>
+    <rect x="32" y="112" width="96" height="14" rx="7" fill="#20324B"/>
+    <rect x="24" y="136" width="126" height="28" rx="10" fill="#0F2542" stroke="#1D4ED8"/>
+    <rect x="32" y="144" width="54" height="12" rx="6" fill="#7DD3FC"/>
+    <text x="194" y="42" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">Tools Explorer</text>
+    <text x="194" y="72" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600">Schema-driven forms with safe input controls</text>
+    <rect x="194" y="96" width="392" height="138" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="218" y="120" width="220" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="218" y="144" width="344" height="40" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="218" y="198" width="160" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="218" y="220" width="210" height="14" rx="7" fill="url(#accentB)"/>
+    <rect x="194" y="248" width="392" height="26" rx="13" fill="url(#accentA)"/>
+    <text x="210" y="264" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="700">Parameter-aware tool forms: dropdowns, path browse, model selectors</text>
+  </g>
+
+  <!-- Training -->
+  <g transform="translate(862 190)">
+    <rect width="628" height="296" rx="22" fill="#0B1120" stroke="#1E293B"/>
+    <text x="24" y="42" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">Training Cockpit</text>
+    <text x="24" y="72" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600">Configure runs, inspect jobs, and watch metrics in one place</text>
+    <rect x="24" y="96" width="210" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="44" y="116" width="118" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="44" y="140" width="164" height="36" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="44" y="190" width="164" height="36" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="44" y="240" width="128" height="14" rx="7" fill="url(#accentB)"/>
+    <rect x="256" y="96" width="348" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <path d="M286 226C314 190 334 206 358 172C382 138 402 190 430 154C458 118 490 142 520 110C546 84 566 112 592 88" stroke="#22D3EE" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="358" cy="172" r="6" fill="#67E8F9"/>
+    <circle cx="430" cy="154" r="6" fill="#67E8F9"/>
+    <circle cx="520" cy="110" r="6" fill="#67E8F9"/>
+    <rect x="286" y="116" width="122" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="286" y="132" width="158" height="8" rx="4" fill="#334155"/>
+    <rect x="24" y="20" width="96" height="10" rx="5" fill="url(#accentA)" opacity="0.85"/>
+  </g>
+
+  <!-- Evaluation -->
+  <g transform="translate(110 572)">
+    <rect width="628" height="296" rx="22" fill="#0B1120" stroke="#1E293B"/>
+    <text x="24" y="42" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">Evaluation Hub</text>
+    <text x="24" y="72" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600">LLM Judge, Fine-tune Eval, and Model Benchmark workflows</text>
+    <rect x="24" y="96" width="280" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="44" y="116" width="62" height="24" rx="12" fill="url(#accentA)"/>
+    <rect x="116" y="116" width="74" height="24" rx="12" fill="#17263A"/>
+    <rect x="200" y="116" width="88" height="24" rx="12" fill="#17263A"/>
+    <rect x="44" y="156" width="220" height="34" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="44" y="202" width="220" height="34" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="44" y="248" width="124" height="12" rx="6" fill="url(#accentB)"/>
+    <rect x="326" y="96" width="278" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="350" y="122" width="230" height="16" rx="8" fill="#CBD5E1"/>
+    <rect x="350" y="158" width="84" height="84" rx="18" fill="#071426" stroke="#1E293B"/>
+    <rect x="446" y="158" width="84" height="84" rx="18" fill="#071426" stroke="#1E293B"/>
+    <rect x="542" y="158" width="38" height="84" rx="18" fill="url(#accentA)" opacity="0.85"/>
+    <text x="364" y="210" fill="#7DD3FC" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="800">Judge</text>
+    <text x="454" y="210" fill="#7DD3FC" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="800">FT Eval</text>
+    <text x="548" y="202" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700">Compare</text>
+  </g>
+
+  <!-- Deployments -->
+  <g transform="translate(862 572)">
+    <rect width="628" height="296" rx="22" fill="#0B1120" stroke="#1E293B"/>
+    <text x="24" y="42" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">Deployments</text>
+    <text x="24" y="72" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600">Launch MCP or API endpoints and test them from the same UI</text>
+    <rect x="24" y="96" width="236" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="44" y="118" width="104" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="44" y="142" width="190" height="38" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="44" y="194" width="190" height="38" rx="10" fill="#071426" stroke="#1E293B"/>
+    <circle cx="208" cy="160" r="7" fill="#22C55E"/>
+    <circle cx="208" cy="212" r="7" fill="#38BDF8"/>
+    <rect x="282" y="96" width="322" height="170" rx="18" fill="#0F172A" stroke="#22314A"/>
+    <rect x="304" y="118" width="132" height="10" rx="5" fill="#CBD5E1"/>
+    <rect x="304" y="144" width="252" height="42" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="304" y="198" width="206" height="42" rx="10" fill="#071426" stroke="#1E293B"/>
+    <rect x="520" y="198" width="36" height="42" rx="10" fill="url(#accentB)"/>
+    <rect x="304" y="24" width="108" height="10" rx="5" fill="url(#accentA)" opacity="0.85"/>
+  </g>
+</svg>
