@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for deciding when an agent should stop or avoid tool use.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a task asking whether the agent should stop calling tools or answer directly>",
+    "input": "<the exact policy, task wording, or tool result that justifies stopping>",
+    "output": "<the correct stop decision or direct answer, grounded in the input>"
+  }
+]
+
+Rules:
+1. Focus on cases where more tool calls would be unnecessary, redundant, or unsupported.
+2. The input field must quote the relevant policy or evidence verbatim.
+3. The output must clearly state whether to stop, answer directly, or avoid calling a tool.
+4. Prefer cases where the distinction is subtle but grounded.
+5. Only emit a `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>` block when another tool call is truly justified by the Source Text.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

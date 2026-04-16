@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for multi-step agent state tracking.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a task asking what the agent should do next after one or more prior tool steps>",
+    "input": "<the exact sequence details, intermediate state, or quoted outputs needed to continue correctly>",
+    "output": "<the correct next action or final answer, grounded in the tracked state>"
+  }
+]
+
+Rules:
+1. Focus on preserving state across multiple dependent steps.
+2. The input field must quote the relevant prior steps, tool outputs, or state details.
+3. The output must continue from the quoted state instead of restarting or forgetting prior context.
+4. Prefer cases with dependencies, partial progress, or branching based on earlier results.
+5. When the next step is a tool call, encode it as `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>` and put any grounded user-facing answer after `Final answer:`.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

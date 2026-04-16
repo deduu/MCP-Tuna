@@ -72,6 +72,47 @@ def _sample_chat_triplet_data():
     ]
 
 
+def _sample_messages_data():
+    return [
+        {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Use tools only when needed.",
+                },
+                {
+                    "role": "user",
+                    "content": "Check the repo docs before answering.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Searching the docs.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_docs",
+                                "arguments": {"query": "repo docs"},
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "search_docs",
+                    "content": "The repo docs recommend split-server examples.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Use the split-server examples.",
+                },
+            ]
+        }
+    ]
+
+
 def _sample_grpo_data():
     return [
         {
@@ -570,6 +611,60 @@ class TestTrainModelSFTConfig:
         )
 
         assert prepared.column_names == ["text"]
+
+    def test_prepare_sft_dataset_supports_structured_messages_rows(self):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_messages_data())
+        _mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+
+        captured_messages: list = []
+
+        def capture_template(messages, tokenize=False, **kwargs):
+            captured_messages.append(messages)
+            return "templated"
+
+        mock_tokenizer.apply_chat_template = MagicMock(side_effect=capture_template)
+
+        prepared = svc._prepare_sft_text_dataset(
+            dataset=dataset,
+            tokenizer=mock_tokenizer,
+            prompt_column="prompt",
+            response_column="response",
+            messages_column="messages",
+        )
+
+        assert prepared.column_names == ["prompt", "completion", "text"]
+        assert captured_messages
+        assert captured_messages[0][0]["role"] == "system"
+        assert captured_messages[0][2]["role"] == "assistant"
+        assert "<tool_call>" in captured_messages[0][2]["content"]
+        assert captured_messages[0][3]["role"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_train_model_accepts_structured_messages_dataset(self, tmp_path):
+        svc = TrainingService()
+        dataset = _make_mock_dataset(_sample_messages_data())
+        mock_model, mock_tokenizer = _mock_model_and_tokenizer()
+        captured_trainer_kwargs: dict = {}
+
+        fake_config = _make_fake_sft_config(completion_only_loss=False)
+        fake_trainer = _make_fake_sft_trainer(captured_trainer_kwargs)
+
+        with (
+            _intercept_trl_import(fake_config, fake_trainer),
+            patch.object(svc, "_load_model_and_tokenizer", return_value=(mock_model, mock_tokenizer)),
+            patch.object(svc, "_detect_precision", return_value=(False, False)),
+            patch.object(svc, "_build_lora_config", return_value=MagicMock()),
+        ):
+            result = await svc.train_model(
+                dataset=dataset,
+                output_dir=str(tmp_path / "test_sft_messages"),
+                completion_only_loss=False,
+            )
+
+        train_dataset = captured_trainer_kwargs["train_dataset"]
+        assert set(train_dataset.column_names) == {"text"}
+        assert result["config"]["dataset_format"] == "text_only"
 
     def test_prepare_sft_dataset_strips_thinking_blocks_when_disabled(self):
         svc = TrainingService()

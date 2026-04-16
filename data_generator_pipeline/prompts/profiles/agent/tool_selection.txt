@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for agent tool selection.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a user task asking which tool should be used first or whether a tool is needed>",
+    "input": "<the exact tool description, policy, or task details needed to decide>",
+    "output": "<the correct tool choice or direct-answer decision, grounded in the input>"
+  }
+]
+
+Rules:
+1. Focus on deciding between tools or deciding that no tool is needed.
+2. The input field must quote the exact tool or policy text that justifies the decision.
+3. The output must name the best action and explain it briefly without inventing extra tools.
+4. Prefer realistic distinctions such as search vs lookup, answer directly vs call a tool, or choose between overlapping tools.
+5. When the best action is to call a tool, make the actionable part parseable as `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>`.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

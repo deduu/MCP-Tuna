@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for test-driven debugging.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a debugging prompt about why a test or assertion would fail for this code>",
+    "input": "<the exact code snippet relevant to the failure>",
+    "output": "<a grounded explanation of the likely failing behavior and what should be checked or fixed>"
+  }
+]
+
+Rules:
+1. Focus on realistic failures implied by the code, such as wrong branches, bad defaults, unsafe parsing, or inconsistent state.
+2. The input field must quote the relevant snippet verbatim.
+3. The output must explain the likely failure mode using only the Source Text.
+4. Prefer specific debugging hypotheses over generic advice.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

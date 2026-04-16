@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for code review.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a code review question asking for a concrete risk, regression, or maintainability issue>",
+    "input": "<the exact code snippet under review>",
+    "output": "<a grounded review comment explaining the risk or concern>"
+  }
+]
+
+Rules:
+1. Prefer high-signal review concerns such as correctness risks, edge cases, missing validation, or brittle design.
+2. The input field must quote the exact snippet being reviewed.
+3. The output must stay specific to the snippet and avoid vague style commentary.
+4. Keep the review grounded in observable behavior or maintainability cost.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

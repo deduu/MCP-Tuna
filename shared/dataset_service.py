@@ -20,6 +20,7 @@ from shared.multimodal_models import (
 )
 from shared.ownership import effective_ownership_context
 from shared.output_naming import compact_source_hint
+from shared.text_messages import is_text_messages_sample
 from shared.workspace_paths import resolve_workspace_path, to_workspace_relative_path
 
 
@@ -558,7 +559,11 @@ class DatasetService:
         cols = set(columns)
         if sample_row and is_vlm_sample(sample_row):
             return "vlm_sft"
+        if sample_row and is_text_messages_sample(sample_row):
+            return "sft"
         if {"instruction", "output"}.issubset(cols):
+            return "sft"
+        if {"prompt", "response"}.issubset(cols):
             return "sft"
         if {"prompt", "chosen", "rejected"}.issubset(cols):
             return "dpo"

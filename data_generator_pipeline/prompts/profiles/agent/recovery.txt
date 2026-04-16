@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for agent recovery after tool failures or partial outputs.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a task asking how the agent should recover from an error, empty result, or partial tool response>",
+    "input": "<the exact error message, partial result, or retry policy needed to recover correctly>",
+    "output": "<the correct recovery action, retry plan, or fallback answer grounded in the input>"
+  }
+]
+
+Rules:
+1. Focus on concrete recovery behavior such as retrying, adjusting parameters, using a fallback tool, or stopping safely.
+2. The input field must quote the exact failure or policy evidence.
+3. The output must explain the next action without inventing tools or policies not present in the Source Text.
+4. Prefer realistic recoveries over generic advice.
+5. When recovery requires another tool call, encode it as `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>` and put any grounded user-facing answer after `Final answer:`.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

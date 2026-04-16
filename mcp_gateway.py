@@ -58,6 +58,14 @@ from shared.training_defaults import (
 TechniqueName = Literal["sft", "dpo", "grpo", "kto"]
 SchemaTechniqueName = Literal["sft", "dpo", "grpo", "kto", "vlm_sft"]
 PreferenceTechniqueName = Literal["dpo", "grpo", "kto"]
+CompositionModeName = Literal["general", "coding", "agent"]
+CompositionObjectiveName = Literal["sft", "dpo", "grpo", "kto", "vlm_sft"]
+CanonicalSchemaKindName = Literal[
+    "text_sft",
+    "preference_pair",
+    "reward_group",
+    "binary_label",
+]
 DifficultyOrder = Literal["easy_first", "hard_first"]
 ResourceQuantization = Literal["4bit", "8bit", "none", "fp16", "bf16", "fp32"]
 GGUFQuantization = Literal["q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16"]
@@ -87,6 +95,7 @@ class TunaGateway:
 
         # Lazily-initialized services (avoid heavy imports at gateway startup)
         self._generator_svc = None
+        self._composition_svc = None
         self._hf_recipe_svc = None
         self._cleaning_svc = None
         self._normalization_svc = None
@@ -505,6 +514,19 @@ class TunaGateway:
 
             self._hf_recipe_svc = HFDatasetRecipeService()
         return self._hf_recipe_svc
+
+    @property
+    def composition_service(self):
+        if self._composition_svc is None:
+            from data_generator_pipeline.services.composition_service import (
+                CompositionService,
+            )
+
+            self._composition_svc = CompositionService(
+                generator_service=self.generator,
+                dataset_service=self.dataset_service,
+            )
+        return self._composition_svc
 
     @property
     def cleaner(self):
@@ -2300,6 +2322,134 @@ class TunaGateway:
                 "success": True,
                 "techniques": list(GENERATOR_REGISTRY.keys()),
             }, indent=2)
+
+        @self.mcp.tool(
+            name="generate.list_profiles",
+            description=(
+                "List built-in composition profiles for general instruction, coding, "
+                "or agent/tool-calling tuning."
+            ),
+        )
+        async def list_profiles(
+            mode: Optional[CompositionModeName] = None,
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.list_profiles(mode=mode),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="generate.get_profile",
+            description="Get the full definition of a built-in composition profile.",
+        )
+        async def get_profile(profile_name: str) -> str:
+            return json.dumps(
+                await self.composition_service.get_profile(profile_name),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="generate.preview_composition",
+            description=(
+                "Preview a profiled dataset plan without generating rows. "
+                "Returns resolved capability mix, row allocation, schema adapter, "
+                "and source coverage warnings."
+            ),
+        )
+        async def preview_composition(
+            profile_name: str,
+            source_paths: List[str],
+            row_target: int = 200,
+            objective: Optional[CompositionObjectiveName] = None,
+            capability_overrides: Optional[Dict[str, int]] = None,
+            schema_adapter_name: Optional[str] = None,
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.preview_composition(
+                    profile_name=profile_name,
+                    source_paths=source_paths,
+                    row_target=row_target,
+                    objective=objective,
+                    capability_overrides=capability_overrides,
+                    schema_adapter_name=schema_adapter_name,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="generate.compose_profiled_dataset",
+            description=(
+                "Generate and save a profiled dataset using a built-in composition profile. "
+                "Currently implemented for general instruction SFT composition."
+            ),
+        )
+        async def compose_profiled_dataset(
+            profile_name: str,
+            source_paths: List[str],
+            output_path: str,
+            row_target: int = 200,
+            objective: Optional[CompositionObjectiveName] = None,
+            capability_overrides: Optional[Dict[str, int]] = None,
+            schema_adapter_name: Optional[str] = None,
+            format: DatasetSaveFormat = "jsonl",
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.compose_profiled_dataset(
+                    profile_name=profile_name,
+                    source_paths=source_paths,
+                    output_path=output_path,
+                    row_target=row_target,
+                    objective=objective,
+                    capability_overrides=capability_overrides,
+                    schema_adapter_name=schema_adapter_name,
+                    format=format,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="generate.list_schema_adapters",
+            description=(
+                "List built-in and runtime schema adapters for mapping custom datasets "
+                "into canonical trainer shapes."
+            ),
+        )
+        async def list_schema_adapters(
+            canonical_kind: Optional[CanonicalSchemaKindName] = None,
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.list_schema_adapters(
+                    canonical_kind=canonical_kind,
+                ),
+                indent=2,
+            )
+
+        @self.mcp.tool(
+            name="generate.register_schema_adapter",
+            description=(
+                "Register a runtime schema adapter that maps user column names to a "
+                "canonical internal training schema."
+            ),
+        )
+        async def register_schema_adapter_tool(
+            name: str,
+            canonical_kind: CanonicalSchemaKindName,
+            field_map: Dict[str, str],
+            defaults: Optional[Dict[str, Any]] = None,
+            strict: bool = True,
+            description: str = "",
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.register_schema_adapter(
+                    name=name,
+                    canonical_kind=canonical_kind,
+                    field_map=field_map,
+                    defaults=defaults,
+                    strict=strict,
+                    description=description,
+                ),
+                indent=2,
+            )
 
         @self.mcp.tool(name="generate.get_schema",
                        description="Get the data schema for a fine-tuning technique")
@@ -4219,18 +4369,53 @@ class TunaGateway:
                 "kto": {"prompt", "completion", "label"},
                 "vlm_sft": {"messages"},
             }
+            alternate_expected = {
+                "sft": [
+                    {"instruction", "output"},
+                    {"prompt", "response"},
+                    {"system", "user", "assistant"},
+                    {"messages"},
+                ],
+            }
             required = expected.get(technique, set())
             col_set = set(columns)
-            missing = required - col_set
+            accepted_schemas = alternate_expected.get(technique)
+            if accepted_schemas:
+                matched = any(required_cols.issubset(col_set) for required_cols in accepted_schemas)
+                if technique == "sft" and matched and {"messages"}.issubset(col_set):
+                    matched = detected == "sft"
+                missing = [] if matched else sorted(required)
+            else:
+                missing = sorted(required - col_set) if required else []
 
             return json.dumps({
                 "success": len(missing) == 0,
                 "technique_requested": technique,
                 "technique_detected": detected,
                 "columns": columns,
-                "missing_columns": sorted(missing) if missing else [],
+                "missing_columns": missing,
                 "row_count": meta["metadata"].get("row_count", 0),
             }, indent=2)
+
+        @self.mcp.tool(
+            name="validate.composition",
+            description=(
+                "Validate a profiled dataset against its composition manifest. "
+                "Checks manifest presence, schema-adapter columns, capability mix, "
+                "and source-ref coverage."
+            ),
+        )
+        async def validate_composition(
+            dataset_path: str,
+            manifest_path: Optional[str] = None,
+        ) -> str:
+            return json.dumps(
+                await self.composition_service.validate_composition(
+                    dataset_path=dataset_path,
+                    manifest_path=manifest_path,
+                ),
+                indent=2,
+            )
 
         @self.mcp.tool(
             name="validate.data_quality",

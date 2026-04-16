@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for grounded question answering.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a factual question that can be answered from the Source Text>",
+    "input": "<a direct quote from the Source Text containing the answer>",
+    "output": "<a precise answer grounded only in the quoted evidence>"
+  }
+]
+
+Rules:
+1. Ask factual questions, not creative or open-ended ones.
+2. The input field must be a verbatim quote from the Source Text.
+3. The output must answer only from the quoted evidence.
+4. Prefer varied question shapes such as definitions, thresholds, exceptions, steps, comparisons, and examples.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

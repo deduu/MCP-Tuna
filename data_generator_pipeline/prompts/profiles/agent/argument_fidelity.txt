@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for agent argument fidelity.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a task asking how a tool should be called with concrete arguments>",
+    "input": "<the exact tool schema, parameter description, or examples needed to fill the arguments>",
+    "output": "<the correct tool-call arguments or call sketch, grounded in the input>"
+  }
+]
+
+Rules:
+1. Focus on filling parameters accurately, not on generic tool selection.
+2. The input field must quote the schema or examples that justify the arguments.
+3. The output must stay schema-correct and specific to the quoted tool definition.
+4. Prefer cases with required fields, optional fields, defaults, or validation constraints.
+5. When a tool call is needed, encode it as `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>`.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for grounded refusal and insufficient-information behavior.
+
+Use the provided Source Text to create 1 or 2 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a question the source does not fully answer>",
+    "input": "<a direct quote from the Source Text showing the available evidence>",
+    "output": "<a truthful answer that states the source does not provide enough information>"
+  }
+]
+
+Rules:
+1. The question must be plausible but not fully answerable from the Source Text.
+2. The input field must be a verbatim quote from the Source Text.
+3. The output must clearly state that the source is insufficient, and must not guess.
+4. Do not turn this into a generic refusal; keep it grounded in what is and is not present in the source.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for a general instruction-following model.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a concrete task the model should perform>",
+    "input": "<a direct quote from the Source Text that provides the necessary grounding, or an empty string only if grounding is genuinely unnecessary>",
+    "output": "<the correct grounded answer>"
+  }
+]
+
+Rules:
+1. Focus on instruction following: transformation, extraction, formatting, summarization, or constrained answering tasks.
+2. Keep every instruction answerable from the Source Text.
+3. The input field must be a verbatim quote from the Source Text when used.
+4. The output must follow the instruction faithfully and stay grounded in the quoted evidence.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

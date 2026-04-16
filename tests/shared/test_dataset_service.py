@@ -75,6 +75,48 @@ def vlm_data() -> list[dict]:
     ]
 
 
+@pytest.fixture
+def text_messages_data() -> list[dict]:
+    return [
+        {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Use tools only when the grounding requires them.",
+                },
+                {
+                    "role": "user",
+                    "content": "Find the repo docs, then answer.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Checking the docs.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_docs",
+                                "arguments": {"query": "repo docs"},
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "search_docs",
+                    "content": "The repo docs say to use split-server examples.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Use the split-server examples.",
+                },
+            ]
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # save
 # ---------------------------------------------------------------------------
@@ -378,6 +420,28 @@ async def test_load_reports_vlm_technique(svc: DatasetService, vlm_data: list, t
     await svc.save(vlm_data, str(out))
     result = await svc.load(str(out))
     assert result["technique"] == "vlm_sft"
+
+
+async def test_info_detects_text_messages_as_sft(
+    svc: DatasetService,
+    text_messages_data: list,
+    tmp_path: Path,
+):
+    out = tmp_path / "messages_sft.jsonl"
+    await svc.save(text_messages_data, str(out))
+    result = await svc.info(str(out))
+    assert result["metadata"]["technique"] == "sft"
+
+
+async def test_load_reports_text_messages_as_sft(
+    svc: DatasetService,
+    text_messages_data: list,
+    tmp_path: Path,
+):
+    out = tmp_path / "messages_sft.jsonl"
+    await svc.save(text_messages_data, str(out))
+    result = await svc.load(str(out))
+    assert result["technique"] == "sft"
 
 
 async def test_info_detects_kto_technique(svc: DatasetService, kto_data: list, tmp_path: Path):

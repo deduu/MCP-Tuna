@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for grounded reasoning.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a question that requires deriving an answer from grounded facts>",
+    "input": "<the direct quote or quotes needed for the reasoning>",
+    "output": "<the correct derived answer, explained briefly and grounded in the input>"
+  }
+]
+
+Rules:
+1. The answer should require inference, not just copying a sentence.
+2. The input field must be a verbatim quote from the Source Text.
+3. The output must derive the conclusion only from the quoted evidence.
+4. Prefer reasoning over thresholds, implications, eligibility, ordering, or consequence.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

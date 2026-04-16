@@ -32,6 +32,7 @@ from shared.preference_reward_lookup import (
 from shared.grpo_training_diagnostics import summarize_grpo_log_history
 from shared.ownership import effective_ownership_context
 from shared.owned_paths import resolve_owned_output_path
+from shared.text_messages import messages_prompt_completion
 from shared.training_run_artifacts import TrainingRunArtifacts
 from shared.training_seed import set_global_seed
 from shared.training_defaults import (
@@ -666,6 +667,11 @@ class TrainingService:
                 "user_column": "user",
                 "assistant_column": "assistant",
             }
+        if "messages" in column_names:
+            return {
+                "kind": "messages",
+                "messages_column": "messages",
+            }
         return {"kind": "unsupported", "columns": sorted(column_names)}
 
     @staticmethod
@@ -678,13 +684,19 @@ class TrainingService:
         system_column: Optional[str] = None,
         user_column: Optional[str] = None,
         assistant_column: Optional[str] = None,
+        messages_column: Optional[str] = None,
         text_only: bool = False,
         thinking_mode: ThinkingMode = "default",
     ) -> Any:
         """Normalize SFT rows to prompt/completion/text for TRL compatibility."""
 
         def to_sft_record(example: Dict[str, Any]) -> Dict[str, str]:
-            if user_column and assistant_column:
+            if messages_column:
+                prompt, completion, messages = messages_prompt_completion(
+                    example.get(messages_column) or []
+                )
+                effective_system_prompt = system_prompt
+            elif user_column and assistant_column:
                 prompt = str(example.get(user_column) or "").strip()
                 completion = str(example.get(assistant_column) or "").strip()
                 effective_system_prompt = TrainingService._merge_system_prompts(
@@ -699,13 +711,40 @@ class TrainingService:
             if thinking_mode == "off":
                 completion = TrainingService._strip_thinking_tags(completion)
 
-            messages = []
-            if effective_system_prompt:
-                messages.append({"role": "system", "content": effective_system_prompt})
-            messages.extend([
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": completion},
-            ])
+            if messages_column:
+                if effective_system_prompt:
+                    if messages and messages[0].get("role") == "system":
+                        merged = TrainingService._merge_system_prompts(
+                            effective_system_prompt,
+                            messages[0].get("content"),
+                        )
+                        messages = [
+                            {"role": "system", "content": merged},
+                            *messages[1:],
+                        ]
+                    else:
+                        messages = [
+                            {"role": "system", "content": effective_system_prompt},
+                            *messages,
+                        ]
+                if thinking_mode == "off" and messages and messages[-1]["role"] == "assistant":
+                    messages = [
+                        *messages[:-1],
+                        {
+                            "role": "assistant",
+                            "content": TrainingService._strip_thinking_tags(
+                                messages[-1]["content"]
+                            ),
+                        },
+                    ]
+            else:
+                messages = []
+                if effective_system_prompt:
+                    messages.append({"role": "system", "content": effective_system_prompt})
+                messages.extend([
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": completion},
+                ])
             if hasattr(tokenizer, "apply_chat_template"):
                 template_kwargs: Dict[str, Any] = {"tokenize": False}
                 enable_thinking = TrainingService._thinking_template_flag(thinking_mode)
@@ -1180,8 +1219,9 @@ class TrainingService:
                     "success": False,
                     "error": (
                         f"Dataset must contain '{prompt_column}' and "
-                        f"'{response_column}' columns or a chat-triplet schema "
-                        "with 'system', 'user', and 'assistant' columns"
+                        f"'{response_column}' columns, a structured 'messages' column, "
+                        "or a chat-triplet schema with 'system', 'user', and "
+                        "'assistant' columns"
                     ),
                     "columns": dataset_schema["columns"],
                 }
@@ -1234,7 +1274,8 @@ class TrainingService:
                 elif isinstance(recipe_config, dict):
                     system_prompt = recipe_config.get("system_prompt")
             use_notebook_text_only_dataset = (
-                dataset_schema["kind"] == "chat_triplet" and not completion_only_loss
+                dataset_schema["kind"] in {"chat_triplet", "messages"}
+                and not completion_only_loss
             )
 
             dataset = self._prepare_sft_text_dataset(
@@ -1246,6 +1287,7 @@ class TrainingService:
                 system_column=dataset_schema.get("system_column"),
                 user_column=dataset_schema.get("user_column"),
                 assistant_column=dataset_schema.get("assistant_column"),
+                messages_column=dataset_schema.get("messages_column"),
                 text_only=use_notebook_text_only_dataset,
                 thinking_mode=thinking_mode,
             )
@@ -1264,7 +1306,7 @@ class TrainingService:
                         "success": False,
                         "error": (
                             "Evaluation dataset must contain prompt/response columns "
-                            "or a chat-triplet schema with system/user/assistant columns"
+                            "or a structured messages/chat-triplet schema"
                         ),
                         "columns": evaluation_schema["columns"],
                     }
@@ -1286,8 +1328,9 @@ class TrainingService:
                     system_column=evaluation_schema.get("system_column"),
                     user_column=evaluation_schema.get("user_column"),
                     assistant_column=evaluation_schema.get("assistant_column"),
+                    messages_column=evaluation_schema.get("messages_column"),
                     text_only=(
-                        evaluation_schema["kind"] == "chat_triplet"
+                        evaluation_schema["kind"] in {"chat_triplet", "messages"}
                         and not completion_only_loss
                     ),
                     thinking_mode=thinking_mode,

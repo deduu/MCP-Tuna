@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for grounded multi-hop reasoning.
+
+The Source Text may contain multiple excerpts. Use information from more than one excerpt to create 1 to 2 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a question or task that requires combining evidence across excerpts>",
+    "input": "<direct quotes from multiple parts of the Source Text>",
+    "output": "<the correct answer grounded in the combined evidence>"
+  }
+]
+
+Rules:
+1. Every example must require at least two separate pieces of evidence.
+2. The input field must be verbatim text copied from the Source Text.
+3. The output must explicitly depend on multiple excerpts, not a single quote.
+4. Prefer synthesis, comparison, or reasoning tasks that cannot be solved from one excerpt alone.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for code patch planning.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a request to change or fix the code shown in the Source Text>",
+    "input": "<the exact snippet that should be modified>",
+    "output": "<a grounded patch plan or code-change description that stays specific to the snippet>"
+  }
+]
+
+Rules:
+1. Frame the instruction as a concrete coding task, not a general explanation request.
+2. The input field must quote the code that needs to change.
+3. The output should describe the smallest grounded change that would satisfy the request.
+4. Do not invent files, APIs, or surrounding code that are not in the Source Text.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

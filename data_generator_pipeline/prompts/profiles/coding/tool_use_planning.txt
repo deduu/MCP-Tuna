@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for coding-assistant tool-use planning.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a prompt asking what repository reads, searches, or checks should happen before editing>",
+    "input": "<the exact snippets that justify the plan>",
+    "output": "<a grounded action plan describing which files, symbols, or checks should be inspected first and why>"
+  }
+]
+
+Rules:
+1. Focus on planning the next repository investigation steps before making code changes.
+2. The input field must quote the relevant code or related snippets verbatim.
+3. The output must stay grounded in the Source Text and explain why those reads or checks matter.
+4. Prefer plans that mention files, interfaces, dependencies, call sites, or tests implied by the snippet.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

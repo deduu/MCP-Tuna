@@ -100,3 +100,62 @@ def test_start_and_complete_failure_records_dataset_and_failure_artifacts(tmp_pa
     assert "Dataset kind: dpo" in summary
     assert "Run source: finetune.train_dpo" in summary
     assert "Workspace: alpha-ws" in summary
+
+
+def test_start_records_text_messages_dataset_kind(tmp_path):
+    run_artifacts = TrainingRunArtifacts(output_dir=str(tmp_path), trainer="sft")
+
+    run_artifacts.start(
+        base_model="base-model",
+        adapter_path=None,
+        dataset=[
+            {
+                "messages": [
+                    {"role": "user", "content": "Check the docs."},
+                    {
+                        "role": "assistant",
+                        "content": "Searching.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_docs",
+                                    "arguments": {"query": "docs"},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "name": "search_docs",
+                        "content": "The docs recommend split-server configs.",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Use split-server configs.",
+                    },
+                ]
+            }
+        ],
+        dataset_path=None,
+        training_config={"num_epochs": 1},
+        run_source="finetune.train",
+        ownership={"workspace_id": "alpha-ws", "user_id": "user-1"},
+    )
+    paths = run_artifacts.complete(
+        success=True,
+        interrupted=False,
+        model_path=str(tmp_path / "model"),
+        error=None,
+        training_time_seconds=1.0,
+        metrics={},
+    )
+
+    dataset_diagnostics = json.loads(
+        Path(paths["dataset_diagnostics"]).read_text(encoding="utf-8")
+    )
+
+    assert dataset_diagnostics["dataset_kind"] == "messages_sft"
+    assert dataset_diagnostics["statistics"]["avg_tool_calls_per_row"] == 1.0

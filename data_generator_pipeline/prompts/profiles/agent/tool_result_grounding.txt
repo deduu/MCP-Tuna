@@ -1,0 +1,22 @@
+You are creating supervised fine-tuning data for grounding an answer in tool results.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a task asking how the agent should answer after receiving a tool result>",
+    "input": "<the exact tool output or quoted evidence that must ground the final answer>",
+    "output": "<the correct grounded answer or summary based only on the tool result>"
+  }
+]
+
+Rules:
+1. Focus on using tool outputs as evidence for the final answer.
+2. The input field must quote the relevant tool result or evidence verbatim.
+3. The output must stay grounded in that evidence and avoid unsupported additions.
+4. Prefer cases where the agent must summarize, compare, or extract the result correctly.
+5. If the example includes a prior tool action, you may prefix it with a parseable `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>` block before the grounded final answer.
+6. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import asyncio
+import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -69,6 +71,24 @@ class TestToolRegistration:
     def test_generate_from_hf_dataset_registered(self, tool_names):
         assert "generate.from_hf_dataset" in tool_names
 
+    def test_generate_list_profiles_registered(self, tool_names):
+        assert "generate.list_profiles" in tool_names
+
+    def test_generate_get_profile_registered(self, tool_names):
+        assert "generate.get_profile" in tool_names
+
+    def test_generate_preview_composition_registered(self, tool_names):
+        assert "generate.preview_composition" in tool_names
+
+    def test_generate_compose_profiled_dataset_registered(self, tool_names):
+        assert "generate.compose_profiled_dataset" in tool_names
+
+    def test_generate_list_schema_adapters_registered(self, tool_names):
+        assert "generate.list_schema_adapters" in tool_names
+
+    def test_generate_register_schema_adapter_registered(self, tool_names):
+        assert "generate.register_schema_adapter" in tool_names
+
     def test_generate_list_hf_recipes_registered(self, tool_names):
         assert "generate.list_hf_recipes" in tool_names
 
@@ -131,6 +151,9 @@ class TestToolRegistration:
     def test_validate_preference_dataset_registered(self, tool_names):
         assert "validate.preference_dataset" in tool_names
 
+    def test_validate_composition_registered(self, tool_names):
+        assert "validate.composition" in tool_names
+
     # Judge tools
     def test_judge_evaluate_vlm_registered(self, tool_names):
         assert "judge.evaluate_vlm" in tool_names
@@ -156,7 +179,7 @@ class TestToolRegistration:
 
     # Total tool count increased
     def test_minimum_tool_count(self, tool_names):
-        assert len(tool_names) >= 86
+        assert len(tool_names) >= 93
 
 
 def test_finetune_train_schema_includes_optional_defaults():
@@ -365,6 +388,50 @@ async def test_validate_schema_accepts_vlm_technique(tmp_path):
 
     assert result["success"] is True
     assert result["technique_requested"] == "vlm_sft"
+
+
+@pytest.mark.asyncio
+async def test_validate_schema_accepts_text_messages_sft(tmp_path):
+    gateway = _make_gateway()
+    validate_schema = gateway.mcp._tools["validate.schema"]["func"]
+    dataset_path = tmp_path / "messages_sft.jsonl"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "Check the docs."},
+                    {
+                        "role": "assistant",
+                        "content": "Searching.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_docs",
+                                    "arguments": {"query": "docs"},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "name": "search_docs",
+                        "content": "Use split-server examples.",
+                    },
+                    {"role": "assistant", "content": "Use split-server examples."},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(await validate_schema(dataset_path=str(dataset_path), technique="sft"))
+
+    assert result["success"] is True
+    assert result["technique_detected"] == "sft"
 
 
 @pytest.mark.asyncio
@@ -624,6 +691,695 @@ async def test_normalize_remap_fields_converts_chat_rows():
             "output": "A WhatsApp sales workspace.",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_generate_list_profiles_filters_by_mode():
+    gateway = _make_gateway()
+    list_profiles = gateway.mcp._tools["generate.list_profiles"]["func"]
+
+    result = json.loads(await list_profiles(mode="general"))
+
+    assert result["success"] is True
+    assert result["count"] >= 1
+    assert all(profile["mode"] == "general" for profile in result["profiles"])
+
+
+@pytest.mark.asyncio
+async def test_generate_get_profile_returns_built_in_profile():
+    gateway = _make_gateway()
+    get_profile = gateway.mcp._tools["generate.get_profile"]["func"]
+
+    result = json.loads(await get_profile(profile_name="coding_assistant"))
+
+    assert result["success"] is True
+    assert result["profile_name"] == "coding_assistant"
+    assert result["profile"]["mode"] == "coding"
+    assert sum(
+        item["weight_percent"] for item in result["profile"]["capability_targets"]
+    ) == 100
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_returns_row_plan_and_schema_adapter(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nMulti-hop source material across sections.\n\n"
+        "## More\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=25,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["profile_name"] == "general_instruction"
+    assert result["objective"] == "sft"
+    assert result["schema_adapter"]["name"] == "instruction_input_output"
+    assert result["source_totals"]["estimated_chunks"] >= 2
+    assert sum(result["resolved_mix"].values()) == 100
+    assert sum(result["row_plan"].values()) == 25
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_warns_when_weights_need_normalization(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nSecond chunk.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=20,
+            capability_overrides={"multi_hop": 40},
+        )
+    )
+
+    assert result["success"] is True
+    assert any("normalized to 100" in warning.lower() for warning in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_warns_for_multi_hop_with_single_chunk(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "single.txt"
+    source_path.write_text("Single chunk source only.", encoding="utf-8")
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=10,
+        )
+    )
+
+    assert result["success"] is True
+    assert any("multi-hop" in warning.lower() for warning in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_for_coding_profile_detects_code_sources(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "service.py"
+    source_path.write_text(
+        "def normalize_name(value: str) -> str:\n"
+        "    if not value:\n"
+        "        return ''\n"
+        "    return value.strip().lower()\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="coding_assistant",
+            source_paths=[str(source_path)],
+            row_target=12,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["profile_name"] == "coding_assistant"
+    assert result["mode"] == "coding"
+    assert result["objective"] == "sft"
+    assert result["source_totals"]["code_files"] == 1
+    assert sum(result["row_plan"].values()) == 12
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_for_agent_profile_returns_multi_step_plan(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "tool_notes.md"
+    source_path.write_text(
+        "# Tool policy\n\nUse `search_docs` when the answer depends on repository docs.\n\n"
+        "## Recovery\n\nIf the tool returns no result, retry with a narrower query or stop and say the source was insufficient.\n\n"
+        "## Final answer\n\nBase the response only on tool output.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="agent_tool_calling",
+            source_paths=[str(source_path)],
+            row_target=9,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["profile_name"] == "agent_tool_calling"
+    assert result["mode"] == "agent"
+    assert result["objective"] == "sft"
+    assert result["schema_adapter"]["name"] == "text_messages"
+    assert sum(result["row_plan"].values()) == 9
+    assert "multi_step_state" in result["row_plan"]
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_for_dpo_uses_preference_adapter(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=6,
+            objective="dpo",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["objective"] == "dpo"
+    assert result["schema_adapter"]["name"] == "prompt_chosen_rejected"
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_for_grpo_uses_reward_group_adapter(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=6,
+            objective="grpo",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["objective"] == "grpo"
+    assert result["schema_adapter"]["name"] == "prompt_responses_rewards"
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_composition_for_kto_uses_binary_label_adapter(tmp_path):
+    gateway = _make_gateway()
+    preview = gateway.mcp._tools["generate.preview_composition"]["func"]
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        await preview(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            row_target=5,
+            objective="kto",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["objective"] == "kto"
+    assert result["schema_adapter"]["name"] == "prompt_completion_label"
+    assert any("binary-label rows" in warning for warning in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_generate_register_schema_adapter_lists_runtime_adapter():
+    gateway = _make_gateway()
+    register_adapter = gateway.mcp._tools["generate.register_schema_adapter"]["func"]
+    list_adapters = gateway.mcp._tools["generate.list_schema_adapters"]["func"]
+    adapter_name = f"runtime_adapter_{uuid.uuid4().hex[:8]}"
+
+    created = json.loads(
+        await register_adapter(
+            name=adapter_name,
+            canonical_kind="text_sft",
+            field_map={"instruction": "prompt", "output": "answer"},
+            defaults={"input": ""},
+            description="Runtime adapter for gateway tests.",
+        )
+    )
+    listed = json.loads(await list_adapters(canonical_kind="text_sft"))
+
+    assert created["success"] is True
+    assert created["schema_adapter"]["name"] == adapter_name
+    assert any(
+        adapter["name"] == adapter_name for adapter in listed["schema_adapters"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_writes_manifest_and_validates(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "instruction": f"Question {counter['n']}",
+                    "input": "Direct quote from source.",
+                    "output": f"Answer {counter['n']}",
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nMulti-hop source material across sections.\n\n"
+        "## More\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "profiled.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=6,
+        )
+    )
+
+    assert result["success"] is True
+    assert Path(result["dataset"]["file_path"]).exists()
+    manifest_path = Path(result["manifest_path"])
+    assert manifest_path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["profile_name"] == "general_instruction"
+    assert manifest["row_count"] == 6
+    assert manifest["schema_adapter_name"] == "instruction_input_output"
+
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+
+    assert validation["success"] is True
+    assert validation["status"] in {"pass", "warn"}
+    assert validation["profile_name"] == "general_instruction"
+    assert validation["capability_counts"]
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_supports_coding_profile(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "instruction": f"Review code path {counter['n']}",
+                    "input": "def normalize_name(value: str) -> str:",
+                    "output": f"Grounded coding answer {counter['n']}",
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "service.py"
+    source_path.write_text(
+        "def normalize_name(value: str) -> str:\n"
+        "    if not value:\n"
+        "        return ''\n"
+        "    return value.strip().lower()\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "coding_profiled.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="coding_assistant",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=5,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["profile_name"] == "coding_assistant"
+    assert Path(result["dataset"]["file_path"]).exists()
+
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+
+    assert validation["success"] is True
+    assert validation["profile_name"] == "coding_assistant"
+    assert validation["mode"] == "coding"
+    assert validation["capability_counts"]
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_supports_agent_profile(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    dataset_preview = gateway.mcp._tools["dataset.preview"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "instruction": f"Choose the next tool step {counter['n']}",
+                    "input": "Use `search_docs` when the answer depends on repository docs.",
+                    "output": f"Step 1: search_docs({{'query': 'repo docs'}})\nFinal answer: grounded output {counter['n']}",
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "agent_tool_notes.md"
+    source_path.write_text(
+        "# Tool policy\n\nUse `search_docs` when the answer depends on repository docs.\n\n"
+        "## Recovery\n\nIf the tool returns no result, retry with a narrower query.\n\n"
+        "## Final answer\n\nBase the response only on tool output.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "agent_profiled.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="agent_tool_calling",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=4,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["profile_name"] == "agent_tool_calling"
+    assert Path(result["dataset"]["file_path"]).exists()
+
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+    preview = json.loads(await dataset_preview(file_path=result["dataset"]["file_path"], n=1))
+
+    assert validation["success"] is True
+    assert validation["profile_name"] == "agent_tool_calling"
+    assert validation["mode"] == "agent"
+    assert validation["capability_counts"]
+    assert preview["rows"][0]["messages"][2]["tool_calls"][0]["function"]["name"] == "search_docs"
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_supports_dpo_profile(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    dataset_preview = gateway.mcp._tools["dataset.preview"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "prompt": f"Question {counter['n']}",
+                    "chosen": f"Grounded preferred answer {counter['n']}",
+                    "rejected": f"Weaker answer {counter['n']}",
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "profiled_dpo.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=4,
+            objective="dpo",
+        )
+    )
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+    preview = json.loads(await dataset_preview(file_path=result["dataset"]["file_path"], n=1))
+
+    assert result["success"] is True
+    assert result["objective"] == "dpo"
+    assert preview["rows"][0]["chosen"].startswith("Grounded preferred answer")
+    assert validation["success"] is True
+    assert validation["profile_name"] == "general_instruction"
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_supports_grpo_profile(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    dataset_preview = gateway.mcp._tools["dataset.preview"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "prompt": f"Question {counter['n']}",
+                    "responses": [
+                        f"Best answer {counter['n']}",
+                        f"Okay answer {counter['n']}",
+                        f"Weak answer {counter['n']}",
+                    ],
+                    "rewards": [1.0, 0.4, -0.2],
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "profiled_grpo.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=4,
+            objective="grpo",
+        )
+    )
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+    preview = json.loads(await dataset_preview(file_path=result["dataset"]["file_path"], n=1))
+
+    assert result["success"] is True
+    assert result["objective"] == "grpo"
+    assert preview["rows"][0]["responses"][0].startswith("Best answer")
+    assert preview["rows"][0]["rewards"] == [1.0, 0.4, -0.2]
+    assert validation["success"] is True
+    assert validation["profile_name"] == "general_instruction"
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_supports_kto_profile(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    validate_composition = gateway.mcp._tools["validate.composition"]["func"]
+    dataset_preview = gateway.mcp._tools["dataset.preview"]["func"]
+    gateway._generator_svc = AsyncMock()
+    counter = {"n": 0}
+
+    async def _fake_generate_from_page(**kwargs):
+        counter["n"] += 1
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "prompt": f"Question {counter['n']}",
+                    "chosen": f"Preferred answer {counter['n']}",
+                    "rejected": f"Rejected answer {counter['n']}",
+                    "id": counter["n"],
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "profiled_kto.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=5,
+            objective="kto",
+        )
+    )
+    validation = json.loads(
+        await validate_composition(dataset_path=result["dataset"]["file_path"])
+    )
+    preview = json.loads(await dataset_preview(file_path=result["dataset"]["file_path"], n=5))
+
+    assert result["success"] is True
+    assert result["objective"] == "kto"
+    labels = {row["label"] for row in preview["rows"]}
+    assert labels == {True, False}
+    assert all("completion" in row for row in preview["rows"])
+    assert validation["success"] is True
+    assert validation["profile_name"] == "general_instruction"
+
+
+@pytest.mark.asyncio
+async def test_generate_compose_profiled_dataset_applies_prompt_response_adapter(tmp_path):
+    gateway = _make_gateway()
+    compose = gateway.mcp._tools["generate.compose_profiled_dataset"]["func"]
+    dataset_preview = gateway.mcp._tools["dataset.preview"]["func"]
+    gateway._generator_svc = AsyncMock()
+
+    async def _fake_generate_from_page(**kwargs):
+        return {
+            "success": True,
+            "data_points": [
+                {
+                    "instruction": "Summarize the source",
+                    "input": "Direct quote from source.",
+                    "output": "Grounded answer.",
+                    "id": 1,
+                    "file_name": kwargs["file_name"],
+                    "page": kwargs["page_index"] + 1,
+                    "text": kwargs["page_text"],
+                }
+            ],
+        }
+
+    gateway._generator_svc.generate_from_page = AsyncMock(side_effect=_fake_generate_from_page)
+
+    source_path = tmp_path / "guide.md"
+    source_path.write_text(
+        "# Intro\n\nGrounded instruction tuning overview.\n\n"
+        "## Details\n\nAdditional grounded evidence.\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "profiled_prompt_response.jsonl"
+
+    result = json.loads(
+        await compose(
+            profile_name="general_instruction",
+            source_paths=[str(source_path)],
+            output_path=str(output_path),
+            row_target=2,
+            schema_adapter_name="prompt_response",
+        )
+    )
+    preview = json.loads(await dataset_preview(file_path=result["dataset"]["file_path"], n=1))
+
+    assert result["success"] is True
+    assert preview["rows"][0]["prompt"]
+    assert preview["rows"][0]["response"] == "Grounded answer."
+    assert "instruction" not in preview["rows"][0]
+
+
+@pytest.mark.asyncio
+async def test_validate_schema_accepts_prompt_response_sft_rows(tmp_path):
+    gateway = _make_gateway()
+    validate_schema = gateway.mcp._tools["validate.schema"]["func"]
+    dataset_path = tmp_path / "prompt_response.jsonl"
+    dataset_path.write_text(
+        json.dumps({"prompt": "Question", "response": "Answer"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(await validate_schema(dataset_path=str(dataset_path), technique="sft"))
+
+    assert result["success"] is True
+    assert result["technique_detected"] == "sft"
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for repository-grounded code understanding.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a repository question that can be answered from the Source Text>",
+    "input": "<the exact code snippet or quoted lines needed to answer the question>",
+    "output": "<a concise grounded answer about the code behavior, API, or structure>"
+  }
+]
+
+Rules:
+1. Ask questions about the actual code, config, or interface in the Source Text.
+2. The input field must quote the exact snippet needed for the answer.
+3. The output must stay grounded in the quoted snippet and avoid speculation.
+4. Prefer questions about responsibilities, parameters, return values, side effects, invariants, or file roles.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

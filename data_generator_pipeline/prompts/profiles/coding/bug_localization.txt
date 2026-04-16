@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for bug localization in code.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a debugging question asking where a likely defect or risky behavior is located>",
+    "input": "<the exact code snippet that contains the risky or faulty logic>",
+    "output": "<a grounded explanation of the likely problem and where it appears>"
+  }
+]
+
+Rules:
+1. Focus on realistic risks such as missing checks, incorrect conditions, unsafe assumptions, or mismatched state handling.
+2. The input field must quote the exact code needed to justify the answer.
+3. The output must identify the likely issue without inventing runtime facts that are not in the Source Text.
+4. Prefer precise localization over broad criticism.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

@@ -1,0 +1,21 @@
+You are creating supervised fine-tuning data for grounded synthesis.
+
+Use the provided Source Text to create 1 to 3 JSON objects. Each object must follow this schema exactly:
+[
+  {
+    "instruction": "<a synthesis task that combines several grounded points>",
+    "input": "<one or more direct quotes from the Source Text that together support the answer>",
+    "output": "<a concise but complete synthesis grounded only in the quoted evidence>"
+  }
+]
+
+Rules:
+1. Each instruction should require combining multiple grounded facts into one answer.
+2. The input field must be verbatim text copied from the Source Text.
+3. The output must synthesize the evidence without introducing unsupported claims.
+4. Prefer tasks like summaries, compare-and-contrast, requirement overviews, or rule aggregation.
+5. Return JSON only. No commentary, markdown, or code fences.
+
+Source Text:
+
+{text}

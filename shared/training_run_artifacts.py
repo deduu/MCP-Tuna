@@ -8,6 +8,7 @@ from statistics import mean, pstdev
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from shared.ownership import effective_ownership_context, normalize_ownership_context
+from shared.text_messages import count_tool_calls, is_text_messages_sample
 
 
 def _utc_now_iso() -> str:
@@ -33,7 +34,10 @@ def _readable_path(value: Optional[str]) -> Optional[str]:
     return text or None
 
 
-def _infer_dataset_kind(columns: Sequence[str]) -> str:
+def _infer_dataset_kind(
+    columns: Sequence[str],
+    sample_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
     column_set = set(columns)
     if {"prompt", "chosen", "rejected"}.issubset(column_set):
         return "dpo"
@@ -42,6 +46,8 @@ def _infer_dataset_kind(columns: Sequence[str]) -> str:
     if {"prompt", "completion", "label"}.issubset(column_set):
         return "kto"
     if "messages" in column_set:
+        if sample_rows and any(is_text_messages_sample(row) for row in sample_rows):
+            return "messages_sft"
         return "vlm_sft"
     if {"system", "user", "assistant"}.issubset(column_set):
         return "chat_triplet_sft"
@@ -261,6 +267,31 @@ def _summarize_vlm_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _summarize_text_messages_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    message_counts: list[int] = []
+    tool_call_counts: list[int] = []
+    tool_result_rows = 0
+    for row in rows:
+        messages = row.get("messages")
+        if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+            continue
+        message_counts.append(len(messages))
+        tool_call_counts.append(count_tool_calls(messages))
+        if any(
+            isinstance(message, Mapping)
+            and str(message.get("role") or "").strip().lower() == "tool"
+            for message in messages
+        ):
+            tool_result_rows += 1
+    return {
+        "avg_messages_per_row": _rounded(mean(message_counts)) if message_counts else None,
+        "avg_tool_calls_per_row": _rounded(mean(tool_call_counts)) if tool_call_counts else None,
+        "tool_result_row_ratio": (
+            _rounded(tool_result_rows / len(message_counts)) if message_counts else None
+        ),
+    }
+
+
 def summarize_training_dataset(
     dataset: Any,
     *,
@@ -269,7 +300,7 @@ def summarize_training_dataset(
 ) -> dict[str, Any]:
     sample_rows = _sample_rows(dataset, limit=sample_limit)
     columns = _column_names(dataset, sample_rows)
-    dataset_kind = _infer_dataset_kind(columns)
+    dataset_kind = _infer_dataset_kind(columns, sample_rows)
     summary: dict[str, Any] = {
         "schema_version": 1,
         "dataset_kind": dataset_kind,
@@ -292,6 +323,8 @@ def summarize_training_dataset(
         summary["statistics"] = _summarize_kto_rows(sample_rows)
     elif dataset_kind == "vlm_sft":
         summary["statistics"] = _summarize_vlm_rows(sample_rows)
+    elif dataset_kind == "messages_sft":
+        summary["statistics"] = _summarize_text_messages_rows(sample_rows)
     elif dataset_kind == "chat_triplet_sft":
         summary["statistics"] = _summarize_sft_like_rows(
             sample_rows,
