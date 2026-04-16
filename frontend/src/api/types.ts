@@ -188,6 +188,121 @@ export interface DatasetInfo {
   object_url?: string
 }
 
+export type CompositionMode = 'general' | 'coding' | 'agent'
+export type CanonicalSchemaKind = 'text_sft' | 'preference_pair' | 'reward_group' | 'binary_label'
+
+export interface CompositionCapabilityTarget {
+  capability: string
+  weight_percent: number
+  min_rows: number
+  enabled: boolean
+}
+
+export interface CompositionProfile {
+  name: string
+  mode: CompositionMode
+  description: string
+  default_objective: string
+  allowed_objectives: string[]
+  capability_targets: CompositionCapabilityTarget[]
+}
+
+export interface CompositionSchemaAdapter {
+  name: string
+  canonical_kind: CanonicalSchemaKind
+  description: string
+  field_map: Record<string, string>
+  defaults: Record<string, unknown>
+  strict: boolean
+  is_default?: boolean
+  expected_canonical_kind?: CanonicalSchemaKind
+}
+
+export interface CompositionSourceSummary {
+  input_path: string
+  resolved_path: string
+  kind: string
+  exists: boolean
+  estimated_chunks: number
+  estimated_text_chars: number
+  scanned_files: number
+  code_files: number
+  truncated: boolean
+  warnings: string[]
+}
+
+export interface CompositionSourceTotals {
+  valid_sources: number
+  estimated_chunks: number
+  estimated_text_chars: number
+  scanned_files: number
+  code_files: number
+}
+
+export interface CompositionPreviewResult {
+  success: boolean
+  profile_name: string
+  mode: CompositionMode
+  objective: string
+  allowed_objectives: string[]
+  row_target: number
+  requested_mix: Record<string, number>
+  resolved_mix: Record<string, number>
+  row_plan: Record<string, number>
+  schema_adapter: CompositionSchemaAdapter
+  source_summaries: CompositionSourceSummary[]
+  source_totals: CompositionSourceTotals
+  warnings: string[]
+  error?: string
+}
+
+export interface CompositionDatasetSaveResult {
+  success?: boolean
+  file_path: string
+  format: string
+  row_count: number
+}
+
+export interface CompositionComposeResult {
+  success: boolean
+  profile_name: string
+  mode: CompositionMode
+  objective: string
+  row_target: number
+  row_count: number
+  requested_mix: Record<string, number>
+  resolved_mix: Record<string, number>
+  achieved_mix: Record<string, number>
+  row_plan: Record<string, number>
+  dataset: CompositionDatasetSaveResult
+  manifest_path: string
+  warnings: string[]
+  generation_errors?: Array<Record<string, unknown>>
+  error?: string
+}
+
+export interface CompositionValidationResult {
+  success: boolean
+  status: 'pass' | 'warn' | 'fail'
+  dataset_path: string
+  manifest_path: string
+  profile_name: string
+  mode: CompositionMode
+  objective: string
+  row_count: number
+  expected_columns: string[]
+  columns: string[]
+  requested_mix: Record<string, number>
+  resolved_mix: Record<string, number>
+  manifest_achieved_mix: Record<string, number>
+  dataset_achieved_mix: Record<string, number>
+  capability_counts: Record<string, number>
+  source_ref_coverage: number
+  warnings: string[]
+  errors: string[]
+  error?: string
+}
+
 export interface ConversationMessage {
   sequence: number
   role: 'user' | 'assistant'

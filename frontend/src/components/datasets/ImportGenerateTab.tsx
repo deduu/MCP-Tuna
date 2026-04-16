@@ -21,6 +21,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { ProfileComposer } from './ProfileComposer'
 import { VlmDatasetBuilder } from './VlmDatasetBuilder'
 
 const DOCUMENT_FILE_ACCEPT = '.pdf,.md,.markdown,.txt,.doc,.docx,.json,.jsonl,.csv,.parquet'
@@ -781,6 +782,8 @@ export function ImportGenerateTab() {
           </CardContent>
         </Card>
       </div>
+
+      <ProfileComposer />
 
       <Card>
         <CardHeader>

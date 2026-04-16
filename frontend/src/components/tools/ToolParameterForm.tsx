@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import type { JSONSchemaProperty } from '@/api/types'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { BrowsePathField } from '@/components/evaluation/BrowsePathField'
-import { JsonEditorField } from '@/components/shared/JsonEditorField'
+import { JsonEditorField, type JsonEditorValue } from '@/components/shared/JsonEditorField'
 import { PreferenceDatasetAnalysisCard } from '@/components/shared/PreferenceDatasetAnalysisCard'
 import { ModelPathField } from '@/components/pipeline/ModelPathField'
 import {
@@ -31,6 +31,29 @@ const KNOWN_SELECT_OPTIONS: Record<string, string[]> = {
   target_format: ['sft', 'dpo', 'grpo', 'kto'],
   difficulty_order: ['easy_first', 'hard_first'],
   use_case: ['general', 'low_memory', 'speed', 'quality', 'multilingual', 'indonesian'],
+}
+
+const SCHEMA_ADAPTER_FIELD_MAP_DEFAULTS: Record<string, Record<string, string>> = {
+  text_sft: {
+    instruction: 'instruction',
+    input: 'input',
+    output: 'output',
+  },
+  preference_pair: {
+    prompt: 'prompt',
+    chosen: 'chosen',
+    rejected: 'rejected',
+  },
+  reward_group: {
+    prompt: 'prompt',
+    responses: 'responses',
+    rewards: 'rewards',
+  },
+  binary_label: {
+    prompt: 'prompt',
+    completion: 'completion',
+    label: 'label',
+  },
 }
 
 function getSelectOptions(name: string, schema: JSONSchemaProperty): string[] | null {
@@ -82,12 +105,97 @@ function getJsonPlaceholder(name: string, schema: JSONSchemaProperty): string {
   return `Enter ${schema.type} as JSON`
 }
 
-function getDefaultFormValues(schema: ToolParameterFormProps['schema']): Record<string, unknown> {
+function cloneJsonValue(value: JsonEditorValue): JsonEditorValue {
+  if (Array.isArray(value)) {
+    return value.map(cloneJsonValue)
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, cloneJsonValue(child)]),
+    )
+  }
+  return value
+}
+
+function getSchemaAdapterFieldMapDefault(canonicalKind: unknown): Record<string, string> {
+  const key = typeof canonicalKind === 'string' ? canonicalKind : 'text_sft'
+  return {
+    ...(SCHEMA_ADAPTER_FIELD_MAP_DEFAULTS[key] ?? SCHEMA_ADAPTER_FIELD_MAP_DEFAULTS.text_sft),
+  }
+}
+
+function areStringMapsEqual(left: unknown, right: unknown): boolean {
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
+    return false
+  }
+
+  const leftEntries = Object.entries(left as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+  const rightEntries = Object.entries(right as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+  if (leftEntries.length !== rightEntries.length) return false
+
+  return leftEntries.every(([leftKey, leftValue], index) => {
+    const [rightKey, rightValue] = rightEntries[index]
+    return leftKey === rightKey && leftValue === rightValue
+  })
+}
+
+function getJsonFieldDefaultValue(
+  toolName: string,
+  name: string,
+  schema: JSONSchemaProperty,
+  values: Record<string, unknown>,
+): JsonEditorValue {
+  if (toolName === 'generate.register_schema_adapter' && name === 'field_map') {
+    return getSchemaAdapterFieldMapDefault(values.canonical_kind ?? schema.default)
+  }
+  if (schema.default !== undefined) {
+    return cloneJsonValue(schema.default as JsonEditorValue)
+  }
+  return schema.type === 'array' ? [] : {}
+}
+
+function getJsonFieldDescription(
+  toolName: string,
+  name: string,
+  schema: JSONSchemaProperty,
+  values: Record<string, unknown>,
+): string {
+  const notes: string[] = []
+  if (schema.description) {
+    notes.push(schema.description)
+  }
+  if (name.toLowerCase() === 'messages') {
+    notes.push(
+      'Use canonical multimodal message blocks. Upload images first, then reference the returned image_path.',
+    )
+  }
+  if (toolName === 'generate.register_schema_adapter' && name === 'field_map') {
+    const canonicalKind = typeof values.canonical_kind === 'string' ? values.canonical_kind : 'text_sft'
+    notes.push(
+      `Keys are canonical fields and values are your dataset column names. Seeded with the standard ${canonicalKind} schema.`,
+    )
+  }
+  return notes.join(' ')
+}
+
+function getDefaultFormValues(
+  toolName: string,
+  schema: ToolParameterFormProps['schema'],
+): Record<string, unknown> {
   const defaults: Record<string, unknown> = {}
 
   for (const [name, prop] of Object.entries(schema.properties ?? {})) {
     if (prop.default !== undefined) {
       defaults[name] = prop.default
+    }
+  }
+
+  if (toolName === 'generate.register_schema_adapter') {
+    if (defaults.canonical_kind === undefined) {
+      defaults.canonical_kind = 'text_sft'
+    }
+    if (defaults.field_map === undefined && schema.properties.field_map?.type === 'object') {
+      defaults.field_map = getSchemaAdapterFieldMapDefault(defaults.canonical_kind)
     }
   }
 
@@ -107,17 +215,21 @@ function renderLabel(name: string, required: boolean, schema: JSONSchemaProperty
 }
 
 function ParameterField({
+  toolName,
   name,
   schema,
   required,
   value,
+  allValues,
   onChange,
   onJsonValidityChange,
 }: {
+  toolName: string
   name: string
   schema: JSONSchemaProperty
   required: boolean
   value: unknown
+  allValues: Record<string, unknown>
   onChange: (val: unknown) => void
   onJsonValidityChange: (name: string, isValid: boolean) => void
 }) {
@@ -228,19 +340,14 @@ function ParameterField({
   }
 
   if (schema.type === 'object' || schema.type === 'array') {
-    const isMessagesField = normalizedName === 'messages'
+    const jsonDefaultValue = getJsonFieldDefaultValue(toolName, name, schema, allValues)
     return (
       <div className="space-y-1">
         <JsonEditorField
           label={name}
-          description={[
-            schema.description,
-            isMessagesField
-              ? 'Use canonical multimodal message blocks. Upload images first, then reference the returned image_path.'
-              : null,
-          ].filter(Boolean).join(' ')}
+          description={getJsonFieldDescription(toolName, name, schema, allValues)}
           initialValue={typeof value === 'string' ? null : (value as never)}
-          defaultValue={schema.type === 'array' ? [] : {}}
+          defaultValue={jsonDefaultValue}
           placeholder={stringDefault || getJsonPlaceholder(name, schema)}
           allowEmpty={!required}
           onChange={({ parsed, isValid }) => {
@@ -283,7 +390,7 @@ function ParameterField({
 }
 
 export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: ToolParameterFormProps) {
-  const [values, setValues] = useState<Record<string, unknown>>(() => getDefaultFormValues(schema))
+  const [values, setValues] = useState<Record<string, unknown>>(() => getDefaultFormValues(toolName, schema))
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [jsonValidity, setJsonValidity] = useState<Record<string, boolean>>({})
   const autoOutputDirRef = useRef<string | null>(null)
@@ -317,6 +424,35 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
       }
     })
   }, [schema.properties, toolName, values])
+
+  useEffect(() => {
+    if (toolName !== 'generate.register_schema_adapter' || !schema.properties.field_map) {
+      return
+    }
+
+    const suggested = getSchemaAdapterFieldMapDefault(values.canonical_kind)
+    setValues((prev) => {
+      const current = prev.field_map
+      if (current === undefined) {
+        return {
+          ...prev,
+          field_map: suggested,
+        }
+      }
+
+      const isAutoTemplate = Object.values(SCHEMA_ADAPTER_FIELD_MAP_DEFAULTS).some((template) =>
+        areStringMapsEqual(current, template),
+      )
+      if (!isAutoTemplate || areStringMapsEqual(current, suggested)) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        field_map: suggested,
+      }
+    })
+  }, [schema.properties.field_map, toolName, values.canonical_kind])
 
   const handleChange = useCallback((name: string, val: unknown) => {
     setValues((prev) => {
@@ -391,10 +527,12 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
           {requiredFields.map(([name, prop]) => (
             <ParameterField
               key={name}
+              toolName={toolName}
               name={name}
               schema={prop}
               required={true}
               value={values[name]}
+              allValues={values}
               onChange={(v) => handleChange(name, v)}
               onJsonValidityChange={handleJsonValidityChange}
             />
@@ -417,10 +555,12 @@ export function ToolParameterForm({ toolName, schema, onSubmit, isLoading }: Too
               {optionalFields.map(([name, prop]) => (
                 <ParameterField
                   key={name}
+                  toolName={toolName}
                   name={name}
                   schema={prop}
                   required={false}
                   value={values[name]}
+                  allValues={values}
                   onChange={(v) => handleChange(name, v)}
                   onJsonValidityChange={handleJsonValidityChange}
                 />
